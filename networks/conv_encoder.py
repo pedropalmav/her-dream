@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .networks import Conv2dSamePad, RMSNorm2D
+from .rmsnorm_2d import RMSNorm2D
 
 
 class ConvEncoder(nn.Module):
@@ -16,11 +16,12 @@ class ConvEncoder(nn.Module):
         layers = []
         for i, depth in enumerate(self.depths):
             layers.append(
-                Conv2dSamePad(
+                nn.Conv2d(
                     in_channels=in_dim,
                     out_channels=depth,
                     kernel_size=self.kernel_size,
                     stride=1,
+                    padding="same",
                     bias=True,
                 )
             )

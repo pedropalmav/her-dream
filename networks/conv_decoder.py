@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from .block_linear import BlockLinear
-from .networks import Conv2dSamePad, RMSNorm2D
+from .rmsnorm_2d import RMSNorm2D
 
 from tools import weight_init_
 
@@ -37,14 +37,23 @@ class ConvDecoder(nn.Module):
         for depth in reversed(self.depths[:-1]):
             layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
             layers.append(
-                Conv2dSamePad(in_dim, depth, self.kernel_size, stride=1, bias=True)
+                nn.Conv2d(
+                    in_dim, depth, self.kernel_size, stride=1, padding="same", bias=True
+                )
             )
             layers.append(RMSNorm2D(depth, eps=1e-04, dtype=torch.float32))
             layers.append(act())
             in_dim = depth
         layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
         layers.append(
-            Conv2dSamePad(in_dim, self._shape[0], self.kernel_size, stride=1, bias=True)
+            nn.Conv2d(
+                in_dim,
+                self._shape[0],
+                self.kernel_size,
+                stride=1,
+                padding="same",
+                bias=True,
+            )
         )
         self.layers = nn.Sequential(*layers)
         self.apply(weight_init_)

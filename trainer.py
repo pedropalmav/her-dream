@@ -123,6 +123,7 @@ class OnlineTrainer:
             # Evaluation
             if self._should_eval(step) and self.eval_episode_num > 0:
                 self.eval(agent, step)
+
             # Save metrics
             if done.any():
                 for i, d in enumerate(done):
@@ -135,6 +136,7 @@ class OnlineTrainer:
                         self.logger.scalar("episode/length", lengths[i])
                         self.logger.write(step + i)  # to show all values on tensorboard
                         returns[i] = lengths[i] = 0
+
             step += int((~done).sum()) * self._action_repeat  # step is based on env side
             lengths += ~done
 
@@ -163,10 +165,12 @@ class OnlineTrainer:
             trans["stoch"] = agent_state["stoch"]
             trans["deter"] = agent_state["deter"]
             trans["episode"] = episode_ids  # Don't lift dim
+            
             if "image" in trans:
                 video_cache.append(trans["image"][0])
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
+            
             # Update models after enough data has accumulated
             if step // (envs.env_num * self._action_repeat) > self.batch_length + 1:
                 if self._should_pretrain():

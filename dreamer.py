@@ -75,6 +75,7 @@ class Dreamer(nn.Module):
             "encoder": self.encoder,
         }
 
+        # TODO: Create a method for this block
         if self.rep_loss == "dreamer":
             self.decoder = networks.MultiDecoder(
                 config.decoder,
@@ -375,6 +376,8 @@ class Dreamer(nn.Module):
         # === Representation / auxiliary losses ===
         # (B, T, F)
         feat = self.rssm.get_feat(post_stoch, post_deter)
+
+        # TODO: Create a method for this block
         if self.rep_loss == "dreamer":
             recon_losses = {
                 key: torch.mean(-dist.log_prob(data[key])) for key, dist in self.decoder(post_stoch, post_deter).items()

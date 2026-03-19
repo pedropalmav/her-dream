@@ -6,7 +6,9 @@ def make_envs(config):
         return lambda: make_env(config, idx)
 
     train_envs = parallel.ParallelEnv(env_constructor, config.env_num, config.device)
-    eval_envs = parallel.ParallelEnv(env_constructor, config.eval_episode_num, config.device)
+    eval_envs = parallel.ParallelEnv(
+        env_constructor, config.eval_episode_num, config.device
+    )
     obs_space = train_envs.observation_space
     act_space = train_envs.action_space
     return train_envs, eval_envs, obs_space, act_space
@@ -17,7 +19,9 @@ def make_env(config, id):
     if suite == "dmc":
         import envs.dmc as dmc
 
-        env = dmc.DeepMindControl(task, config.action_repeat, config.size, seed=config.seed + id)
+        env = dmc.DeepMindControl(
+            task, config.action_repeat, config.size, seed=config.seed + id
+        )
         env = wrappers.NormalizeActions(env)
     elif suite == "atari":
         import envs.atari as atari
@@ -60,6 +64,20 @@ def make_env(config, id):
             config.camera,
             config.seed + id,
         )
+    elif suite == "random-goal":
+        import envs.random_goal as random_goal
+
+        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        env = random_goal.make_random_goal_env(
+            size=config.env_size,
+            agent_start_dir=config.agent_start_dir,
+            agent_start_pos=agent_start_pos,
+            max_steps=config.steps,
+        )
+        env = wrappers.MiniGridWrapper(env)
+        env = wrappers.OneHotAction(env)
+        env = wrappers.GoalConditioned(env, config.stochastic_classes)
+
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

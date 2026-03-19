@@ -30,10 +30,12 @@ class Buffer:
         # (B*(T+1), ...) -> (B, T+1, ...)
         sample_td = sample_td.view(-1, self.batch_length + 1)
         src_dev = sample_td.device
+
         if src_dev.type == "cpu" and self.device.type == "cuda":
             sample_td = sample_td.pin_memory().to(self.device, non_blocking=True)
         elif src_dev != self.device:
             sample_td = sample_td.to(self.device, non_blocking=True)
+        
         # The initial ones are used only to extract the latent vector
         initial = (sample_td["stoch"][:, 0], sample_td["deter"][:, 0])
         data = sample_td[:, 1:]

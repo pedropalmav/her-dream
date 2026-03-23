@@ -78,6 +78,22 @@ def make_env(config, id):
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config.stochastic_classes)
 
+    elif suite == "fixed-goal":
+        import envs.fixed_goal as fixed_goal
+
+        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        goal_pos = (config.goal_pos_x, config.goal_pos_y)
+        env = fixed_goal.make_fixed_goal_env(
+            size=config.env_size,
+            agent_start_dir=config.agent_start_dir,
+            agent_start_pos=agent_start_pos,
+            goal_pos=goal_pos,
+            max_steps=config.time_limit,
+        )
+        env = wrappers.MiniGridWrapper(env)
+        env = wrappers.OneHotAction(env)
+        env = wrappers.GoalConditioned(env, config.stochastic_classes)
+
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

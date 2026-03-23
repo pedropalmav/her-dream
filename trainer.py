@@ -1,6 +1,7 @@
 import torch
 
 import tools
+from buffers.her_buffer import HERBuffer
 
 
 class OnlineTrainer:
@@ -24,6 +25,8 @@ class OnlineTrainer:
         self._should_log = tools.Every(config.update_log_every)
         self._should_eval = tools.Every(self.eval_every)
         self._action_repeat = config.action_repeat
+
+        self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -120,9 +123,10 @@ class OnlineTrainer:
         done = torch.ones(envs.env_num, dtype=torch.bool, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
         lengths = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
-        episode_ids = torch.arange(
+        envs_ids = torch.arange(
             envs.env_num, dtype=torch.int32, device=agent.device
-        )  # Increment this to prevent sampling across episode boundaries
+        )
+        episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
         train_metrics = {}
         agent_state = agent.get_initial_state(envs.env_num)
         # (B, A)
@@ -172,7 +176,8 @@ class OnlineTrainer:
             trans["action"] = act * ~done.unsqueeze(-1)
             trans["stoch"] = agent_state["stoch"]
             trans["deter"] = agent_state["deter"]
-            trans["episode"] = episode_ids  # Don't lift dim
+            trans["env"] = envs_ids
+            trans["episode"] = episode_ids
 
             # TODO: DRY with eval() method
             if self.reward_function:
@@ -181,11 +186,14 @@ class OnlineTrainer:
             
             if "image" in trans:
                 video_cache.append(trans["image"][0])
+
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
+
+            episode_ids[done] += envs.env_num
             
             # Update models after enough data has accumulated
-            if step // (envs.env_num * self._action_repeat) > self.batch_length + 1:
+            if self._should_update(step):
                 if self._should_pretrain():
                     update_num = self.pretrain
                 else:
@@ -207,3 +215,7 @@ class OnlineTrainer:
                         for name, param in agent._named_params.items():
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
+
+    def _should_update(self, step):
+        envs_num = self.train_envs.env_num
+        return step // (envs_num * self._action_repeat) > self.batch_length + 1

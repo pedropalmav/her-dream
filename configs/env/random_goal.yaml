@@ -1,0 +1,24 @@
+task: "random-goal_"
+steps: 100
+env_num: 1
+action_repeat: 1
+eval_episode_num: 10
+train_ratio: 512
+time_limit: 1000
+
+seed: ${seed}
+device: ${device}
+
+size: [64, 64]
+encoder:
+  mlp_keys: ".*"
+  cnn_keys: "image"
+decoder:
+  mlp_keys: ".*"
+  cnn_keys: "image"
+stochastic_classes: 4
+
+env_size: 10
+agent_start_dir: 0
+agent_start_pos_x: 1
+agent_start_pos_y: 1

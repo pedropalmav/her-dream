@@ -32,7 +32,9 @@ class TimeLimit(gym.Wrapper):
 class NormalizeActions(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
-        self._mask = np.logical_and(np.isfinite(env.action_space.low), np.isfinite(env.action_space.high))
+        self._mask = np.logical_and(
+            np.isfinite(env.action_space.low), np.isfinite(env.action_space.high)
+        )
         self._low = np.where(self._mask, env.action_space.low, -1)
         self._high = np.where(self._mask, env.action_space.high, 1)
         low = np.where(self._mask, -np.ones_like(self._low), self._low)
@@ -79,7 +81,9 @@ class MultiOneHotAction(gym.Wrapper):
         assert isinstance(env.action_space, gym.spaces.MultiDiscrete)
         super().__init__(env)
         self.index_low = torch.tensor(self.action_space.low, device=device)
-        space = gym.spaces.Box(low=0, high=1, shape=self.env.action_space.nvec, dtype=np.float32)
+        space = gym.spaces.Box(
+            low=0, high=1, shape=self.env.action_space.nvec, dtype=np.float32
+        )
         space.multi_discrete = True
         self.action_space = space
 
@@ -103,7 +107,9 @@ class RewardObs(gym.Wrapper):
         super().__init__(env)
         spaces = self.env.observation_space.spaces
         if "obs_reward" not in spaces:
-            spaces["obs_reward"] = gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
+            spaces["obs_reward"] = gym.spaces.Box(
+                -np.inf, np.inf, shape=(1,), dtype=np.float32
+            )
         self.observation_space = gym.spaces.Dict(spaces)
 
     def step(self, action):
@@ -126,3 +132,95 @@ class Dtype(gym.Wrapper):
 
     def reset(self):
         return tools.convert(self.env.reset())
+
+
+class GoalConditioned(gym.Wrapper):
+    def __init__(self, env, stochastic_classes):
+        super().__init__(env)
+
+        self.stochastic_classes = stochastic_classes
+        self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
+            stochastic_classes
+        )
+
+    def reset(self):
+        obs = self.env.reset()
+        self._generate_goal()
+        obs["goal"] = self.goal
+        return obs
+
+    # TODO: Evolve this method
+    def _generate_goal(self):
+        goal = np.zeros(self.stochastic_classes, dtype=np.float32)
+        index = np.random.randint(0, self.stochastic_classes)
+        goal[index] = 1.0
+
+        self.goal = goal
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        obs["goal"] = self.goal
+        return obs, reward, done, info
+
+
+class NoMission(gym.ObservationWrapper):
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space.spaces.pop("mission", None)
+
+    def observation(self, obs):
+        obs.pop("mission", None)
+        return obs
+
+
+# TODO: Update this wrapper to replicate what DictConcat does
+class OneHotDirection(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space.spaces["direction"] = gym.spaces.Box(
+            0, 1, shape=(4,), dtype=np.float32
+        )
+
+    def observation(self, obs):
+        direction = obs.pop("direction")
+        one_hot = np.zeros(4, dtype=np.float32)
+        one_hot[direction] = 1.0
+        obs["direction"] = one_hot
+        return obs
+
+
+class MiniGridWrapper(gym.Wrapper):
+    def __init__(self, env):
+        env = NoMission(env)
+        env = OneHotDirection(env)
+        super().__init__(env)
+
+        self.env.observation_space = gym.spaces.Dict(
+            {
+                **self.env.observation_space.spaces,
+                "is_first": gym.spaces.Box(0, 1, (), bool),
+                "is_last": gym.spaces.Box(0, 1, (), bool),
+                "is_terminal": gym.spaces.Box(0, 1, (), bool),
+            }
+        )
+
+    def reset(self):
+        obs, _ = self.env.reset()
+        return self._parse_observation(obs, is_first=True)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        obs = self._parse_observation(
+            obs,
+            is_first=False,
+            is_last=terminated or truncated,
+            is_terminal=terminated,
+        )
+        return obs, reward, terminated or truncated, info
+
+    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+        obs["is_first"] = is_first
+        obs["is_last"] = is_last
+        obs["is_terminal"] = is_terminal
+        return obs

@@ -1,5 +1,5 @@
 defaults:
-  - env: dmc_vision
+  - env: random_goal
   - model: size12M
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
@@ -8,7 +8,7 @@ defaults:
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}
 seed: 0
 deterministic_run: False
-device: 'cuda:0'
+device: "cuda:0"
 
 hydra:
   run:
@@ -22,7 +22,7 @@ buffer:
   batch_length: ${batch_length}
   max_size: 5e5
   device: ${device}
-  storage_device: 'cuda:0'
+  storage_device: "cuda:0"
 
 trainer:
   steps: ${env.steps}

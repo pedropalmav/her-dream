@@ -14,6 +14,7 @@ class RSSM(nn.Module):
         self._stoch = int(config.stoch)
         self._deter = int(config.deter)
         self._hidden = int(config.hidden)
+        # This is the equivalent to classes in the original implementation
         self._discrete = int(config.discrete)
         act = getattr(torch.nn, config.act)
         self._unimix_ratio = float(config.unimix_ratio)

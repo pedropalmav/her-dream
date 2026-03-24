@@ -18,6 +18,19 @@ sys.path.append(str(pathlib.Path(__file__).parent))
 torch.set_float32_matmul_precision("high")
 
 
+def reward_function(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+    """
+    Compute reward for a given state and goal.
+
+    Args:
+        state (torch.Tensor): The current state of the environment. Shape (B, S, K).
+        goal (torch.Tensor): The desired goal state. Shape (K,).
+    """
+    first_rows = state[:, 0, :]
+    matches = torch.all(first_rows == goal, dim=1, keepdim=True)
+    return torch.where(matches, torch.tensor(0), torch.tensor(-1))
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="configs")
 def main(config):
     tools.set_seed_everywhere(config.seed)
@@ -47,10 +60,17 @@ def main(config):
         config.model,
         obs_space,
         act_space,
+        reward_function=reward_function,
     ).to(config.device)
 
     policy_trainer = OnlineTrainer(
-        config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs
+        config.trainer,
+        replay_buffer,
+        logger,
+        logdir,
+        train_envs,
+        eval_envs,
+        reward_function=reward_function,
     )
     policy_trainer.begin(agent)
 

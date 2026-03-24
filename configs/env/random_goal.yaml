@@ -11,10 +11,10 @@ device: ${device}
 
 size: [64, 64]
 encoder:
-  mlp_keys: ".*"
+  mlp_keys: "direction"
   cnn_keys: "image"
 decoder:
-  mlp_keys: ".*"
+  mlp_keys: "direction"
   cnn_keys: "image"
 stochastic_classes: 4
 

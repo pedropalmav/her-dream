@@ -4,11 +4,12 @@ import tools
 
 
 class OnlineTrainer:
-    def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs):
+    def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs, reward_function=None):
         self.replay_buffer = replay_buffer
         self.logger = logger
         self.train_envs = train_envs
         self.eval_envs = eval_envs
+        self.reward_function = reward_function
         self.steps = int(config.steps)
         self.pretrain = int(config.pretrain)
         self.eval_every = int(config.eval_every)
@@ -61,12 +62,19 @@ class OnlineTrainer:
 
             # Store transition.
             # We keep the observation and the action that produced it together.
+
             trans["action"] = act
             if len(cache) < self.batch_length:
                 cache.append(trans.clone())
             # (B, A)
             act, agent_state = agent.act(trans, agent_state, eval=True)
+
+            # TODO: DRY with begin() method
+            if self.reward_function:
+                new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
+                trans["reward"] = new_reward
             returns += trans["reward"][:, 0] * ~once_done
+
             for key, value in trans.items():
                 if key.startswith("log_"):
                     if key not in log_metrics:
@@ -165,6 +173,11 @@ class OnlineTrainer:
             trans["stoch"] = agent_state["stoch"]
             trans["deter"] = agent_state["deter"]
             trans["episode"] = episode_ids  # Don't lift dim
+
+            # TODO: DRY with eval() method
+            if self.reward_function:
+                new_reward = self.reward_function(trans["stoch"], trans["goal"])
+                trans["reward"] = new_reward
             
             if "image" in trans:
                 video_cache.append(trans["image"][0])

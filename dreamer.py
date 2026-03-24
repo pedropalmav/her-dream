@@ -18,7 +18,7 @@ from tools import to_f32
 
 
 class Dreamer(nn.Module):
-    def __init__(self, config, obs_space, act_space):
+    def __init__(self, config, obs_space, act_space, reward_function):
         super().__init__()
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
@@ -39,7 +39,8 @@ class Dreamer(nn.Module):
             self.embed_size,
             self.act_dim,
         )
-        self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
+
+        self.reward_function = reward_function
         self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
 
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
@@ -70,7 +71,6 @@ class Dreamer(nn.Module):
             "rssm": self.rssm,
             "actor": self.actor,
             "value": self.value,
-            "reward": self.reward,
             "cont": self.cont,
             "encoder": self.encoder,
         }
@@ -123,6 +123,8 @@ class Dreamer(nn.Module):
                 "ema_encoder": self._ema_encoder,
                 "ema_obs_proj": self._ema_obs_proj,
             })
+
+
         # count number of parameters in each module
         for key, module in modules.items():
             if isinstance(module, nn.Parameter):
@@ -192,14 +194,6 @@ class Dreamer(nn.Module):
         self._frozen_rssm = copy.deepcopy(self.rssm)
         for (name_orig, param_orig), (name_new, param_new) in zip(
             self.rssm.named_parameters(), self._frozen_rssm.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_reward = copy.deepcopy(self.reward)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.reward.named_parameters(), self._frozen_reward.named_parameters()
         ):
             assert name_orig == name_new
             param_new.data = param_orig.data
@@ -430,9 +424,9 @@ class Dreamer(nn.Module):
             raise NotImplementedError
 
         # reward and continue
-        losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
         cont = 1.0 - to_f32(data["is_terminal"])
         losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
+
         # log
         metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
         metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
@@ -448,7 +442,7 @@ class Dreamer(nn.Module):
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
 
         # (B*T, T_imag, 1)
-        imag_reward = self._frozen_reward(imag_feat).mode()
+        imag_reward = self.reward_function(imag_feat, data["goal"])
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = self._frozen_cont(imag_feat).mean
         # (B*T, T_imag, 1)

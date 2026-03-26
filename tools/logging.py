@@ -25,16 +25,10 @@ class Tee(io.TextIOBase):
             stream.write(s)
         return len(s)
 
-    # FIXME: This is a temporary fix for the unknown ValueError
     def flush(self):
-        for stream in getattr(self, "streams", []):
-            # Verificamos si el stream tiene el atributo 'closed' y si está cerrado
-            if not getattr(stream, 'closed', False):
-                try:
-                    stream.flush()
-                except ValueError:
-                    # Si de todos modos lanza el error de "closed file", lo ignoramos en silencio
-                    pass
+        for stream in self._streams:
+            if not getattr(stream, "closed", False):
+                stream.flush()
 
     def isatty(self):
         # Preserve tty detection for progress bars etc.

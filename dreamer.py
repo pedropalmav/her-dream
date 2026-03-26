@@ -41,7 +41,6 @@ class Dreamer(nn.Module):
         )
 
         self.reward_function = reward_function
-        self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
 
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
         self.act_discrete = False
@@ -71,7 +70,6 @@ class Dreamer(nn.Module):
             "rssm": self.rssm,
             "actor": self.actor,
             "value": self.value,
-            "cont": self.cont,
             "encoder": self.encoder,
         }
 
@@ -194,14 +192,6 @@ class Dreamer(nn.Module):
         self._frozen_rssm = copy.deepcopy(self.rssm)
         for (name_orig, param_orig), (name_new, param_new) in zip(
             self.rssm.named_parameters(), self._frozen_rssm.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_cont = copy.deepcopy(self.cont)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.cont.named_parameters(), self._frozen_cont.named_parameters()
         ):
             assert name_orig == name_new
             param_new.data = param_orig.data
@@ -425,10 +415,6 @@ class Dreamer(nn.Module):
         else:
             raise NotImplementedError
 
-        # reward and continue
-        cont = 1.0 - to_f32(data["is_terminal"])
-        losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
-
         # log
         metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
         metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
@@ -449,11 +435,13 @@ class Dreamer(nn.Module):
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
         imag_stoch = get_stoch_from_feat(imag_feat)
         imag_reward = self.reward_function(imag_stoch, goal)
-        imag_reward = to_f32(imag_reward)
 
         # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = self._frozen_cont(imag_feat).mean
-
+        imag_cont = ~torch.abs(imag_reward)
+        
+        imag_reward = to_f32(imag_reward)
+        imag_cont = to_f32(imag_cont)
+        
         # (B*T, T_imag, 1)
         imag_value = self._frozen_value(imag_feat).mode
         imag_slow_value = self._frozen_slow_value(imag_feat).mode

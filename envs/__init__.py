@@ -72,7 +72,7 @@ def make_env(config, id):
             size=config.env_size,
             agent_start_dir=config.agent_start_dir,
             agent_start_pos=agent_start_pos,
-            max_steps=config.steps,
+            max_steps=config.time_limit,
         )
         env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)

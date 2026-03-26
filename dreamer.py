@@ -55,7 +55,7 @@ class Dreamer(nn.Module):
 
         # Actor-critic components
         self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + self.rssm._discrete)
-        self.value = networks.MLPHead(config.critic, self.rssm.feat_size)
+        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + self.rssm._discrete)
         self.slow_target_update = int(config.slow_target_update)
         self.slow_target_fraction = float(config.slow_target_fraction)
         self._slow_value = copy.deepcopy(self.value)
@@ -443,8 +443,10 @@ class Dreamer(nn.Module):
         imag_cont = to_f32(imag_cont)
         
         # (B*T, T_imag, 1)
-        imag_value = self._frozen_value(imag_feat).mode
-        imag_slow_value = self._frozen_slow_value(imag_feat).mode
+        imag_goal = goal.unsqueeze(1).expand(-1, 16, -1)
+        imag_input = torch.cat([imag_feat, imag_goal], dim=-1)
+        imag_value = self._frozen_value(imag_input).mode
+        imag_slow_value = self._frozen_slow_value(imag_input).mode
         disc = 1 - 1 / self.horizon
 
         # (B*T, T_imag, 1)
@@ -458,15 +460,13 @@ class Dreamer(nn.Module):
         # (B*T, T_imag-1, 1)
         adv = (ret - imag_value[:, :-1]) / ret_scale
 
-        imag_goal = goal.unsqueeze(1).expand(-1, 16, -1)
-        policy_input = torch.cat([imag_feat, imag_goal], dim=-1)
-        policy = self.actor(policy_input)
+        policy = self.actor(imag_input)
         # (B*T, T_imag-1, 1)
         logpi = policy.log_prob(imag_action)[:, :-1].unsqueeze(-1)
         entropy = policy.entropy()[:, :-1].unsqueeze(-1)
         losses["policy"] = torch.mean(weight[:, :-1].detach() * -(logpi * adv.detach() + self.act_entropy * entropy))
 
-        imag_value_dist = self.value(imag_feat)
+        imag_value_dist = self.value(imag_input)
         # (B*T, T_imag, 1)
         tar_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
         losses["value"] = torch.mean(
@@ -497,17 +497,18 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter)
+        feat = self.rssm.get_feat(post_stoch, post_deter) # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        value = self._frozen_value(feat).mode
-        slow_value = self._frozen_slow_value(feat).mode
+        value_input = torch.cat([feat, data["goal"]], dim=-1)
+        value = self._frozen_value(value_input).mode
+        slow_value = self._frozen_slow_value(value_input).mode
         disc = 1 - 1 / self.horizon
         weight = 1.0 - last
         ret = self._lambda_return(last, term, reward, value, boot, disc, self.lamb)
         ret_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
 
         # Keep this attached to the world model so gradients can flow through
-        value_dist = self.value(feat)
+        value_dist = self.value(value_input)
         losses["repval"] = torch.mean(
             weight[:, :-1]
             * (-value_dist.log_prob(ret_padded.detach()) - value_dist.log_prob(slow_value.detach()))[:, :-1].unsqueeze(

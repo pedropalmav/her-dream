@@ -437,10 +437,9 @@ class Dreamer(nn.Module):
         imag_reward = self.reward_function(imag_stoch, goal)
 
         # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = ~torch.abs(imag_reward)
+        imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)
         
         imag_reward = to_f32(imag_reward)
-        imag_cont = to_f32(imag_cont)
         
         # (B*T, T_imag, 1)
         imag_goal = goal.unsqueeze(1).expand(-1, 16, -1)

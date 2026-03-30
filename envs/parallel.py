@@ -46,6 +46,7 @@ class ParallelEnv:
         The returned TensorDict is pinned in CPU memory so that the caller can
         transfer it to GPU asynchronously (H2D with non_blocking=True).
         """
+        # TODO: Soft delete new_r and new_d
         promise = [e.reset() if d else e.step(a) for e, a, d in zip(self.envs, tools.to_np(action), done)]
         new_o, new_r, new_d = [], [], []
         for p, d in zip(promise, done):

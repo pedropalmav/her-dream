@@ -18,6 +18,38 @@ sys.path.append(str(pathlib.Path(__file__).parent))
 torch.set_float32_matmul_precision("high")
 
 
+def reward_function(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+    """
+    Compute reward for a given state and goal.
+
+    Args:
+        state (torch.Tensor): The current state of the environment.
+                              Shape (B, S, K) or (B, T, S, K).
+        goal (torch.Tensor): The desired goal state.
+                             Shape (K,) or (B, K).
+
+    Returns:
+        torch.Tensor: Reward tensor of shape (B, 1) or (B, T, 1).
+    """
+    if state.dim() == 3:
+        # Caso (B, S, K) con goal (K,)
+        first_rows = state[:, 0, :]
+        matches = torch.all(first_rows == goal, dim=1, keepdim=True)
+
+    elif state.dim() == 4:
+        # Caso (B, T, S, K) con goal (B, K)
+        first_rows = state[:, :, 0, :]
+        goal_expanded = goal.unsqueeze(1).expand_as(first_rows)
+        matches = torch.all(first_rows == goal_expanded, dim=-1, keepdim=True)
+
+    else:
+        raise ValueError(
+            f"Estado con número de dimensiones no soportado: {state.dim()}"
+        )
+
+    return torch.where(matches, torch.tensor(0), torch.tensor(-1))
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="configs")
 def main(config):
     tools.set_seed_everywhere(config.seed)
@@ -47,10 +79,17 @@ def main(config):
         config.model,
         obs_space,
         act_space,
+        reward_function=reward_function,
     ).to(config.device)
 
     policy_trainer = OnlineTrainer(
-        config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs
+        config.trainer,
+        replay_buffer,
+        logger,
+        logdir,
+        train_envs,
+        eval_envs,
+        reward_function=reward_function,
     )
     policy_trainer.begin(agent)
 

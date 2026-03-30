@@ -27,7 +27,8 @@ class Tee(io.TextIOBase):
 
     def flush(self):
         for stream in self._streams:
-            stream.flush()
+            if not getattr(stream, "closed", False):
+                stream.flush()
 
     def isatty(self):
         # Preserve tty detection for progress bars etc.

@@ -18,7 +18,7 @@ from tools import to_f32
 
 
 class Dreamer(nn.Module):
-    def __init__(self, config, obs_space, act_space):
+    def __init__(self, config, obs_space, act_space, reward_function):
         super().__init__()
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
@@ -39,8 +39,8 @@ class Dreamer(nn.Module):
             self.embed_size,
             self.act_dim,
         )
-        self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
-        self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
+
+        self.reward_function = reward_function
 
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
         self.act_discrete = False
@@ -54,8 +54,8 @@ class Dreamer(nn.Module):
             config.actor.dist = config.actor.dist.cont
 
         # Actor-critic components
-        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size)
-        self.value = networks.MLPHead(config.critic, self.rssm.feat_size)
+        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + self.rssm._discrete)
+        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + self.rssm._discrete)
         self.slow_target_update = int(config.slow_target_update)
         self.slow_target_fraction = float(config.slow_target_fraction)
         self._slow_value = copy.deepcopy(self.value)
@@ -70,8 +70,6 @@ class Dreamer(nn.Module):
             "rssm": self.rssm,
             "actor": self.actor,
             "value": self.value,
-            "reward": self.reward,
-            "cont": self.cont,
             "encoder": self.encoder,
         }
 
@@ -123,6 +121,8 @@ class Dreamer(nn.Module):
                 "ema_encoder": self._ema_encoder,
                 "ema_obs_proj": self._ema_obs_proj,
             })
+
+
         # count number of parameters in each module
         for key, module in modules.items():
             if isinstance(module, nn.Parameter):
@@ -197,22 +197,6 @@ class Dreamer(nn.Module):
             param_new.data = param_orig.data
             param_new.requires_grad_(False)
 
-        self._frozen_reward = copy.deepcopy(self.reward)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.reward.named_parameters(), self._frozen_reward.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_cont = copy.deepcopy(self.cont)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.cont.named_parameters(), self._frozen_cont.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
         self._frozen_actor = copy.deepcopy(self.actor)
         for (name_orig, param_orig), (name_new, param_new) in zip(
             self.actor.named_parameters(), self._frozen_actor.named_parameters()
@@ -260,7 +244,9 @@ class Dreamer(nn.Module):
         stoch, deter, _ = self._frozen_rssm.obs_step(prev_stoch, prev_deter, prev_action, embed, obs["is_first"])
         # (B, F)
         feat = self._frozen_rssm.get_feat(stoch, deter)
-        action_dist = self._frozen_actor(feat)
+
+        policy_input = torch.cat([feat, obs["goal"]], dim=-1)
+        action_dist = self._frozen_actor(policy_input)
         # (B, A)
         action = action_dist.mode if eval else action_dist.rsample()
         return action, TensorDict(
@@ -295,14 +281,14 @@ class Dreamer(nn.Module):
             tuple(val[:B] for val in initial),
             data["is_first"][:B, :5],
         )
-        recon = self.decoder(post_stoch, post_deter)["image"].mode()[:B]
+        recon = self.decoder(post_stoch, post_deter)["image"].mode[:B]
         init_stoch, init_deter = post_stoch[:, -1], post_deter[:, -1]
         prior_stoch, prior_deter = self.rssm.imagine_with_action(
             init_stoch,
             init_deter,
             data["action"][:B, 5:],
         )
-        openl = self.decoder(prior_stoch, prior_deter)["image"].mode()
+        openl = self.decoder(prior_stoch, prior_deter)["image"].mode
         model = torch.cat([recon[:, :5], openl], 1)
         truth = data["image"][:B]
         error = (model - truth + 1.0) / 2.0
@@ -429,10 +415,6 @@ class Dreamer(nn.Module):
         else:
             raise NotImplementedError
 
-        # reward and continue
-        losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
-        cont = 1.0 - to_f32(data["is_terminal"])
-        losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
         # log
         metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
         metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
@@ -444,17 +426,28 @@ class Dreamer(nn.Module):
             post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
         )
         # (B, T, ...) -> (B*T, ...)
-        imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
+        goal = data["goal"].reshape(-1, *data["goal"].shape[2:])
+        imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1, goal)
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
 
         # (B*T, T_imag, 1)
-        imag_reward = self._frozen_reward(imag_feat).mode()
+        S, K = self.rssm._stoch, self.rssm._discrete
+        get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
+        imag_stoch = get_stoch_from_feat(imag_feat)
+        imag_reward = self.reward_function(imag_stoch, goal)
+
         # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = self._frozen_cont(imag_feat).mean
+        imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)
+        
+        imag_reward = to_f32(imag_reward)
+        
         # (B*T, T_imag, 1)
-        imag_value = self._frozen_value(imag_feat).mode()
-        imag_slow_value = self._frozen_slow_value(imag_feat).mode()
+        imag_goal = goal.unsqueeze(1).expand(-1, 16, -1)
+        imag_input = torch.cat([imag_feat, imag_goal], dim=-1)
+        imag_value = self._frozen_value(imag_input).mode
+        imag_slow_value = self._frozen_slow_value(imag_input).mode
         disc = 1 - 1 / self.horizon
+
         # (B*T, T_imag, 1)
         weight = torch.cumprod(imag_cont * disc, dim=1)
         last = torch.zeros_like(imag_cont)
@@ -466,13 +459,13 @@ class Dreamer(nn.Module):
         # (B*T, T_imag-1, 1)
         adv = (ret - imag_value[:, :-1]) / ret_scale
 
-        policy = self.actor(imag_feat)
+        policy = self.actor(imag_input)
         # (B*T, T_imag-1, 1)
         logpi = policy.log_prob(imag_action)[:, :-1].unsqueeze(-1)
         entropy = policy.entropy()[:, :-1].unsqueeze(-1)
         losses["policy"] = torch.mean(weight[:, :-1].detach() * -(logpi * adv.detach() + self.act_entropy * entropy))
 
-        imag_value_dist = self.value(imag_feat)
+        imag_value_dist = self.value(imag_input)
         # (B*T, T_imag, 1)
         tar_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
         losses["value"] = torch.mean(
@@ -503,17 +496,18 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter)
+        feat = self.rssm.get_feat(post_stoch, post_deter) # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        value = self._frozen_value(feat).mode()
-        slow_value = self._frozen_slow_value(feat).mode()
+        value_input = torch.cat([feat, data["goal"]], dim=-1)
+        value = self._frozen_value(value_input).mode
+        slow_value = self._frozen_slow_value(value_input).mode
         disc = 1 - 1 / self.horizon
         weight = 1.0 - last
         ret = self._lambda_return(last, term, reward, value, boot, disc, self.lamb)
         ret_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
 
         # Keep this attached to the world model so gradients can flow through
-        value_dist = self.value(feat)
+        value_dist = self.value(value_input)
         losses["repval"] = torch.mean(
             weight[:, :-1]
             * (-value_dist.log_prob(ret_padded.detach()) - value_dist.log_prob(slow_value.detach()))[:, :-1].unsqueeze(
@@ -533,7 +527,7 @@ class Dreamer(nn.Module):
         return (post_stoch, post_deter), metrics
 
     @torch.no_grad()
-    def _imagine(self, start, imag_horizon):
+    def _imagine(self, start, imag_horizon, goal):
         """Roll out the policy in latent space."""
         # (B, S, K), (B, D)
         feats = []
@@ -543,7 +537,8 @@ class Dreamer(nn.Module):
             # (B, F)
             feat = self._frozen_rssm.get_feat(stoch, deter)
             # (B, A)
-            action = self._frozen_actor(feat).rsample()
+            policy_input = torch.cat([feat, goal], dim=-1)
+            action = self._frozen_actor(policy_input).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)

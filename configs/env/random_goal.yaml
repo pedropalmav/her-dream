@@ -1,5 +1,5 @@
 task: "random-goal_"
-steps: 100
+steps: 4.1e5
 env_num: 1
 action_repeat: 1
 eval_episode_num: 10
@@ -11,10 +11,10 @@ device: ${device}
 
 size: [64, 64]
 encoder:
-  mlp_keys: ".*"
+  mlp_keys: "direction"
   cnn_keys: "image"
 decoder:
-  mlp_keys: ".*"
+  mlp_keys: "direction"
   cnn_keys: "image"
 stochastic_classes: 4
 

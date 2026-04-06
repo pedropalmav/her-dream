@@ -3,6 +3,7 @@ logdir/
 *.hydra/
 torch_compile_debug/
 plots/
+evals/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

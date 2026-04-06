@@ -1,0 +1,6 @@
+defaults:
+  - configs
+  - _self_
+
+env:
+  time_limit: 300

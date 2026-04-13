@@ -23,6 +23,10 @@ buffer:
   max_size: 5e5
   device: ${device}
   storage_device: "cpu"
+  type: "her"
+  her_ratio: 0.8
+  her_strategy: final
+  n_envs: ${env.env_num}
 
 trainer:
   steps: ${env.steps}

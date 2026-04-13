@@ -7,7 +7,7 @@ import hydra
 import torch
 
 import tools
-from buffer import Buffer
+from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
@@ -50,6 +50,17 @@ def reward_function(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     return torch.where(matches, torch.tensor(0), torch.tensor(-1))
 
 
+# TODO: move this funciton to buffer module __init__.py
+def make_buffer(config):
+    match config.buffer.type:
+        case "her":
+            return HERBuffer(config.buffer, reward_function)
+        case "normal":
+            return Buffer(config.buffer)
+        case _:
+            raise ValueError(f"Tipo de buffer no soportado: {config.buffer.type}")
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="configs")
 def main(config):
     tools.set_seed_everywhere(config.seed)
@@ -68,11 +79,11 @@ def main(config):
     # save config
     logger.log_hydra_config(config)
 
-    replay_buffer = Buffer(config.buffer)
-
     print("Create envs.")
     config.env["stochastic_classes"] = config.model.rssm.discrete
     train_envs, eval_envs, obs_space, act_space = make_envs(config.env)
+
+    replay_buffer = make_buffer(config)
 
     print("Simulate agent.")
     agent = Dreamer(

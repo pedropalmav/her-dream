@@ -11,9 +11,15 @@ class Buffer:
         self.batch_length = int(config.batch_length)
         self.num_eps = 0
         self._buffer = ReplayBuffer(
-            storage=LazyTensorStorage(max_size=config.max_size, device=self.storage_device, ndim=2),
+            storage=LazyTensorStorage(
+                max_size=config.max_size, device=self.storage_device, ndim=2
+            ),
             sampler=SliceSampler(
-                num_slices=self.batch_size, end_key=None, traj_key="episode", truncated_key=None, strict_length=True
+                num_slices=self.batch_size,
+                end_key=None,
+                traj_key="env",
+                truncated_key=None,
+                strict_length=True,
             ),
             prefetch=0,
             batch_size=self.batch_size * (self.batch_length + 1),  # +1 for context
@@ -25,17 +31,27 @@ class Buffer:
         self._buffer.extend(data.unsqueeze(1))
 
     def sample(self):
+        sample_td, info = self._get_samples()
+        return self._parse_sample(sample_td, info)
+
+    def _get_samples(self):
         sample_td, info = self._buffer.sample(return_info=True)
         # The sampler returns a flattened batch of length B*(T+1).
         # (B*(T+1), ...) -> (B, T+1, ...)
         sample_td = sample_td.view(-1, self.batch_length + 1)
+        sample_td = self._move_sample_to_device(sample_td)
+        return sample_td, info
+
+    def _move_sample_to_device(self, sample_td):
         src_dev = sample_td.device
 
         if src_dev.type == "cpu" and self.device.type == "cuda":
             sample_td = sample_td.pin_memory().to(self.device, non_blocking=True)
         elif src_dev != self.device:
             sample_td = sample_td.to(self.device, non_blocking=True)
-        
+        return sample_td
+
+    def _parse_sample(self, sample_td, info):
         # The initial ones are used only to extract the latent vector
         initial = (sample_td["stoch"][:, 0], sample_td["deter"][:, 0])
         data = sample_td[:, 1:]

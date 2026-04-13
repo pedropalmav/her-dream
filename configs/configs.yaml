@@ -1,6 +1,7 @@
 defaults:
   - env: random_goal
   - model: size12M
+  - buffer: her
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
   - _self_
@@ -17,16 +18,16 @@ hydra:
 batch_size: 16
 batch_length: 64
 
-buffer:
-  batch_size: ${batch_size}
-  batch_length: ${batch_length}
-  max_size: 5e5
-  device: ${device}
-  storage_device: "cpu"
-  type: "her"
-  her_ratio: 0.8
-  her_strategy: final
-  n_envs: ${env.env_num}
+# buffer:
+#   batch_size: ${batch_size}
+#   batch_length: ${batch_length}
+#   max_size: 5e5
+#   device: ${device}
+#   storage_device: "cpu"
+#   type: "her"
+#   her_ratio: 0.8
+#   her_strategy: final
+#   n_envs: ${env.env_num}
 
 trainer:
   steps: ${env.steps}

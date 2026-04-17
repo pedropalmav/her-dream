@@ -31,7 +31,7 @@ class Dreamer(nn.Module):
         self.rep_loss = str(config.rep_loss)
 
         # World model components
-        print(k for k in obs_space.spaces.keys())
+        print([k for k in obs_space.spaces.keys()])
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
         self.encoder = networks.MultiEncoder(config.encoder, shapes)
         self.embed_size = self.encoder.out_dim

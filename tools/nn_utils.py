@@ -43,6 +43,8 @@ def convert(value, precision=32):
         dtype = np.uint8
     elif np.issubdtype(value.dtype, bool):
         dtype = bool
+    elif value.dtype.kind == 'U' or value.dtype.kind == 'S':
+        return value  # strings: dejar como están sin convertir
     else:
         raise NotImplementedError(value.dtype)
     return value.astype(dtype)

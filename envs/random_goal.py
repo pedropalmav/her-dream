@@ -57,7 +57,7 @@ class RandomGoal(MiniGridEnv):
         gx, gy = self._goal_pos
         dx = gx - ax
         dy = gy - ay
-        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy}), delta ({dx},{dy})"
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
 
     def reset(self, **kwargs):
         obs, info = super().reset(**kwargs)
@@ -68,7 +68,7 @@ class RandomGoal(MiniGridEnv):
         obs, reward, terminated, truncated, info = super().step(action)
         reward = self._reward()
         obs["mission"] = self._build_mission()
-        print(obs["mission"], action)
+        print("mission description:", obs["mission"], "action_description:", action)
         # We use truncated to signal episode end instead of terminated
         terminated = False
         return obs, reward, terminated, truncated, info

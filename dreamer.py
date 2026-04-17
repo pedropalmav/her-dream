@@ -234,7 +234,7 @@ class Dreamer(nn.Module):
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
         p_obs = self.preprocess(obs)
-        print(obs.keys())
+        print("mission encrypted:", obs["mission"])
         # (B, E)
         embed = self._frozen_encoder(p_obs)
         prev_stoch, prev_deter, prev_action = (

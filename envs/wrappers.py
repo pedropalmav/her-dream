@@ -226,6 +226,16 @@ class MiniGridWrapper(gym.Wrapper):
         return obs
 
 
+MAX_LEN = 128  # largo máximo del string
+VOCAB = {c: i+1 for i, c in enumerate(" abcdefghijklmnopqrstuvwxyz0123456789.,!?-:()")}
+VOCAB["<pad>"] = 0
+
+def encode_mission(text: str, max_len: int = MAX_LEN) -> np.ndarray:
+    text = text.lower()[:max_len]
+    ids = [VOCAB[c] for c in text]
+    ids += [0] * (max_len - len(ids))  # padding
+    return np.array(ids, dtype=np.int32)
+
 class MissionGridWrapper(gym.Wrapper):
     def __init__(self, env):
         env = OneHotDirection(env)
@@ -255,6 +265,8 @@ class MissionGridWrapper(gym.Wrapper):
         return obs, reward, terminated or truncated, info
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+        if "mission" in obs:
+            obs["mission"] = encode_mission(obs["mission"])
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal

@@ -77,7 +77,19 @@ def make_env(config, id):
         env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config.stochastic_classes)
+    elif suite == "random-goal-text":
+        import envs.random_goal as random_goal
 
+        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        env = random_goal.make_random_goal_env(
+            size=config.env_size,
+            agent_start_dir=config.agent_start_dir,
+            agent_start_pos=agent_start_pos,
+            max_steps=config.time_limit,
+        )
+        env = wrappers.MissionGridWrapper(env)
+        env = wrappers.OneHotAction(env)
+        env = wrappers.GoalConditioned(env, config.stochastic_classes)
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

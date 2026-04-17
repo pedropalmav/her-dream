@@ -224,3 +224,38 @@ class MiniGridWrapper(gym.Wrapper):
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal
         return obs
+
+
+class MissionGridWrapper(gym.Wrapper):
+    def __init__(self, env):
+        env = OneHotDirection(env)
+        super().__init__(env)
+
+        self.env.observation_space = gym.spaces.Dict(
+            {
+                **self.env.observation_space.spaces,
+                "is_first": gym.spaces.Box(0, 1, (), bool),
+                "is_last": gym.spaces.Box(0, 1, (), bool),
+                "is_terminal": gym.spaces.Box(0, 1, (), bool),
+            }
+        )
+
+    def reset(self):
+        obs, _ = self.env.reset()
+        return self._parse_observation(obs, is_first=True)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        obs = self._parse_observation(
+            obs,
+            is_first=False,
+            is_last=terminated or truncated,
+            is_terminal=terminated,
+        )
+        return obs, reward, terminated or truncated, info
+
+    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+        obs["is_first"] = is_first
+        obs["is_last"] = is_last
+        obs["is_terminal"] = is_terminal
+        return obs

@@ -10,7 +10,7 @@ from functools import partial
 class MultiDecoder(nn.Module):
     def __init__(self, config, deter, flat_stoch, shapes):
         super().__init__()
-        excluded = ("is_first", "is_last", "is_terminal")
+        excluded = ("is_first", "is_last", "is_terminal", "mission")
         shapes = {k: v for k, v in shapes.items() if k not in excluded}
         self.cnn_shapes = {
             k: v

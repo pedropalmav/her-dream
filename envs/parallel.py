@@ -62,7 +62,11 @@ class ParallelEnv:
         obs_stacked = {k: np.stack([o[k] for o in new_o]) for k in new_o[0].keys()}
 
         # Build CPU tensors first to avoid implicit GPU syncs and enable async H2D in caller.
-        obs_tensors = {k: torch.as_tensor(v, device="cpu") for k, v in obs_stacked.items()}
+        obs_tensors = {
+            k: torch.as_tensor(v, device="cpu") 
+            for k, v in obs_stacked.items()
+            if v.dtype.kind not in ('U', 'S')
+        }
         rew_stacked = torch.as_tensor(new_r, dtype=torch.float32, device="cpu")
 
         # Keep data on CPU; caller will .to(device, non_blocking=True) after pinning.

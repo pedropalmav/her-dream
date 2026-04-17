@@ -226,7 +226,7 @@ class MiniGridWrapper(gym.Wrapper):
         return obs
 
 
-MAX_LEN = 128  # largo máximo del string
+MAX_LEN = 500  # largo máximo del string
 VOCAB = {c: i+1 for i, c in enumerate(" abcdefghijklmnopqrstuvwxyz0123456789.,!?-:()")}
 VOCAB["<pad>"] = 0
 

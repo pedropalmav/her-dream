@@ -31,8 +31,8 @@ class Dreamer(nn.Module):
         self.rep_loss = str(config.rep_loss)
 
         # World model components
-        print([k for k in obs_space.spaces.keys()])
-        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        excluded = ("is_first", "is_last", "is_terminal", "reward", "mission")
+        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items() if k not in excluded}
         self.encoder = networks.MultiEncoder(config.encoder, shapes)
         self.embed_size = self.encoder.out_dim
         self.rssm = rssm.RSSM(

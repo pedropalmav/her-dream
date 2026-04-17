@@ -74,7 +74,6 @@ def make_env(config, id):
             agent_start_pos=agent_start_pos,
             max_steps=config.time_limit,
         )
-        print(config.mission_text)
         if not config.mission_text:
             env = wrappers.MiniGridWrapper(env)
         else:

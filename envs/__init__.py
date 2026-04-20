@@ -76,7 +76,7 @@ def make_env(config, id):
         )
         env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
-        env = wrappers.GoalConditioned(env, config.stochastic_classes)
+        env = wrappers.GoalConditioned(env, config)
 
     elif suite == "fixed-goal":
         import envs.fixed_goal as fixed_goal
@@ -92,7 +92,7 @@ def make_env(config, id):
         )
         env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
-        env = wrappers.GoalConditioned(env, config.stochastic_classes)
+        env = wrappers.GoalConditioned(env, config)
 
     else:
         raise NotImplementedError(suite)

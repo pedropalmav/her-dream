@@ -17,6 +17,18 @@ hydra:
 
 batch_size: 16
 batch_length: 64
+goal_type: full
+
+env:
+  goal_type: ${goal_type}
+  stochastic_classes: ${model.rssm.discrete}
+  stochastic_rows: ${model.rssm.stoch}
+
+model:
+  goal_type: ${goal_type}
+
+buffer:
+  goal_type: ${goal_type}
 
 # buffer:
 #   batch_size: ${batch_size}

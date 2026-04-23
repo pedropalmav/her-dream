@@ -5,3 +5,4 @@ from .multi_decoder import MultiDecoder
 from .return_ema import ReturnEMA
 from .mlp_head import MLPHead
 from .projector import Projector
+from .text_encoder import TextEncoderGRU

@@ -8,11 +8,12 @@ from tensordict import TensorDict
 from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
+import distributions as dists
 
 import networks
 import rssm
 import tools
-from networks import Projector
+from networks import Projector, TextEncoderGRU
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
@@ -123,6 +124,19 @@ class Dreamer(nn.Module):
                 "ema_obs_proj": self._ema_obs_proj,
             })
 
+        # === Text encoder (auxiliar, solo si hay mission en el obs) ===
+        self.use_text = "mission" in obs_space.spaces
+        if self.use_text:
+            print("HOLA: Entre acá!, uso mission :)")
+            self.text_encoder = networks.TextEncoderGRU(
+                vocab_size=int(config.text_encoder.vocab_size),
+                embed_dim=int(config.text_encoder.embed_dim),
+                hidden=int(config.text_encoder.hidden),
+                stoch=self.rssm._stoch,
+                discrete=self.rssm._discrete,
+                num_layers=int(config.text_encoder.num_layers),
+            )
+            modules["text_encoder"] = self.text_encoder
 
         # count number of parameters in each module
         for key, module in modules.items():
@@ -234,7 +248,7 @@ class Dreamer(nn.Module):
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
         p_obs = self.preprocess(obs)
-        print("mission encrypted:", obs["mission"])
+        # print("mission encrypted:", obs["mission"])
         # (B, E)
         embed = self._frozen_encoder(p_obs)
         prev_stoch, prev_deter, prev_action = (
@@ -361,6 +375,18 @@ class Dreamer(nn.Module):
         dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
         losses["dyn"] = torch.mean(dyn_loss)
         losses["rep"] = torch.mean(rep_loss)
+        
+        # === Text KL loss (auxiliar) ===
+        # El text encoder aprende a predecir el z del agente desde el texto.
+        # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
+        if self.use_text:
+            # data["mission"]: (B, T, L, V) float32 one-hot
+            text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
+            text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
+            text_kl = torch.clip(text_kl, min=self.kl_free)
+            losses["text_kl"] = torch.mean(text_kl)
+            metrics["text_kl"] = losses["text_kl"].detach()
+        
         # === Representation / auxiliary losses ===
         # (B, T, F)
         feat = self.rssm.get_feat(post_stoch, post_deter)

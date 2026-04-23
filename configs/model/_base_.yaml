@@ -179,3 +179,18 @@ critic:
   outscale: 0.0
   symlog_inputs: False
   name: 'value'
+
+# Text encoder for the problem
+text_encoder:
+  vocab_size: 46
+  embed_dim: 32
+  hidden: 256
+  num_layers: 1
+
+loss_scales:
+  dyn: 0.5
+  rep: 0.1
+  text_kl: 0.1
+  policy: 1.0
+  value: 1.0
+  repval: 0.5

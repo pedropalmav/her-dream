@@ -32,6 +32,7 @@ loss_scales:
   swav: 1.0
   temp: 1.0
   norm: 1.0
+  text_kl: 0.1
 
 r2dreamer:
   lambd: 5e-4
@@ -186,11 +187,3 @@ text_encoder:
   embed_dim: 32
   hidden: 256
   num_layers: 1
-
-loss_scales:
-  dyn: 0.5
-  rep: 0.1
-  text_kl: 0.1
-  policy: 1.0
-  value: 1.0
-  repval: 0.5

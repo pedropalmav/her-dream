@@ -68,7 +68,7 @@ class RandomGoal(MiniGridEnv):
         obs, reward, terminated, truncated, info = super().step(action)
         reward = self._reward()
         obs["mission"] = self._build_mission()
-        print("mission description:", obs["mission"], "action_description:", action)
+        # print("mission description:", obs["mission"], "action_description:", action)
         # We use truncated to signal episode end instead of terminated
         terminated = False
         return obs, reward, terminated, truncated, info

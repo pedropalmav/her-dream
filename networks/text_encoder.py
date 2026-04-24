@@ -6,23 +6,25 @@ class TextEncoderGRU(nn.Module):
     Input:  (B, T, L, V) float32 one-hot
     Output: (B, T, S, K) logit — misma forma que post_logit del RSSM
     """
-    def __init__(self, vocab_size, embed_dim, hidden, stoch, discrete, num_layers=1):
+    def __init__(self, config, stoch, discrete, act):
         super().__init__()
         self.stoch = stoch
         self.discrete = discrete
         
+        
         # Proyecta cada carácter one-hot a un embedding denso
-        self.char_proj = nn.Linear(vocab_size, embed_dim, bias=False)
+        self.char_proj = nn.Linear(config.vocab_size, config.embed_dim, bias=False)
+        act = getattr(nn, act)
         self.gru = nn.GRU(
-            input_size=embed_dim,
-            hidden_size=hidden,
-            num_layers=num_layers,
+            input_size=config.embed_dim,
+            hidden_size=config.hidden,
+            num_layers=config.num_layers,
             batch_first=True,
         )
         self.head = nn.Sequential(
-            nn.RMSNorm(hidden, eps=1e-4),
-            nn.ELU(),
-            nn.Linear(hidden, stoch * discrete),
+            nn.RMSNorm(config.hidden, eps=1e-4),
+            act(),
+            nn.Linear(config.hidden, stoch * discrete),
         )
 
     def forward(self, tokens):

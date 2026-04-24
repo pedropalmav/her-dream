@@ -129,12 +129,10 @@ class Dreamer(nn.Module):
         if self.use_text:
             print("HOLA: Entre acá!, uso mission :)")
             self.text_encoder = networks.TextEncoderGRU(
-                vocab_size=int(config.text_encoder.vocab_size),
-                embed_dim=int(config.text_encoder.embed_dim),
-                hidden=int(config.text_encoder.hidden),
+                config=config.text_encoder,
                 stoch=self.rssm._stoch,
                 discrete=self.rssm._discrete,
-                num_layers=int(config.text_encoder.num_layers),
+                act=config.rssm.act
             )
             modules["text_encoder"] = self.text_encoder
 

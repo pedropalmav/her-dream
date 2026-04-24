@@ -55,8 +55,6 @@ class RandomGoal(MiniGridEnv):
         ax, ay = self.agent_pos
         direction = DIRECTIONS[self.agent_dir]
         gx, gy = self._goal_pos
-        dx = gx - ax
-        dy = gy - ay
         return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
 
     def reset(self, **kwargs):

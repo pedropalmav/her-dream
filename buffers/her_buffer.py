@@ -125,4 +125,4 @@ class HERBuffer(Buffer):
             ep_start + transition_indices_in_episode
         ) % self.max_columns
         new_goal = self._buffer[env_indices, transition_indices]["stoch"]
-        return new_goal if self.goal_type == "full" else new_goal[:, 0]
+        return new_goal[:, 0] if self.goal_type == "first_row" else new_goal

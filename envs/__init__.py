@@ -74,10 +74,10 @@ def make_env(config, id):
             agent_start_pos=agent_start_pos,
             max_steps=config.time_limit,
         )
-        if not config.mission_text:
-            env = wrappers.MiniGridWrapper(env)
-        else:
+        if config.mission_text:
             env = wrappers.MissionGridWrapper(env)
+        else:
+            env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config.stochastic_classes)
     else:

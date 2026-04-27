@@ -135,13 +135,21 @@ class Dtype(gym.Wrapper):
 
 
 class GoalConditioned(gym.Wrapper):
-    def __init__(self, env, stochastic_classes):
+    def __init__(self, env, config):
         super().__init__(env)
 
-        self.stochastic_classes = stochastic_classes
-        self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
-            stochastic_classes
-        )
+        self.stochastic_classes = config.stochastic_classes
+        self.stochastic_rows = config.stochastic_rows
+        self.goal_type = config.goal_type
+
+        if self.goal_type == "first_row":
+            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
+                self.stochastic_classes
+            )
+        else:
+            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
+                (self.stochastic_rows, self.stochastic_classes)
+            )
 
     def reset(self):
         obs = self.env.reset()
@@ -151,11 +159,22 @@ class GoalConditioned(gym.Wrapper):
 
     # TODO: Evolve this method
     def _generate_goal(self):
-        goal = np.zeros(self.stochastic_classes, dtype=np.float32)
-        index = np.random.randint(0, self.stochastic_classes)
-        goal[index] = 1.0
+        if self.goal_type == "first_row":
+            goal = self._generate_row()
+        else:
+            goal = np.zeros(
+                (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
+            )
+            for i in range(self.stochastic_rows):
+                goal[i] = self._generate_row()
 
         self.goal = goal
+
+    def _generate_row(self):
+        row = np.zeros(self.stochastic_classes, dtype=np.float32)
+        index = np.random.randint(0, self.stochastic_classes)
+        row[index] = 1.0
+        return row
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)

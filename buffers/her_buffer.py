@@ -17,6 +17,7 @@ class HERBuffer(Buffer):
         super().__init__(config)
 
         self.reward_function = reward_function
+        self.goal_type = config.goal_type
         self.her_ratio = float(config.her_ratio)
         self.her_strategy = HERStrategy[config.her_strategy.upper()]
 
@@ -123,4 +124,5 @@ class HERBuffer(Buffer):
         transition_indices = (
             ep_start + transition_indices_in_episode
         ) % self.max_columns
-        return self._buffer[env_indices, transition_indices]["stoch"][:, 0]
+        new_goal = self._buffer[env_indices, transition_indices]["stoch"]
+        return new_goal[:, 0] if self.goal_type == "first_row" else new_goal

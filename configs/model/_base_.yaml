@@ -7,6 +7,7 @@ compile: False
 log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
+goal_type: ${goal_type}
 
 lr: 4e-5
 agc: 0.3
@@ -63,7 +64,7 @@ rssm:
   act: ${model.act}
   norm: ${model.norm}
   unimix_ratio: 0.01
-  initial: 'learned'
+  initial: "learned"
   device: ${device}
 
 encoder:
@@ -78,7 +79,7 @@ encoder:
     device: ${device}
     outscale: null
     symlog_inputs: True
-    name: 'mlp_encoder'
+    name: "mlp_encoder"
   cnn:
     act: ${model.act}
     norm: ${model.norm}
@@ -91,9 +92,9 @@ decoder:
   mlp_keys: ${env.decoder.mlp_keys}
   cnn_keys: ${env.decoder.cnn_keys}
   mlp_dist:
-    name: 'symlog_mse'
+    name: "symlog_mse"
   cnn_dist:
-    name: 'mse'
+    name: "mse"
   mlp:
     shape: null
     layers: 3
@@ -101,11 +102,11 @@ decoder:
     act: ${model.act}
     norm: ${model.norm}
     dist:
-      name: 'identity'
+      name: "identity"
     device: ${device}
     outscale: 1.0
     symlog_inputs: False
-    name: 'mlp_decoder'
+    name: "mlp_decoder"
   cnn:
     depth: ${model.depth}
     units: ${model.units}
@@ -118,31 +119,31 @@ decoder:
     outscale: 1.0
 
 reward:
-  shape: [255,]
+  shape: [255]
   layers: 1
   units: ${model.units}
   act: ${model.act}
   norm: ${model.norm}
   dist:
-    name: 'symexp_twohot'
+    name: "symexp_twohot"
     bin_num: 255
   outscale: 0.0
   device: ${device}
   symlog_inputs: False
-  name: 'reward'
+  name: "reward"
 
 cont:
-  shape: [1,]
+  shape: [1]
   layers: 1
   units: ${model.units}
   act: ${model.act}
   norm: ${model.norm}
   dist:
-    name: 'binary'
+    name: "binary"
   outscale: 1.0
   device: ${device}
   symlog_inputs: False
-  name: 'cont'
+  name: "cont"
 
 actor:
   shape: null
@@ -153,29 +154,29 @@ actor:
   device: ${device}
   dist:
     cont:
-      name: 'bounded_normal'
+      name: "bounded_normal"
       min_std: 0.1
       max_std: 1.0
     disc:
-      name: 'onehot'
+      name: "onehot"
       unimix_ratio: 0.01
     multi_disc:
-      name: 'multi_onehot'
+      name: "multi_onehot"
       unimix_ratio: 0.01
   outscale: 0.01
   symlog_inputs: False
-  name: 'actor'
+  name: "actor"
 
 critic:
-  shape: [255,]
+  shape: [255]
   layers: 3
   units: ${model.units}
   act: ${model.act}
   norm: ${model.norm}
   device: ${device}
   dist:
-    name: 'symexp_twohot'
+    name: "symexp_twohot"
     bin_num: 255
   outscale: 0.0
   symlog_inputs: False
-  name: 'value'
+  name: "value"

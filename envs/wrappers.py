@@ -146,6 +146,7 @@ class GoalConditioned(gym.Wrapper):
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
                 self.stochastic_classes
             )
+            self.goal_index = config.get("goal_index", None)
         else:
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
                 (self.stochastic_rows, self.stochastic_classes)
@@ -160,7 +161,11 @@ class GoalConditioned(gym.Wrapper):
     # TODO: Evolve this method
     def _generate_goal(self):
         if self.goal_type == "first_row":
-            goal = self._generate_row()
+            if self.goal_index:
+                goal = np.zeros(self.stochastic_classes, dtype=np.float32)
+                goal[self.goal_index] = 1.0
+            else:
+                goal = self._generate_row()
         else:
             goal = np.zeros(
                 (self.stochastic_rows, self.stochastic_classes), dtype=np.float32

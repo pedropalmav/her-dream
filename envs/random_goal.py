@@ -57,6 +57,21 @@ class RandomGoal(MiniGridEnv):
         gx, gy = self._goal_pos
         return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
 
+    @staticmethod
+    def random_mission(size: int, rng: np.random.RandomState = None) -> str:
+        """Return a mission string with randomly sampled [ax, ay, direction, gx, gy].
+
+        All positions are sampled uniformly from the grid interior (1 to size-2),
+        independently — agent and goal may coincide, matching the training distribution.
+        """
+        if rng is None:
+            rng = np.random.RandomState()
+        interior = np.arange(1, size - 1)
+        ax, ay = rng.choice(interior), rng.choice(interior)
+        gx, gy = rng.choice(interior), rng.choice(interior)
+        direction = DIRECTIONS[rng.randint(0, 4)]
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
+
     def reset(self, **kwargs):
         obs, info = super().reset(**kwargs)
         obs["mission"] = self._build_mission()

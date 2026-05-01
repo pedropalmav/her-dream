@@ -56,8 +56,9 @@ class Dreamer(nn.Module):
             config.actor.dist = config.actor.dist.cont
 
         # Actor-critic components
-        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + self.rssm._discrete)
-        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + self.rssm._discrete)
+        goal_shape = self.rssm._discrete if config.goal_type == "first_row" else self.rssm.flat_stoch
+        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape)
+        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape)
         self.slow_target_update = int(config.slow_target_update)
         self.slow_target_fraction = float(config.slow_target_fraction)
         self._slow_value = copy.deepcopy(self.value)
@@ -259,7 +260,8 @@ class Dreamer(nn.Module):
         # (B, F)
         feat = self._frozen_rssm.get_feat(stoch, deter)
 
-        policy_input = torch.cat([feat, obs["goal"]], dim=-1)
+        goal = obs["goal"].reshape(feat.shape[0], -1)
+        policy_input = torch.cat([feat, goal], dim=-1)
         action_dist = self._frozen_actor(policy_input)
         # (B, A)
         action = action_dist.mode if eval else action_dist.rsample()
@@ -468,8 +470,13 @@ class Dreamer(nn.Module):
         
         imag_reward = to_f32(imag_reward)
         
-        # (B*T, T_imag, 1)
-        imag_goal = goal.unsqueeze(1).expand(-1, 16, -1)
+        # (B*T, T_imag, ...)
+        imag_goal = goal.unsqueeze(1).expand(
+            -1,
+            self.imag_horizon + 1,
+            *([-1] * (goal.ndim - 1)),
+        )
+        imag_goal = imag_goal.reshape(imag_goal.shape[0], imag_goal.shape[1], -1)
         imag_input = torch.cat([imag_feat, imag_goal], dim=-1)
         imag_value = self._frozen_value(imag_input).mode
         imag_slow_value = self._frozen_slow_value(imag_input).mode
@@ -525,7 +532,8 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter) # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        value_input = torch.cat([feat, data["goal"]], dim=-1)
+        goal = data["goal"].reshape(feat.shape[0], feat.shape[1], -1)
+        value_input = torch.cat([feat, goal], dim=-1)
         value = self._frozen_value(value_input).mode
         slow_value = self._frozen_slow_value(value_input).mode
         disc = 1 - 1 / self.horizon
@@ -564,6 +572,7 @@ class Dreamer(nn.Module):
             # (B, F)
             feat = self._frozen_rssm.get_feat(stoch, deter)
             # (B, A)
+            goal = goal.reshape(feat.shape[0], -1)
             policy_input = torch.cat([feat, goal], dim=-1)
             action = self._frozen_actor(policy_input).rsample()
             # Append feat and its corresponding sampled action at the same time step.

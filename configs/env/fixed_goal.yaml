@@ -1,5 +1,4 @@
-task: "random-goal_"
-mission_text: False
+task: "fixed-goal_"
 steps: 4.1e5
 env_num: 1
 action_repeat: 1
@@ -21,5 +20,6 @@ decoder:
 env_size: 10
 agent_start_dir: 0
 agent_start_pos_x: 1
-agent_start_pos_y: 1
-render_mode: "rgb_array"
+agent_start_pos_y: 8
+goal_pos_x: 8
+goal_pos_y: 1

@@ -1,9 +1,9 @@
 from . import parallel, wrappers
 
 
-def make_envs(config):
+def make_envs(config, text_encoder):
     def env_constructor(idx):
-        return lambda: make_env(config, idx)
+        return lambda: make_env(config, idx, text_encoder)
 
     train_envs = parallel.ParallelEnv(env_constructor, config.env_num, config.device)
     eval_envs = parallel.ParallelEnv(
@@ -14,7 +14,7 @@ def make_envs(config):
     return train_envs, eval_envs, obs_space, act_space
 
 
-def make_env(config, id):
+def make_env(config, id, text_encoder=None):
     suite, task = config.task.split("_", 1)
     if suite == "dmc":
         import envs.dmc as dmc
@@ -73,13 +73,34 @@ def make_env(config, id):
             agent_start_dir=config.agent_start_dir,
             agent_start_pos=agent_start_pos,
             max_steps=config.time_limit,
+            render_mode=config.render_mode,
+        )
+        if config.mission_text:
+            env = wrappers.MissionGridWrapper(env)
+        else:
+            env = wrappers.MiniGridWrapper(env)
+        
+        env = wrappers.OneHotAction(env)
+        env = wrappers.GoalConditioned(env, config, text_encoder)
+
+    elif suite == "fixed-goal":
+        import envs.fixed_goal as fixed_goal
+
+        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        goal_pos = (config.goal_pos_x, config.goal_pos_y)
+        env = fixed_goal.make_fixed_goal_env(
+            size=config.env_size,
+            agent_start_dir=config.agent_start_dir,
+            agent_start_pos=agent_start_pos,
+            goal_pos=goal_pos,
+            max_steps=config.time_limit,
         )
         if config.mission_text:
             env = wrappers.MissionGridWrapper(env)
         else:
             env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
-        env = wrappers.GoalConditioned(env, config.stochastic_classes)
+        env = wrappers.GoalConditioned(env, config, text_encoder)
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

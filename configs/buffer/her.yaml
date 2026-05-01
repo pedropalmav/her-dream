@@ -1,0 +1,8 @@
+defaults:
+  - normal
+  - _self_
+
+type: her
+her_ratio: 0.8
+her_strategy: final
+n_envs: ${env.env_num}

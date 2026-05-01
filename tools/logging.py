@@ -4,6 +4,8 @@ import json
 import time
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
+import torch
+import torchvision.io
 
 
 class Tee(io.TextIOBase):
@@ -79,6 +81,17 @@ class Logger:
             name = name if isinstance(name, str) else name.decode("utf-8")
             if np.issubdtype(value.dtype, np.floating):
                 value = np.clip(255 * value, 0, 255).astype(np.uint8)
+
+            # Save video as mp4
+            video_to_save = value[0]
+            video_tensor = torch.from_numpy(video_to_save)
+            safe_name = name.replace("/", "_")
+            file_path = self._logdir / f"{safe_name}.mp4"
+            torchvision.io.write_video(
+                file_path, video_tensor, fps=10, video_codec="libx264"
+            )
+
+            # Save to tensorboard
             B, T, H, W, C = value.shape
             value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
             self._writer.add_video(name, value, step, 16)

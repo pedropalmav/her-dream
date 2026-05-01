@@ -16,3 +16,4 @@ encoder:
 decoder:
   mlp_keys: '$^'
   cnn_keys: 'image'
+stochastic_classes: 4

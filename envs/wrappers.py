@@ -65,6 +65,9 @@ class OneHotAction(gym.Wrapper):
             raise ValueError(f"Invalid one-hot action:\n{action}")
         return self.env.step(index)
 
+    def encoded_random_mission(self):
+        return self.env.encoded_random_mission()
+    
     def reset(self):
         return self.env.reset()
 
@@ -183,7 +186,7 @@ class GoalConditioned(gym.Wrapper):
         """Genera un goal one-hot (S, K) a partir de una misión aleatoria."""
         import torch
         # 1. Obtenemos los tokens
-        mission_tokens = self.env.unwrapped.encoded_random_mission()
+        mission_tokens = self.env.encoded_random_mission()
 
         # 2. Pasar por el text encoder: (1, 1, L, V) -> (1, 1, S, K)
         tokens = torch.from_numpy(mission_tokens).float().unsqueeze(0).unsqueeze(0)
@@ -327,7 +330,7 @@ class MissionGridWrapper(gym.Wrapper):
         return obs, reward, terminated or truncated, info
 
     def encoded_random_mission(self):
-        return encode_mission(self.env.random_mission)
+        return encode_mission(self.env.random_mission())
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:

@@ -4,6 +4,14 @@ import torch
 
 import tools
 
+def get_wrapper(env, wrapper_type):
+    current = env
+    while hasattr(current, "env"):
+        if isinstance(current, wrapper_type):
+            return current
+        current = current.env
+    return None
+
 
 class TimeLimit(gym.Wrapper):
     def __init__(self, env, duration):
@@ -186,7 +194,8 @@ class GoalConditioned(gym.Wrapper):
         """Genera un goal one-hot (S, K) a partir de una misión aleatoria."""
         import torch
         # 1. Obtenemos los tokens
-        mission_tokens = self.env.encoded_random_mission()
+        wrapper = get_wrapper(self.env, MissionGridWrapper)
+        mission_tokens = wrapper.encoded_random_mission()
 
         # 2. Pasar por el text encoder: (1, 1, L, V) -> (1, 1, S, K)
         tokens = torch.from_numpy(mission_tokens).float().unsqueeze(0).unsqueeze(0)
@@ -240,9 +249,6 @@ class OneHotDirection(gym.ObservationWrapper):
         self.observation_space.spaces["direction"] = gym.spaces.Box(
             0, 1, shape=(4,), dtype=np.float32
         )
-
-    def random_mission(self):
-        return self.env.random_mission()
 
     def observation(self, obs):
         direction = obs.pop("direction")
@@ -333,7 +339,12 @@ class MissionGridWrapper(gym.Wrapper):
         return obs, reward, terminated or truncated, info
 
     def encoded_random_mission(self):
-        return encode_mission(self.env.random_mission())
+        from envs.fixed_goal import FixedGoal 
+        from envs.random_goal import RandomGoal 
+        wrapper_fixed_goal = get_wrapper(self.env, FixedGoal)
+        wrapper_random_goal = get_wrapper(self.env, RandomGoal)
+        wrapper = wrapper_fixed_goal or wrapper_random_goal
+        return encode_mission(wrapper.random_mission())
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:

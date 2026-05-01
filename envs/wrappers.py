@@ -183,7 +183,7 @@ class GoalConditioned(gym.Wrapper):
         """Genera un goal one-hot (S, K) a partir de una misión aleatoria."""
         import torch
         # 1. Obtenemos los tokens
-        mission_tokens = self.env.random_mission()
+        mission_tokens = self.env.unwrapped.random_mission()
 
         # 2. Pasar por el text encoder: (1, 1, L, V) -> (1, 1, S, K)
         tokens = torch.from_numpy(mission_tokens).float().unsqueeze(0).unsqueeze(0)

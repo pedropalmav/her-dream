@@ -241,6 +241,9 @@ class OneHotDirection(gym.ObservationWrapper):
             0, 1, shape=(4,), dtype=np.float32
         )
 
+    def random_mission(self):
+        return self.env.random_mission()
+
     def observation(self, obs):
         direction = obs.pop("direction")
         one_hot = np.zeros(4, dtype=np.float32)

@@ -1,17 +1,3 @@
-"""
-Evaluation script: run a trained model where the episode goal is derived
-from the text encoder applied to a RANDOMLY GENERATED mission string.
-
-At the start of each episode, [ax, ay, direction, gx, gy] are sampled
-uniformly from the grid interior to build a random mission string.  The text
-encoder maps that string to z-logits (S, K); a sample (or argmax) from the
-first group becomes the one-hot goal for the whole episode.
-
-Usage:
-    python eval_text_goal.py --logdir logdir/02
-    python eval_text_goal.py --logdir logdir/02 --device cpu --episodes 20 --deterministic
-"""
-
 import argparse
 import pathlib
 import sys
@@ -66,6 +52,7 @@ def run_eval(agent, eval_envs, device, K, env_size, deterministic):
     once_done = torch.zeros(B, dtype=torch.bool, device=device)
     steps = torch.zeros(B, dtype=torch.int32, device=device)
     returns = torch.zeros(B, dtype=torch.float32, device=device)
+    success = torch.zeros(B, dtype=torch.bool, device=device)
 
     agent_state = agent.get_initial_state(B)
     act = agent_state["prev_action"].clone()
@@ -96,10 +83,13 @@ def run_eval(agent, eval_envs, device, K, env_size, deterministic):
         act, agent_state = agent.act(trans, agent_state, eval=True)
 
         new_reward = reward_function(agent_state["stoch"], current_goals)
-        returns += new_reward[:, 0] * ~once_done
+        step_reward = new_reward[:, 0]
+        returns += step_reward * ~once_done
+        # Goal reached when reward == 0 (latent first row matches goal)
+        success |= (step_reward == 0) & ~once_done
         once_done |= done
 
-    return returns.cpu(), steps.float().cpu()
+    return returns.cpu(), steps.float().cpu(), success.cpu()
 
 
 def main():
@@ -140,11 +130,13 @@ def main():
     mode = "deterministic (argmax)" if args.deterministic else "stochastic (sample)"
     print(f"Running {args.episodes} episodes | goal mode: {mode} | K={K} | grid size={env_size}")
 
-    returns, lengths = run_eval(agent, eval_envs, device, K, env_size, args.deterministic)
+    returns, lengths, success = run_eval(agent, eval_envs, device, K, env_size, args.deterministic)
 
+    n_success = int(success.sum())
     print(f"\nResults over {args.episodes} episodes:")
-    print(f"  Score  : {returns.mean():.3f} ± {returns.std():.3f}")
-    print(f"  Length : {lengths.mean():.1f} ± {lengths.std():.1f}")
+    print(f"  Score   : {returns.mean():.3f} ± {returns.std():.3f}")
+    print(f"  Length  : {lengths.mean():.1f} ± {lengths.std():.1f}")
+    print(f"  Success : {n_success}/{args.episodes} ({100.0 * n_success / args.episodes:.1f}%)")
 
     for env in eval_envs.envs:
         env.close()

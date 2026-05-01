@@ -30,6 +30,7 @@ class Dreamer(nn.Module):
         self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
+        self.mission_text = config.mission_text
 
         # World model components
         excluded = ("is_first", "is_last", "is_terminal", "reward", "mission")
@@ -126,7 +127,7 @@ class Dreamer(nn.Module):
             })
 
         # === Text encoder (auxiliar, solo si hay mission en el obs) ===
-        if self.config.mission_text:
+        if self.mission_text:
             print("HOLA: Entre acá!, uso mission :)")
             self.text_encoder = text_encoder
             modules["text_encoder"] = self.text_encoder
@@ -374,7 +375,7 @@ class Dreamer(nn.Module):
         # === Text KL loss (auxiliar) ===
         # El text encoder aprende a predecir el z del agente desde el texto.
         # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
-        if self.config.mission_text:
+        if self.mission_text:
             # data["mission"]: (B, T, L, V) float32 one-hot
             text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
             text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)

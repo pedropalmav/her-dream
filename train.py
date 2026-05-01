@@ -53,10 +53,10 @@ def main(config):
     
     if config.mission_text:
         text_encoder = TextEncoderGRU(
-            config=config.text_encoder,
-            stoch=config.rssm.stoch,
-            discrete=config.rssm.discrete,
-            act=config.rssm.act,
+            config=config.model.text_encoder,
+            stoch=config.model.rssm.stoch,
+            discrete=config.model.rssm.discrete,
+            act=config.model.rssm.act,
         ).to(config.device)
     else:
         text_encoder = None

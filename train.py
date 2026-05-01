@@ -11,6 +11,8 @@ from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
+from networks import TextEncoderGRU
+
 from rewards import make_reward
 
 warnings.filterwarnings("ignore")
@@ -47,9 +49,23 @@ def main(config):
     logger = tools.Logger(logdir)
     # save config
     logger.log_hydra_config(config)
+    
+    
+    if config.mission_text:
+        text_encoder = TextEncoderGRU(
+            config=config.text_encoder,
+            stoch=config.rssm.stoch,
+            discrete=config.rssm.discrete,
+            act=config.rssm.act,
+        ).to(config.device)
+    else:
+        text_encoder = None
+        
+    config.env["mission_text"] = config.mission_text
+    config.model["mission_text"] = config.mission_text
 
     print("Create envs.")
-    train_envs, eval_envs, obs_space, act_space = make_envs(config.env)
+    train_envs, eval_envs, obs_space, act_space = make_envs(config.env, text_encoder)
 
     reward_function = make_reward(config)
     replay_buffer = make_buffer(config, reward_function)
@@ -60,6 +76,7 @@ def main(config):
         obs_space,
         act_space,
         reward_function=reward_function,
+        text_encoder=text_encoder,
     ).to(config.device)
 
     policy_trainer = OnlineTrainer(

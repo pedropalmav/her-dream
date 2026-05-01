@@ -13,13 +13,13 @@ import distributions as dists
 import networks
 import rssm
 import tools
-from networks import Projector, TextEncoderGRU
+from networks import Projector
 from optim import LaProp, clip_grad_agc_
 from tools import to_f32
 
 
 class Dreamer(nn.Module):
-    def __init__(self, config, obs_space, act_space, reward_function):
+    def __init__(self, config, obs_space, act_space, reward_function, text_encoder=None):
         super().__init__()
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
@@ -126,15 +126,9 @@ class Dreamer(nn.Module):
             })
 
         # === Text encoder (auxiliar, solo si hay mission en el obs) ===
-        self.use_text = "mission" in obs_space.spaces
-        if self.use_text:
+        if self.config.mission_text:
             print("HOLA: Entre acá!, uso mission :)")
-            self.text_encoder = networks.TextEncoderGRU(
-                config=config.text_encoder,
-                stoch=self.rssm._stoch,
-                discrete=self.rssm._discrete,
-                act=config.rssm.act
-            )
+            self.text_encoder = text_encoder
             modules["text_encoder"] = self.text_encoder
 
         # count number of parameters in each module
@@ -380,7 +374,7 @@ class Dreamer(nn.Module):
         # === Text KL loss (auxiliar) ===
         # El text encoder aprende a predecir el z del agente desde el texto.
         # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
-        if self.use_text:
+        if self.config.mission_text:
             # data["mission"]: (B, T, L, V) float32 one-hot
             text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
             text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)

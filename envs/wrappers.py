@@ -135,12 +135,14 @@ class Dtype(gym.Wrapper):
 
 
 class GoalConditioned(gym.Wrapper):
-    def __init__(self, env, config):
+    def __init__(self, env, config, text_encoder):
         super().__init__(env)
 
         self.stochastic_classes = config.stochastic_classes
         self.stochastic_rows = config.stochastic_rows
         self.goal_type = config.goal_type
+        self.mission_text = config.mission_text
+        self.text_encoder = text_encoder
 
         if self.goal_type == "first_row":
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
@@ -166,6 +168,8 @@ class GoalConditioned(gym.Wrapper):
                 goal[self.goal_index] = 1.0
             else:
                 goal = self._generate_row()
+        elif self.mission_text:
+            goal = self._generate_goal_from_text()
         else:
             goal = np.zeros(
                 (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
@@ -174,6 +178,34 @@ class GoalConditioned(gym.Wrapper):
                 goal[i] = self._generate_row()
 
         self.goal = goal
+
+    def _generate_goal_from_text(self):
+        """Genera un goal one-hot (S, K) a partir de una misión aleatoria."""
+        import torch
+        # 1. Obtenemos los tokens
+        mission_tokens = self.env.random_mission()
+
+        # 2. Pasar por el text encoder: (1, 1, L, V) -> (1, 1, S, K)
+        tokens = torch.from_numpy(mission_tokens).float().unsqueeze(0).unsqueeze(0)
+        device = next(self.text_encoder.parameters()).device
+        tokens = tokens.to(device)
+
+        with torch.no_grad():
+            logits = self.text_encoder(tokens)  # (1, 1, S, K)
+
+        logits = logits.squeeze(0).squeeze(0)   # (S, K)
+
+        # 4. Samplear one-hot por fila
+        probs = torch.softmax(logits, dim=-1)   # (S, K)
+        indices = torch.multinomial(probs, num_samples=1).squeeze(-1)  # (S,)
+
+        goal = np.zeros(
+            (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
+        )
+        for i in range(self.stochastic_rows):
+            goal[i, indices[i].item()] = 1.0
+
+        return goal
 
     def _generate_row(self):
         row = np.zeros(self.stochastic_classes, dtype=np.float32)
@@ -293,6 +325,9 @@ class MissionGridWrapper(gym.Wrapper):
             is_terminal=terminated,
         )
         return obs, reward, terminated or truncated, info
+
+    def random_mission(self):
+        return encode_mission(self.env.random_mission)
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:

@@ -12,6 +12,7 @@ from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
 from networks import TextEncoderGRU
+from omegaconf import open_dict
 
 from rewards import make_reward
 
@@ -60,9 +61,12 @@ def main(config):
         ).to(config.device)
     else:
         text_encoder = None
-        
-    config.env["mission_text"] = config.mission_text
-    config.model["mission_text"] = config.mission_text
+    
+    with open_dict(config.env):
+        config.env.mission_text = config.mission_text
+
+    with open_dict(config.model):
+        config.model.mission_text = config.mission_text
 
     print("Create envs.")
     train_envs, eval_envs, obs_space, act_space = make_envs(config.env, text_encoder)

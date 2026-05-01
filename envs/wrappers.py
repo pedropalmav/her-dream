@@ -72,9 +72,6 @@ class OneHotAction(gym.Wrapper):
         if not np.allclose(reference, action):
             raise ValueError(f"Invalid one-hot action:\n{action}")
         return self.env.step(index)
-
-    def encoded_random_mission(self):
-        return self.env.encoded_random_mission()
     
     def reset(self):
         return self.env.reset()
@@ -339,12 +336,7 @@ class MissionGridWrapper(gym.Wrapper):
         return obs, reward, terminated or truncated, info
 
     def encoded_random_mission(self):
-        from envs.fixed_goal import FixedGoal 
-        from envs.random_goal import RandomGoal 
-        wrapper_fixed_goal = get_wrapper(self.env, FixedGoal)
-        wrapper_random_goal = get_wrapper(self.env, RandomGoal)
-        wrapper = wrapper_fixed_goal or wrapper_random_goal
-        return encode_mission(wrapper.random_mission())
+        return encode_mission(self.env.unwrapped.random_mission())
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:

@@ -171,14 +171,17 @@ class GoalConditioned(gym.Wrapper):
     # TODO: Evolve this method
     def _generate_goal(self):
         if self.goal_type == "first_row":
+            print("using the fixed row")
             if self.goal_index:
                 goal = np.zeros(self.stochastic_classes, dtype=np.float32)
                 goal[self.goal_index] = 1.0
             else:
                 goal = self._generate_row()
         elif self.mission_text:
+            print("Generando goal desde encoder :o")
             goal = self._generate_goal_from_text()
         else:
+            print("not using the text encoder ;c")
             goal = np.zeros(
                 (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
             )

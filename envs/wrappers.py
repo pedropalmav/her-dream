@@ -151,6 +151,8 @@ class GoalConditioned(gym.Wrapper):
         self.goal_type = config.goal_type
         self.mission_text = config.mission_text
         self.text_encoder = text_encoder
+        print("ENV encoder id:", id(self.text_encoder))
+        
 
         if self.goal_type == "first_row":
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(

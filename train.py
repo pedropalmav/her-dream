@@ -70,7 +70,7 @@ def main(config):
 
     print("Create envs.")
     train_envs, eval_envs, obs_space, act_space = make_envs(config.env, text_encoder)
-
+    
     reward_function = make_reward(config)
     replay_buffer = make_buffer(config, reward_function)
 

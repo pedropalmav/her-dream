@@ -131,6 +131,8 @@ class Dreamer(nn.Module):
             print("HOLA: Entre acá!, uso mission :)")
             self.text_encoder = text_encoder
             modules["text_encoder"] = self.text_encoder
+            print("DREAMER encoder id:", id(self.text_encoder))
+            
 
         # count number of parameters in each module
         for key, module in modules.items():

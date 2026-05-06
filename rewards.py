@@ -7,6 +7,8 @@ def make_reward(config):
             return first_row_reward
         case "row_by_row":
             return row_by_row_reward
+        case "dont_care":
+            return dont_care_reward
         case "full":
             return full_goal_reward
         case _:
@@ -77,6 +79,27 @@ def row_by_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         )
 
     return num_matching_rows / S - 1
+
+
+def dont_care_reward(
+    state: torch.Tensor, goal: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """
+    Compute reward based on how many rows of the state match the goal, ignoring masked positions.
+
+    Args:
+        state (torch.Tensor): The current state of the environment.
+                              Shape (B, S, K) or (B, T, S, K).
+        goal (torch.Tensor): The desired goal state.
+                             Shape (S, K) or (B, S, K).
+        mask (torch.Tensor): A binary tensor indicating which positions to ignore.
+                             Shape (S, K) or (B, S, K).
+
+    Returns:
+        torch.Tensor: Reward tensor of shape (B, 1) or (B, T, 1).
+    """
+    masked_state = torch.where(mask == 1, state, 0)
+    return full_goal_reward(masked_state, goal)
 
 
 def full_goal_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:

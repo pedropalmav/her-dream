@@ -436,7 +436,11 @@ class Dreamer(nn.Module):
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
         imag_stoch = get_stoch_from_feat(imag_feat)
-        imag_reward = self.reward_function(imag_stoch, goal)
+        if data["goal_mask"] is not None:
+            goal_mask = data["goal_mask"].reshape(-1, 1, *data["goal_mask"].shape[2:])
+            imag_reward = self.reward_function(imag_stoch, goal, goal_mask)
+        else:
+            imag_reward = self.reward_function(imag_stoch, goal)
 
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)

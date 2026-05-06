@@ -99,7 +99,11 @@ class HERBuffer(Buffer):
 
             achieved = sample_td["stoch"][batch_idx]
             desired = new_goal.to(self.device)
-            new_reward = self.reward_function(achieved, desired)
+            if "goal_mask" in sample_td:
+                mask = sample_td["goal_mask"][batch_idx]
+                new_reward = self.reward_function(achieved, desired, mask)
+            else:
+                new_reward = self.reward_function(achieved, desired)
             sample_td["reward"][batch_idx] = new_reward
         return sample_td
 

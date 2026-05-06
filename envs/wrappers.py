@@ -152,10 +152,18 @@ class GoalConditioned(gym.Wrapper):
                 (self.stochastic_rows, self.stochastic_classes)
             )
 
+        if self.goal_type == "dont_care":
+            assert (
+                config.relevant_rows >= 1
+            ), "Don't care goal requires at least one relevant row"
+            self.relevant_rows = config.relevant_rows
+
     def reset(self):
         obs = self.env.reset()
         self._generate_goal()
         obs["goal"] = self.goal
+        if self.goal_type == "dont_care":
+            obs["goal_mask"] = self.mask
         return obs
 
     # TODO: Evolve this method
@@ -173,7 +181,22 @@ class GoalConditioned(gym.Wrapper):
             for i in range(self.stochastic_rows):
                 goal[i] = self._generate_row()
 
+        if self.goal_type == "dont_care":
+            mask = self._generate_mask()
+            goal = np.where(mask == 1.0, goal, 0.0)
+            self.mask = mask
+
         self.goal = goal
+
+    def _generate_mask(self):
+        mask = np.zeros(
+            (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
+        )
+        indices = np.random.choice(
+            self.stochastic_rows, size=self.relevant_rows, replace=False
+        )
+        mask[indices] = 1.0
+        return mask
 
     def _generate_row(self):
         row = np.zeros(self.stochastic_classes, dtype=np.float32)
@@ -184,6 +207,8 @@ class GoalConditioned(gym.Wrapper):
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
         obs["goal"] = self.goal
+        if self.goal_type == "dont_care":
+            obs["goal_mask"] = self.mask
         return obs, reward, done, info
 
 

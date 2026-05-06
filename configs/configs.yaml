@@ -17,7 +17,7 @@ hydra:
 
 batch_size: 16
 batch_length: 64
-goal_type: full
+goal_type: full # first_row | row_by_row | dont_care | full
 
 env:
   goal_type: ${goal_type}

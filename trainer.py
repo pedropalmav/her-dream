@@ -74,7 +74,10 @@ class OnlineTrainer:
 
             # TODO: DRY with begin() method
             if self.reward_function:
-                new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
+                if trans["goal_mask"] is not None:
+                    new_reward = self.reward_function(agent_state["stoch"], trans["goal"], trans["goal_mask"])
+                else:
+                    new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
                 trans["reward"] = new_reward
             returns += trans["reward"][:, 0] * ~once_done
 
@@ -181,7 +184,10 @@ class OnlineTrainer:
 
             # TODO: DRY with eval() method
             if self.reward_function:
-                new_reward = self.reward_function(trans["stoch"], trans["goal"])
+                if trans["goal_mask"] is not None:
+                    new_reward = self.reward_function(agent_state["stoch"], trans["goal"], trans["goal_mask"])
+                else:
+                    new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
                 trans["reward"] = new_reward
             
             if "image" in trans:

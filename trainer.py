@@ -27,6 +27,7 @@ class OnlineTrainer:
         self._should_log = tools.Every(config.update_log_every)
         self._should_eval = tools.Every(self.eval_every)
         self._action_repeat = config.action_repeat
+        self._goal_sample = config.goal_sample
 
         self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
 
@@ -72,6 +73,11 @@ class OnlineTrainer:
         once_done = torch.zeros(envs.env_num, dtype=torch.bool, device=agent.device)
         steps = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
+
+        if self._goal_sample == "buffer":
+            goal_shape = envs.observation_space["goal"].shape
+            goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
+
         log_metrics = {}
         # cache is only used for video logging / open-loop prediction.
         cache = []
@@ -113,11 +119,17 @@ class OnlineTrainer:
             # (B, A)
             act, agent_state = agent.act(trans, agent_state, eval=True)
 
+            if self._goal_sample == "buffer":
+                self._relabel_goal(envs, goals, trans)
+
             # TODO: DRY with begin() method
             if self.reward_function:
                 new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
                 trans["reward"] = new_reward
             returns += trans["reward"][:, 0] * ~once_done
+
+            if self._goal_sample == "buffer" and done.any() and self.replay_buffer.count() > 0:
+                self._sample_goals(envs, done, goals)
 
             for key, value in trans.items():
                 if key.startswith("log_"):
@@ -168,6 +180,11 @@ class OnlineTrainer:
             envs.env_num, dtype=torch.int32, device=agent.device
         )
         episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
+
+        if self._goal_sample == "buffer":
+            goal_shape = envs.observation_space["goal"].shape
+            goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
+
         train_metrics = {}
         agent_state = agent.get_initial_state(envs.env_num)
         # (B, A)
@@ -232,6 +249,9 @@ class OnlineTrainer:
             trans["env"] = envs_ids
             trans["episode"] = episode_ids
 
+            if self._goal_sample == "buffer":
+                self._relabel_goal(envs, goals, trans)
+
             # TODO: DRY with eval() method
             if self.reward_function:
                 new_reward = self.reward_function(trans["stoch"], trans["goal"])
@@ -244,6 +264,9 @@ class OnlineTrainer:
             returns += trans["reward"][:, 0]
 
             episode_ids[done] += envs.env_num
+
+            if self._goal_sample == "buffer" and done.any():
+                self._sample_goals(envs, done, goals)
             
             # Update models after enough data has accumulated
             if self._should_update(step):
@@ -268,6 +291,18 @@ class OnlineTrainer:
                         for name, param in agent._named_params.items():
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
+
+    def _relabel_goal(self, envs, goals, trans):
+        mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
+        trans["goal"][mask] = goals[mask].clone()
+
+    def _sample_goals(self, envs, done, goals):
+        data, _, _ = self.replay_buffer.sample()
+        goal_sample = data["goal"]
+        goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
+        for i in range(envs.env_num):
+            if done[i]:
+                goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

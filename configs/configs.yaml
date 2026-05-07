@@ -23,6 +23,7 @@ env:
   goal_type: ${goal_type}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
+  goal_sample: buffer # buffer|random
 
 model:
   goal_type: ${goal_type}
@@ -53,5 +54,6 @@ trainer:
   params_hist_log: False
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
+  goal_sample: ${env.goal_sample}
 
 mission_text: False

@@ -133,9 +133,5 @@ dmypy.json
 .vscode
 .clinerules
 
-
 # Nano
-execution_commands.md
 .DS_Store
-CLAUDE.md
-PROJECT_OVERVIEW.md

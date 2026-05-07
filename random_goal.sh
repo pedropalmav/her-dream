@@ -8,7 +8,7 @@ echo "GPUs (nvidia-smi):"
 nvidia-smi --query-gpu=gpu_name,memory.total,driver_version --format=csv || true
 echo
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 export MUJOCO_GL=egl
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4

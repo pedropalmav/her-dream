@@ -1,9 +1,9 @@
 from . import parallel, wrappers
 
 
-def make_envs(config, text_encoder):
+def make_envs(config):
     def env_constructor(idx):
-        return lambda: make_env(config, idx, text_encoder)
+        return lambda: make_env(config, idx)
 
     train_envs = parallel.ParallelEnv(env_constructor, config.env_num, config.device)
     eval_envs = parallel.ParallelEnv(
@@ -14,7 +14,7 @@ def make_envs(config, text_encoder):
     return train_envs, eval_envs, obs_space, act_space
 
 
-def make_env(config, id, text_encoder=None):
+def make_env(config, id):
     suite, task = config.task.split("_", 1)
     if suite == "dmc":
         import envs.dmc as dmc
@@ -81,7 +81,7 @@ def make_env(config, id, text_encoder=None):
             env = wrappers.MiniGridWrapper(env)
         
         env = wrappers.OneHotAction(env)
-        env = wrappers.GoalConditioned(env, config, text_encoder)
+        env = wrappers.GoalConditioned(env, config)
 
     elif suite == "fixed-goal":
         import envs.fixed_goal as fixed_goal
@@ -100,7 +100,7 @@ def make_env(config, id, text_encoder=None):
         else:
             env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
-        env = wrappers.GoalConditioned(env, config, text_encoder)
+        env = wrappers.GoalConditioned(env, config)
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

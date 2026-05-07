@@ -19,7 +19,7 @@ from tools import to_f32
 
 
 class Dreamer(nn.Module):
-    def __init__(self, config, obs_space, act_space, reward_function, text_encoder=None):
+    def __init__(self, config, obs_space, act_space, reward_function):
         super().__init__()
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
@@ -128,10 +128,13 @@ class Dreamer(nn.Module):
 
         # === Text encoder (auxiliar, solo si hay mission en el obs) ===
         if self.mission_text:
-            print("HOLA: Entre acá!, uso mission :)")
-            self.text_encoder = text_encoder
+            self.text_encoder = networks.TextEncoderGRU(
+                config=config.text_encoder,
+                stoch=self.rssm._stoch,
+                discrete=self.rssm._discrete,
+                act=config.rssm.act,
+            )
             modules["text_encoder"] = self.text_encoder
-            print("DREAMER encoder id:", id(self.text_encoder))
             
 
         # count number of parameters in each module

@@ -11,7 +11,6 @@ from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
-from omegaconf import open_dict
 
 from rewards import make_reward
 
@@ -50,11 +49,10 @@ def main(config):
     # save config
     logger.log_hydra_config(config)
 
-    with open_dict(config.env):
-        config.env.mission_text = config.mission_text
-
-    with open_dict(config.model):
-        config.model.mission_text = config.mission_text
+    if config.env.goal_sample == "text":
+        assert config.mission_text, (
+            "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
+        )
 
     print("Create envs.")
     train_envs, eval_envs, obs_space, act_space = make_envs(config.env)

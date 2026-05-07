@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 import tools
 from buffers.her_buffer import HERBuffer
@@ -35,28 +34,27 @@ class OnlineTrainer:
     def _text_goal(self, agent, envs, indices):
         """Sample one-hot goals from the text encoder for the given env indices.
 
-        Each env generates its own encoded random mission via its
-        MissionGridWrapper.encoded_random_mission() (no size needed). The text
-        encoder maps each (L, V) one-hot to z-logits (S, K) and the first group
-        is sampled to a (K,) one-hot used as the actor's goal.
+        Uses the same OneHotDist (with unimix_ratio) as the RSSM posterior so
+        the goal distribution matches how the world model samples its z.
 
         Args:
             indices: list[int] of env indices that need a fresh goal (is_first=True).
 
         Returns:
-            (len(indices), K) float32 one-hot tensor on agent.device, or None if empty.
+            float32 one-hot tensor on agent.device with shape matching the
+            env's goal space, or None if `indices` is empty.
         """
         if not indices:
             return None
-        # Issue all encoded_random_mission requests in parallel, then collect.
         promises = [envs.envs[i].encoded_random_mission() for i in indices]
         missions = np.stack([p() for p in promises])  # (N, L, V)
         mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
-        logits = agent.text_encoder(mission_t.unsqueeze(1))   # (N, 1, S, K)
-        first_group = logits[:, 0, 0, :]                      # (N, K)
-        idx = torch.distributions.Categorical(logits=first_group).sample()
-        K = first_group.shape[-1]
-        return F.one_hot(idx, K).float()
+        logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
+        one_hot = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
+        goal_shape = envs.observation_space["goal"].shape
+        if len(goal_shape) == 1:
+            return one_hot[:, 0, :]
+        return one_hot
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -74,7 +72,7 @@ class OnlineTrainer:
         steps = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
 
-        if self._goal_sample == "buffer":
+        if self._goal_sample in ("buffer", "text"):
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -98,17 +96,14 @@ class OnlineTrainer:
             # (B,)
             done = done_cpu.to(agent.device)
 
-            # At is_first replace env's goal with one from the live text encoder;
-            # otherwise keep env_goal (the env persists the same goal per episode).
-            if agent.use_text:
+            # On is_first, refresh stored goals; then relabel trans["goal"]
+            # before act so the agent conditions on the same goal used later
+            # by the reward and stored in the buffer.
+            if self._goal_sample in ("buffer", "text"):
                 is_first = trans["is_first"][:, 0].bool()
-                indices = is_first.nonzero(as_tuple=True)[0].tolist()
-                fresh = self._text_goal(agent, envs, indices)
-                env_goal = trans["goal"]
-                new_goals = env_goal.clone()
-                if fresh is not None:
-                    new_goals[indices] = fresh
-                trans["goal"] = torch.where(is_first.unsqueeze(-1), new_goals, env_goal)
+                if is_first.any():
+                    self._sample_goals(agent, envs, is_first, goals)
+                self._relabel_goal(envs, goals, trans)
 
             # Store transition.
             # We keep the observation and the action that produced it together.
@@ -119,17 +114,11 @@ class OnlineTrainer:
             # (B, A)
             act, agent_state = agent.act(trans, agent_state, eval=True)
 
-            if self._goal_sample == "buffer":
-                self._relabel_goal(envs, goals, trans)
-
             # TODO: DRY with begin() method
             if self.reward_function:
                 new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
                 trans["reward"] = new_reward
             returns += trans["reward"][:, 0] * ~once_done
-
-            if self._goal_sample == "buffer" and done.any() and self.replay_buffer.count() > 0:
-                self._sample_goals(envs, done, goals)
 
             for key, value in trans.items():
                 if key.startswith("log_"):
@@ -181,7 +170,7 @@ class OnlineTrainer:
         )
         episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
 
-        if self._goal_sample == "buffer":
+        if self._goal_sample in ("buffer", "text"):
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -223,17 +212,14 @@ class OnlineTrainer:
             # (B,)
             done = done_cpu.to(agent.device)
 
-            # At is_first replace env's goal with one from the live text encoder;
-            # otherwise keep env_goal (the env persists the same goal per episode).
-            if agent.use_text:
+            # On is_first, refresh stored goals; then relabel trans["goal"]
+            # before act so the agent conditions on the same goal used later
+            # by the reward and stored in the buffer.
+            if self._goal_sample in ("buffer", "text"):
                 is_first = trans["is_first"][:, 0].bool()
-                indices = is_first.nonzero(as_tuple=True)[0].tolist()
-                fresh = self._text_goal(agent, envs, indices)
-                env_goal = trans["goal"]
-                new_goals = env_goal.clone()
-                if fresh is not None:
-                    new_goals[indices] = fresh
-                trans["goal"] = torch.where(is_first.unsqueeze(-1), new_goals, env_goal)
+                if is_first.any():
+                    self._sample_goals(agent, envs, is_first, goals)
+                self._relabel_goal(envs, goals, trans)
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
@@ -249,14 +235,11 @@ class OnlineTrainer:
             trans["env"] = envs_ids
             trans["episode"] = episode_ids
 
-            if self._goal_sample == "buffer":
-                self._relabel_goal(envs, goals, trans)
-
             # TODO: DRY with eval() method
             if self.reward_function:
                 new_reward = self.reward_function(trans["stoch"], trans["goal"])
                 trans["reward"] = new_reward
-            
+
             if "image" in trans:
                 video_cache.append(trans["image"][0])
 
@@ -264,9 +247,6 @@ class OnlineTrainer:
             returns += trans["reward"][:, 0]
 
             episode_ids[done] += envs.env_num
-
-            if self._goal_sample == "buffer" and done.any():
-                self._sample_goals(envs, done, goals)
             
             # Update models after enough data has accumulated
             if self._should_update(step):
@@ -293,16 +273,35 @@ class OnlineTrainer:
                     self.logger.write(step, fps=True)
 
     def _relabel_goal(self, envs, goals, trans):
+        # Si es que hay algun valor diferente de 0 en el goals, entonces relabel.
+        # Esto siempre será True para mode="text" y para mode="buffer" será True si es que 
+        # ya hay experiencias guardadas.
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
-    def _sample_goals(self, envs, done, goals):
-        data, _, _ = self.replay_buffer.sample()
-        goal_sample = data["goal"]
-        goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
-        for i in range(envs.env_num):
-            if done[i]:
-                goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]
+    def _sample_goals(self, agent, envs, mask, goals):
+        """Populate goals[i] for envs where mask[i] is True (typically is_first).
+
+        Source is selected by self._goal_sample:
+            - "buffer": sample a past goal uniformly from the replay buffer.
+                        Skipped silently when the buffer is empty.
+            - "text":   sample a fresh goal from the live text encoder applied
+                        to a random mission produced by each env.
+        """
+        if self._goal_sample == "buffer":
+            if self.replay_buffer.count() == 0:
+                return
+            data, _, _ = self.replay_buffer.sample()
+            goal_sample = data["goal"]
+            goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
+            for i in range(envs.env_num):
+                if mask[i]:
+                    goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]
+        elif self._goal_sample == "text":
+            indices = mask.nonzero(as_tuple=True)[0].tolist()
+            new_goals = self._text_goal(agent, envs, indices)
+            if new_goals is not None:
+                goals[indices] = new_goals
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

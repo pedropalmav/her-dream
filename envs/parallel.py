@@ -103,14 +103,22 @@ class Parallel:
     @staticmethod
     def _respond(constructor, state, message, name, *args, **kwargs):
         state = state or constructor()  # Instantiate at first time
+        # gymnasium >=1.0 removed Wrapper.__getattr__ forwarding, so accessing a
+        # method defined on an inner wrapper (e.g. MissionGridWrapper.encoded_random_mission)
+        # via getattr on the outermost wrapper raises AttributeError. Use the
+        # explicit get_wrapper_attr API which walks the wrapper chain.
+        if hasattr(state, "get_wrapper_attr"):
+            attr = state.get_wrapper_attr(name)
+        else:
+            attr = getattr(state, name)
         if message == PMessage.CALLABLE:
             assert not args and not kwargs, (args, kwargs)
-            result = callable(getattr(state, name))
+            result = callable(attr)
         elif message == PMessage.CALL:
-            result = getattr(state, name)(*args, **kwargs)
+            result = attr(*args, **kwargs)
         elif message == PMessage.READ:
             assert not args and not kwargs, (args, kwargs)
-            result = getattr(state, name)
+            result = attr
         return state, result
 
 

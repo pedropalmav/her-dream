@@ -25,3 +25,23 @@ python3 eval_text_goal.py --logdir logdir/goal_dreamer_with_text/04 --episodes 1
 ts -G 1 bash random_goal.sh logdir=./logdir/observed-z-goals/01 seed=1 trainer.steps=1000000 trainer.update_log_every=1000 env.goal_sample=buffer buffer=her env=fixed_goal
 ```
 
+
+6. Ver estado actual de la ejecucion:
+```bash
+ts -t {process_id}
+```
+
+7. Ver todo el estado de la ejecucion:
+```bash
+ts -c {process_id}
+```
+
+8. Ver todos los procesos propios:
+```bash
+ts
+```
+
+9. Matar proceso:
+```bash
+ts -k {process_id}
+```

@@ -1,4 +1,6 @@
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 import tools
 from buffers.her_buffer import HERBuffer
@@ -27,6 +29,33 @@ class OnlineTrainer:
         self._action_repeat = config.action_repeat
 
         self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
+
+    @torch.no_grad()
+    def _text_goal(self, agent, envs, indices):
+        """Sample one-hot goals from the text encoder for the given env indices.
+
+        Each env generates its own encoded random mission via its
+        MissionGridWrapper.encoded_random_mission() (no size needed). The text
+        encoder maps each (L, V) one-hot to z-logits (S, K) and the first group
+        is sampled to a (K,) one-hot used as the actor's goal.
+
+        Args:
+            indices: list[int] of env indices that need a fresh goal (is_first=True).
+
+        Returns:
+            (len(indices), K) float32 one-hot tensor on agent.device, or None if empty.
+        """
+        if not indices:
+            return None
+        # Issue all encoded_random_mission requests in parallel, then collect.
+        promises = [envs.envs[i].encoded_random_mission() for i in indices]
+        missions = np.stack([p() for p in promises])  # (N, L, V)
+        mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
+        logits = agent.text_encoder(mission_t.unsqueeze(1))   # (N, 1, S, K)
+        first_group = logits[:, 0, 0, :]                      # (N, K)
+        idx = torch.distributions.Categorical(logits=first_group).sample()
+        K = first_group.shape[-1]
+        return F.one_hot(idx, K).float()
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -62,6 +91,18 @@ class OnlineTrainer:
             trans = trans_cpu.to(agent.device, non_blocking=True)
             # (B,)
             done = done_cpu.to(agent.device)
+
+            # At is_first replace env's goal with one from the live text encoder;
+            # otherwise keep env_goal (the env persists the same goal per episode).
+            if agent.use_text:
+                is_first = trans["is_first"][:, 0].bool()
+                indices = is_first.nonzero(as_tuple=True)[0].tolist()
+                fresh = self._text_goal(agent, envs, indices)
+                env_goal = trans["goal"]
+                new_goals = env_goal.clone()
+                if fresh is not None:
+                    new_goals[indices] = fresh
+                trans["goal"] = torch.where(is_first.unsqueeze(-1), new_goals, env_goal)
 
             # Store transition.
             # We keep the observation and the action that produced it together.
@@ -164,6 +205,18 @@ class OnlineTrainer:
             trans = trans_cpu.to(agent.device, non_blocking=True)
             # (B,)
             done = done_cpu.to(agent.device)
+
+            # At is_first replace env's goal with one from the live text encoder;
+            # otherwise keep env_goal (the env persists the same goal per episode).
+            if agent.use_text:
+                is_first = trans["is_first"][:, 0].bool()
+                indices = is_first.nonzero(as_tuple=True)[0].tolist()
+                fresh = self._text_goal(agent, envs, indices)
+                env_goal = trans["goal"]
+                new_goals = env_goal.clone()
+                if fresh is not None:
+                    new_goals[indices] = fresh
+                trans["goal"] = torch.where(is_first.unsqueeze(-1), new_goals, env_goal)
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.

@@ -36,15 +36,19 @@ class OnlineTrainer:
         """Sample one-hot goals from the text encoder for the given env indices.
 
         Each env generates its own encoded random mission via its
-        MissionGridWrapper.encoded_random_mission() (no size needed). The text
-        encoder maps each (L, V) one-hot to z-logits (S, K) and the first group
-        is sampled to a (K,) one-hot used as the actor's goal.
+        MissionGridWrapper.encoded_random_mission(). The text encoder maps
+        each (L, V) one-hot to z-logits (S, K). Each of the S rows is sampled
+        independently to a (K,) one-hot. The output shape matches the env's
+        goal observation space:
+            - "first_row" goal_type → (N, K)
+            - "full" goal_type      → (N, S, K)
 
         Args:
             indices: list[int] of env indices that need a fresh goal (is_first=True).
 
         Returns:
-            (len(indices), K) float32 one-hot tensor on agent.device, or None if empty.
+            float32 one-hot tensor on agent.device with shape matching the
+            env's goal space, or None if `indices` is empty.
         """
         if not indices:
             return None
@@ -52,11 +56,16 @@ class OnlineTrainer:
         promises = [envs.envs[i].encoded_random_mission() for i in indices]
         missions = np.stack([p() for p in promises])  # (N, L, V)
         mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
-        logits = agent.text_encoder(mission_t.unsqueeze(1))   # (N, 1, S, K)
-        first_group = logits[:, 0, 0, :]                      # (N, K)
-        idx = torch.distributions.Categorical(logits=first_group).sample()
-        K = first_group.shape[-1]
-        return F.one_hot(idx, K).float()
+        logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
+        N, S, K = logits.shape
+        # Sample one one-hot per row, independently across S rows.
+        idx = torch.distributions.Categorical(logits=logits.reshape(N * S, K)).sample()
+        one_hot = F.one_hot(idx, K).float().reshape(N, S, K)
+        # Match the env's goal shape: 1D (K,) for first_row, 2D (S, K) for full.
+        goal_shape = envs.observation_space["goal"].shape
+        if len(goal_shape) == 1:
+            return one_hot[:, 0, :]
+        return one_hot
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.

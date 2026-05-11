@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 import tools
 from buffers.her_buffer import HERBuffer
@@ -35,13 +34,8 @@ class OnlineTrainer:
     def _text_goal(self, agent, envs, indices):
         """Sample one-hot goals from the text encoder for the given env indices.
 
-        Each env generates its own encoded random mission via its
-        MissionGridWrapper.encoded_random_mission(). The text encoder maps
-        each (L, V) one-hot to z-logits (S, K). Each of the S rows is sampled
-        independently to a (K,) one-hot. The output shape matches the env's
-        goal observation space:
-            - "first_row" goal_type → (N, K)
-            - "full" goal_type      → (N, S, K)
+        Uses the same OneHotDist (with unimix_ratio) as the RSSM posterior so
+        the goal distribution matches how the world model samples its z.
 
         Args:
             indices: list[int] of env indices that need a fresh goal (is_first=True).
@@ -52,16 +46,11 @@ class OnlineTrainer:
         """
         if not indices:
             return None
-        # Issue all encoded_random_mission requests in parallel, then collect.
         promises = [envs.envs[i].encoded_random_mission() for i in indices]
         missions = np.stack([p() for p in promises])  # (N, L, V)
         mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
         logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
-        N, S, K = logits.shape
-        # Sample one one-hot per row, independently across S rows.
-        idx = torch.distributions.Categorical(logits=logits.reshape(N * S, K)).sample()
-        one_hot = F.one_hot(idx, K).float().reshape(N, S, K)
-        # Match the env's goal shape: 1D (K,) for first_row, 2D (S, K) for full.
+        one_hot = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
         goal_shape = envs.observation_space["goal"].shape
         if len(goal_shape) == 1:
             return one_hot[:, 0, :]
@@ -284,6 +273,9 @@ class OnlineTrainer:
                     self.logger.write(step, fps=True)
 
     def _relabel_goal(self, envs, goals, trans):
+        # Si es que hay algun valor diferente de 0 en el goals, entonces relabel.
+        # Esto siempre será True para mode="text" y para mode="buffer" será True si es que 
+        # ya hay experiencias guardadas.
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
@@ -307,9 +299,9 @@ class OnlineTrainer:
                     goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]
         elif self._goal_sample == "text":
             indices = mask.nonzero(as_tuple=True)[0].tolist()
-            fresh = self._text_goal(agent, envs, indices)
-            if fresh is not None:
-                goals[indices] = fresh
+            new_goals = self._text_goal(agent, envs, indices)
+            if new_goals is not None:
+                goals[indices] = new_goals
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

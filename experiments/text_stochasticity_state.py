@@ -26,7 +26,7 @@ def get_logits_and_probs(agent, tokens: torch.Tensor):
       probs  : (N, S, K)   softmax de logits
     """
     logits = agent.text_encoder(tokens)[:, 0]   # (N, S, K)
-    probs = F.softmax(logits, dim=-1)
+    probs = agent.rssm.get_dist(logits).base_dist.probs
     return logits, probs
 
 
@@ -328,8 +328,8 @@ def _plot_all(
 
 if __name__ == "__main__":
     """
-    uv run python -m experiments.stochasticity_state \
-        --logdir logdir/text_goal_sample/01 \
+    uv run python -m experiments.text_stochasticity_state \
+        --logdir logdir/text_goal_sample_8x8_goal/01 \
         --exp text \
         --device cpu
     """

@@ -27,6 +27,7 @@ class OnlineTrainer:
         self._should_eval = tools.Every(self.eval_every)
         self._action_repeat = config.action_repeat
         self._goal_sample = config.goal_sample
+        self._wm_only = bool(config.wm_only)
 
         self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
 
@@ -112,7 +113,7 @@ class OnlineTrainer:
             if len(cache) < self.batch_length:
                 cache.append(trans.clone())
             # (B, A)
-            act, agent_state = agent.act(trans, agent_state, eval=True)
+            act, agent_state = agent.act(trans, agent_state, eval=True, random=self._wm_only)
 
             # TODO: DRY with begin() method
             if self.reward_function:
@@ -223,8 +224,9 @@ class OnlineTrainer:
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
+            # In wm_only mode the actor is bypassed and uniform one-hot actions are used.
             # (B, A)
-            act, agent_state = agent.act(trans.clone(), agent_state, eval=False)
+            act, agent_state = agent.act(trans.clone(), agent_state, eval=False, random=self._wm_only)
 
             # Store transition.
             # We keep the observation and the action that produced it together.

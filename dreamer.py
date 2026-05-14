@@ -31,6 +31,15 @@ class Dreamer(nn.Module):
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         self.mission_text = config.mission_text
+        self.wm_only = bool(config.wm_only)
+
+        # Cache action-space info for uniform random sampling (wm_only mode).
+        # The env wrappers expose Box action spaces with custom `discrete` /
+        # `multi_discrete` attributes (set to True) instead of a Discrete `.n`.
+        self._act_multi = hasattr(act_space, "multi_discrete")
+        self._act_disc = hasattr(act_space, "discrete") and not self._act_multi
+        self._act_nvec = tuple(int(d) for d in act_space.shape) if self._act_multi else None
+        self._act_n = int(act_space.shape[0]) if self._act_disc else None
 
         # World model components
         excluded = ("is_first", "is_last", "is_terminal", "reward", "mission")
@@ -72,10 +81,11 @@ class Dreamer(nn.Module):
 
         modules = {
             "rssm": self.rssm,
-            "actor": self.actor,
-            "value": self.value,
             "encoder": self.encoder,
         }
+        if not self.wm_only:
+            modules["actor"] = self.actor
+            modules["value"] = self.value
 
         # TODO: Create a method for this block
         if self.rep_loss == "dreamer":
@@ -134,8 +144,9 @@ class Dreamer(nn.Module):
                 discrete=self.rssm._discrete,
                 act=config.rssm.act,
             )
-            modules["text_encoder"] = self.text_encoder
-            
+            if not self.wm_only:
+                modules["text_encoder"] = self.text_encoder
+
 
         # count number of parameters in each module
         for key, module in modules.items():
@@ -242,12 +253,16 @@ class Dreamer(nn.Module):
         return self
 
     @torch.no_grad()
-    def act(self, obs, state, eval=False):
-        """Policy inference step."""
+    def act(self, obs, state, eval=False, random=False):
+        """Policy inference step.
+
+        When `random=True`, the actor is bypassed and a uniform one-hot action
+        is sampled. The WM forward pass (encoder + obs_step) still runs so the
+        agent_state (stoch/deter) is updated consistently for the buffer.
+        """
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
         p_obs = self.preprocess(obs)
-        # print("mission encrypted:", obs["mission"])
         # (B, E)
         embed = self._frozen_encoder(p_obs)
         prev_stoch, prev_deter, prev_action = (
@@ -257,18 +272,41 @@ class Dreamer(nn.Module):
         )
         # (B, S, K), (B, D)
         stoch, deter, _ = self._frozen_rssm.obs_step(prev_stoch, prev_deter, prev_action, embed, obs["is_first"])
-        # (B, F)
-        feat = self._frozen_rssm.get_feat(stoch, deter)
 
-        goal = obs["goal"].reshape(feat.shape[0], -1)
-        policy_input = torch.cat([feat, goal], dim=-1)
-        action_dist = self._frozen_actor(policy_input)
-        # (B, A)
-        action = action_dist.mode if eval else action_dist.rsample()
+        B = stoch.shape[0]
+        if random:
+            action = self._random_action(B)
+        else:
+            # (B, F)
+            feat = self._frozen_rssm.get_feat(stoch, deter)
+            goal = obs["goal"].reshape(feat.shape[0], -1)
+            policy_input = torch.cat([feat, goal], dim=-1)
+            action_dist = self._frozen_actor(policy_input)
+            # (B, A)
+            action = action_dist.mode if eval else action_dist.rsample()
         return action, TensorDict(
             {"stoch": stoch, "deter": deter, "prev_action": action},
             batch_size=state.batch_size,
         )
+
+    @torch.no_grad()
+    def _random_action(self, B):
+        """Sample uniform actions in the format the env expects.
+
+        Discrete: one-hot of size n.
+        Multi-discrete: per-group one-hot, concatenated.
+        Continuous: uniform in [-1, 1] (env post-scales via ScaleBox).
+        """
+        if self._act_n is not None:
+            idx = torch.randint(0, self._act_n, (B,), device=self.device)
+            return F.one_hot(idx, self._act_n).to(torch.float32)
+        if self._act_multi:
+            parts = []
+            for dim in self._act_nvec:
+                idx = torch.randint(0, dim, (B,), device=self.device)
+                parts.append(F.one_hot(idx, dim).to(torch.float32))
+            return torch.cat(parts, dim=-1)
+        return torch.empty(B, self.act_dim, device=self.device).uniform_(-1.0, 1.0)
 
     @torch.no_grad()
     def get_initial_state(self, B):
@@ -380,7 +418,7 @@ class Dreamer(nn.Module):
         # === Text KL loss (auxiliar) ===
         # El text encoder aprende a predecir el z del agente desde el texto.
         # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
-        if self.mission_text:
+        if self.mission_text and not self.wm_only:
             # data["mission"]: (B, T, L, V) float32 one-hot
             text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
             text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
@@ -449,6 +487,15 @@ class Dreamer(nn.Module):
         metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
 
         # === Imagination rollout for actor-critic ===
+        # Skipped entirely in wm_only mode: actor and value are frozen, so
+        # policy/value/repval losses would only waste compute.
+        if self.wm_only:
+            total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
+            self._scaler.scale(total_loss).backward()
+            metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
+            metrics.update({"opt/loss": total_loss})
+            return (post_stoch, post_deter), metrics
+
         # (B*T, S, K), (B*T, D)
         start = (
             post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),

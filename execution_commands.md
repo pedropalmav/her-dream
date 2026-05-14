@@ -5,7 +5,7 @@ ts -G 1 bash random_goal.sh logdir=./logdir/full_goal_dreamer_with_text/01 seed=
 
 1.b Correr modelo en la segunda GPU (GPU 1) — usa `goal_sample=text` para muestrear goals desde el text encoder vivo:
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/text_goal_sample_8x8_goal/01 seed=1 mission_text=True env.goal_sample=text trainer.steps=500000 model.rssm.discrete=8 model.rssm.stoch=8
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/text_goal_sample_normal_buffer/01 seed=1 mission_text=True env.goal_sample=text trainer.steps=500000 buffer=normal wm_only=False
 ```
 
 2. Traerse el tensorboard

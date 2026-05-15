@@ -18,7 +18,13 @@ torch.set_float32_matmul_precision("high")
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="eval_configs")
-def main(config):
+def main(eval_cfg):
+    from omegaconf import OmegaConf
+
+    experiment_dir = pathlib.Path(eval_cfg.experiment_dir)
+    train_cfg = OmegaConf.load(experiment_dir / ".hydra/config.yaml")
+    config = OmegaConf.merge(train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}})
+
     if "goal_index" in config.env and config.goal_type != "first_row":
         raise ValueError("goal_index is only supported for goal_type 'first_row'")
 
@@ -47,17 +53,15 @@ def main(config):
         reward_function=reward_function,
     ).to(config.device)
 
-    weights_dir = pathlib.Path(config.logdir)
     agent.load_state_dict(
-        torch.load(weights_dir / "latest.pt", map_location=config.device)[
+        torch.load(experiment_dir / "latest.pt", map_location=config.device)[
             "agent_state_dict"
         ]
     )
     agent.eval()
 
     video_cache = []
-    num_episodes = 6
-    for i in range(num_episodes):
+    for i in range(eval_cfg.num_episodes):
         print(f"Episode {i + 1}")
         episode_cache = run_episode(env, agent, reward_function)
         video_cache.append(episode_cache["image"][:1])
@@ -65,7 +69,7 @@ def main(config):
     if video_cache:
         logger.video("eval_video", tools.to_np(make_video_grid(video_cache)))
 
-    logger.write(num_episodes * config.env.time_limit)
+    logger.write(eval_cfg.num_episodes * config.env.time_limit)
 
 
 def run_episode(env, agent, reward_function):

@@ -17,6 +17,7 @@ class OnlineTrainer:
         self.eval_episode_num = int(config.eval_episode_num)
         self.video_pred_log = bool(config.video_pred_log)
         self.params_hist_log = bool(config.params_hist_log)
+        self.obs_step_prob_log = bool(config.obs_step_prob_log)
         self.batch_length = int(config.batch_length)
         batch_steps = int(config.batch_size * config.batch_length)
         # train_ratio is based on data steps rather than environment steps.
@@ -70,7 +71,7 @@ class OnlineTrainer:
             if len(cache) < self.batch_length:
                 cache.append(trans.clone())
             # (B, A)
-            act, agent_state = agent.act(trans, agent_state, eval=True)
+            act, agent_state, _ = agent.act(trans, agent_state, eval=True)
 
             # TODO: DRY with begin() method
             if self.reward_function:
@@ -168,7 +169,14 @@ class OnlineTrainer:
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
             # (B, A)
-            act, agent_state = agent.act(trans.clone(), agent_state, eval=False)
+            act, agent_state, act_metrics = agent.act(trans.clone(), agent_state, eval=False)
+            if self.obs_step_prob_log:
+                self.logger.write_step(
+                    "rssm/obs_step_sample_prob",
+                    act_metrics["obs_step_sample_prob"].item(),
+                    step,
+                )
+                self.logger.write_step("rssm/obs_step_episode", episode_ids[0].float().item(), step)
 
             # Store transition.
             # We keep the observation and the action that produced it together.

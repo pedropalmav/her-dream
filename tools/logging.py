@@ -63,6 +63,10 @@ class Logger:
     def histogram(self, name, value):
         self._histograms[name] = np.array(value)
 
+    def write_step(self, name, value, step):
+        tag = name if "/" in name else "scalars/" + name
+        self._writer.add_scalar(tag, float(value), step)
+
     def write(self, step, fps=False):
         scalars = list(self._scalars.items())
         if fps:

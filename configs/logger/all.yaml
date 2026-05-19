@@ -1,0 +1,2 @@
+backends: [file, tensorboard, wandb]
+project: her-dream

@@ -2,6 +2,7 @@ defaults:
   - env: random_goal
   - model: size12M
   - buffer: her
+  - logger: tensorboard
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
   - _self_

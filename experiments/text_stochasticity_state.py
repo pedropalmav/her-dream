@@ -329,7 +329,7 @@ def _plot_all(
 if __name__ == "__main__":
     """
     uv run python -m experiments.text_stochasticity_state \
-        --logdir logdir/text_goal_sample_8x8_goal/01 \
+        --logdir logdir/text_goal_sample_normal_buffer/01 \
         --exp text \
         --device cpu
     """
@@ -349,6 +349,11 @@ if __name__ == "__main__":
     config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
     device = args.device or config.device
     config.device = device
+
+    # Backfill defaults for keys added after this run was trained.
+    if "wm_only" not in config.model:
+        OmegaConf.set_struct(config.model, False)
+        config.model.wm_only = False
 
     # ── 2. Reconstruir envs y agente ─────────────────────────────────────────
     _, eval_envs, obs_space, act_space = make_envs(config.env)

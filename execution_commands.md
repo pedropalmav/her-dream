@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/text_goal_sam
 
 2. Traerse el tensorboard
 ```bash 
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/text_goal_sample/01 ./logdir/text_goal_sample
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/text_goal_sample_8x8_normal_buffer/01 ./logdir/text_goal_sample_8x8_normal_buffer/
 ```
 
 3. Correr el tensorboard

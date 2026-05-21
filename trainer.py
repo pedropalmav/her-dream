@@ -48,8 +48,8 @@ class OnlineTrainer:
         if not indices:
             return None
         promises = [envs.envs[i].encoded_random_mission() for i in indices]
-        missions = np.stack([p() for p in promises])  # (N, L, V)
-        mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
+        missions = np.stack([p() for p in promises])  # (N, L) int8 token ids
+        mission_t = torch.as_tensor(missions, device=agent.device)
         logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
         one_hot = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
         goal_shape = envs.observation_space["goal"].shape

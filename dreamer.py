@@ -419,8 +419,9 @@ class Dreamer(nn.Module):
         # El text encoder aprende a predecir el z del agente desde el texto.
         # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
         if self.mission_text and not self.wm_only:
-            # data["mission"]: (B, T, L, V) float32 one-hot
-            text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
+            # data["mission"]: (B, T, L) int8 token ids — TextEncoderGRU
+            # promotes to long and materialises the one-hot internally.
+            text_logit = self.text_encoder(data["mission"])  # (B, T, S, K)
             text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
             text_kl = torch.clip(text_kl, min=self.kl_free)
             losses["text_kl"] = torch.mean(text_kl)

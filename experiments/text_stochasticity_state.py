@@ -31,12 +31,12 @@ def get_logits_and_probs(agent, tokens: torch.Tensor):
 
 
 def encode_missions(env, n: int, device: str) -> torch.Tensor:
-    """Devuelve tokens (N, 1, L, V) listos para el encoder."""
+    """Devuelve tokens (N, 1, L) int8 listos para el encoder."""
     raw = np.stack(
         [env.encoded_random_mission()() for _ in range(n)]
-    ).astype(np.float32)                          # (N, L, V)
-    tokens = torch.as_tensor(raw, device=device)  # (N, L, V)
-    return tokens.unsqueeze(1)                    # (N, 1, L, V)
+    )                                              # (N, L) int8
+    tokens = torch.as_tensor(raw, device=device)   # (N, L)
+    return tokens.unsqueeze(1)                     # (N, 1, L)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def exp_text_encoder_stochasticity(
 
     # ── Preparar tokens ───────────────────────────────────────────────────────
     print(f"Generando {n_missions} misiones …")
-    tokens = encode_missions(env, n_missions, device)            # (N,1,L,V)
+    tokens = encode_missions(env, n_missions, device)            # (N,1,L)
     logits, probs = get_logits_and_probs(agent, tokens)          # (N,S,K)
 
     S, K = logits.shape[1], logits.shape[2]

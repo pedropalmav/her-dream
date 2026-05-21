@@ -25,12 +25,12 @@ def goal_from_random_mission(text_encoder, env_size, device, B, deterministic=Fa
     Returns:
         goal: (B, K) float32 one-hot tensor.
     """
-    # (B, L, V)
+    # (B, L) int8 token ids
     missions = np.stack([
         encode_mission(RandomGoal.random_mission(env_size, rng)) for _ in range(B)
     ])
-    mission_t = torch.as_tensor(missions, dtype=torch.float32, device=device)
-    mission_t = mission_t.unsqueeze(1)              # (B, 1, L, V)
+    mission_t = torch.as_tensor(missions, device=device)
+    mission_t = mission_t.unsqueeze(1)              # (B, 1, L)
 
     logits = text_encoder(mission_t)                # (B, 1, S, K)
     first_group = logits[:, 0, 0, :]               # (B, K)

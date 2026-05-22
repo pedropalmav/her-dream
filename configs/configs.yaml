@@ -24,6 +24,15 @@ mission_text: False
 # they can be trained later) but are excluded from the optimizer and their
 # losses are skipped. The env is stepped with uniform one-hot actions.
 wm_only: False
+# Inverse of wm_only: freeze the world model (encoder, RSSM, text_encoder,
+# rep_loss aux modules) and train ONLY the actor/critic. Used by post_train.py
+# to fine-tune a policy on top of a pretrained WM. Mutually exclusive with
+# wm_only.
+freeze_wm: False
+# Optional path to a previous logdir containing latest.pt. When set,
+# post_train.py loads the agent state_dict from <load_from>/latest.pt before
+# training. Leave null for a fresh run.
+load_from: null
 
 env:
   goal_type: ${goal_type}
@@ -36,6 +45,7 @@ model:
   goal_type: ${goal_type}
   mission_text: ${mission_text}
   wm_only: ${wm_only}
+  freeze_wm: ${freeze_wm}
 
 buffer:
   goal_type: ${goal_type}

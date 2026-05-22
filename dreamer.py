@@ -32,6 +32,9 @@ class Dreamer(nn.Module):
         self.rep_loss = str(config.rep_loss)
         self.mission_text = config.mission_text
         self.wm_only = bool(config.wm_only)
+        self.freeze_wm = bool(getattr(config, "freeze_wm", False))
+        if self.wm_only and self.freeze_wm:
+            raise ValueError("wm_only=True and freeze_wm=True are mutually exclusive.")
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -79,10 +82,10 @@ class Dreamer(nn.Module):
         self._loss_scales = dict(config.loss_scales)
         self._log_grads = bool(config.log_grads)
 
-        modules = {
-            "rssm": self.rssm,
-            "encoder": self.encoder,
-        }
+        modules = {}
+        if not self.freeze_wm:
+            modules["rssm"] = self.rssm
+            modules["encoder"] = self.encoder
         if not self.wm_only:
             modules["actor"] = self.actor
             modules["value"] = self.value
@@ -97,11 +100,13 @@ class Dreamer(nn.Module):
             )
             recon = self._loss_scales.pop("recon")
             self._loss_scales.update({k: recon for k in self.decoder.all_keys})
-            modules.update({"decoder": self.decoder})
+            if not self.freeze_wm:
+                modules.update({"decoder": self.decoder})
         elif self.rep_loss == "r2dreamer" or self.rep_loss == "infonce":
             # add projector for latent to embedding
             self.prj = Projector(self.rssm.feat_size, self.embed_size)
-            modules.update({"projector": self.prj})
+            if not self.freeze_wm:
+                modules.update({"projector": self.prj})
             self.barlow_lambd = float(config.r2dreamer.lambd)
         elif self.rep_loss == "dreamerpro":
             dpc = config.dreamer_pro
@@ -128,13 +133,14 @@ class Dreamer(nn.Module):
             for param in self._ema_obs_proj.parameters():
                 param.requires_grad = False
             self._ema_updates = 0
-            modules.update({
-                "prototypes": self._prototypes,
-                "obs_proj": self.obs_proj,
-                "feat_proj": self.feat_proj,
-                "ema_encoder": self._ema_encoder,
-                "ema_obs_proj": self._ema_obs_proj,
-            })
+            if not self.freeze_wm:
+                modules.update({
+                    "prototypes": self._prototypes,
+                    "obs_proj": self.obs_proj,
+                    "feat_proj": self.feat_proj,
+                    "ema_encoder": self._ema_encoder,
+                    "ema_obs_proj": self._ema_obs_proj,
+                })
 
         # === Text encoder (auxiliar, solo si hay mission en el obs) ===
         if self.mission_text:
@@ -144,7 +150,7 @@ class Dreamer(nn.Module):
                 discrete=self.rssm._discrete,
                 act=config.rssm.act,
             )
-            if not self.wm_only:
+            if not self.wm_only and not self.freeze_wm:
                 modules["text_encoder"] = self.text_encoder
 
 
@@ -184,6 +190,8 @@ class Dreamer(nn.Module):
 
         self.train()
         self.clone_and_freeze()
+        if self.freeze_wm:
+            self._apply_freeze_wm()
         if config.compile:
             print("Compiling update function with torch.compile...")
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
@@ -250,7 +258,35 @@ class Dreamer(nn.Module):
         super().to(*args, **kwargs)
         # Re-establish shared memory after moving the model to a new device
         self.clone_and_freeze()
+        if self.freeze_wm:
+            self._apply_freeze_wm()
         return self
+
+    def _apply_freeze_wm(self):
+        """Disable gradients on all world-model parameters.
+
+        Targets the live encoder/RSSM and any auxiliary modules tied to the
+        representation loss (decoder, projector, dreamerpro buffers) plus the
+        text encoder. The frozen `_frozen_*` clones already have requires_grad
+        disabled by `clone_and_freeze`.
+        """
+        for module in (self.encoder, self.rssm):
+            for param in module.parameters():
+                param.requires_grad_(False)
+        if self.rep_loss == "dreamer" and hasattr(self, "decoder"):
+            for param in self.decoder.parameters():
+                param.requires_grad_(False)
+        if self.rep_loss in ("r2dreamer", "infonce") and hasattr(self, "prj"):
+            for param in self.prj.parameters():
+                param.requires_grad_(False)
+        if self.rep_loss == "dreamerpro":
+            self._prototypes.requires_grad_(False)
+            for module in (self.obs_proj, self.feat_proj, self._ema_encoder, self._ema_obs_proj):
+                for param in module.parameters():
+                    param.requires_grad_(False)
+        if self.mission_text and hasattr(self, "text_encoder"):
+            for param in self.text_encoder.parameters():
+                param.requires_grad_(False)
 
     @torch.no_grad()
     def act(self, obs, state, eval=False, random=False):
@@ -360,7 +396,11 @@ class Dreamer(nn.Module):
         with autocast(device_type=self.device.type, dtype=torch.float16):
             (stoch, deter), mets = self._cal_grad(p_data, initial)
         self._scaler.unscale_(self._optimizer)  # unscale grads in params
-        if self.rep_loss == "dreamerpro" and self._ema_updates < self.freeze_prototypes_iters:
+        if (
+            self.rep_loss == "dreamerpro"
+            and self._ema_updates < self.freeze_prototypes_iters
+            and self._prototypes.grad is not None
+        ):
             self._prototypes.grad.zero_()
         if self._log_grads:
             old_params = [p.data.clone().detach() for p in self._named_params.values()]
@@ -405,34 +445,49 @@ class Dreamer(nn.Module):
         B, T = data.shape
 
         # === World model: posterior rollout and KL losses ===
-        # (B, T, E)
-        embed = self.encoder(data)
-        # (B, T, S, K), (B, T, D), (B, T, S, K)
-        post_stoch, post_deter, post_logit = self.rssm.observe(embed, data["action"], initial, data["is_first"])
-        # (B, T, S, K)
-        _, prior_logit = self.rssm.prior(post_deter)
-        dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
-        losses["dyn"] = torch.mean(dyn_loss)
-        losses["rep"] = torch.mean(rep_loss)
-        
-        # === Text KL loss (auxiliar) ===
-        # El text encoder aprende a predecir el z del agente desde el texto.
-        # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
-        if self.mission_text and not self.wm_only:
-            # data["mission"]: (B, T, L) int8 token ids — TextEncoderGRU
-            # promotes to long and materialises the one-hot internally.
-            text_logit = self.text_encoder(data["mission"])  # (B, T, S, K)
-            text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
-            text_kl = torch.clip(text_kl, min=self.kl_free)
-            losses["text_kl"] = torch.mean(text_kl)
-            metrics["text_kl"] = losses["text_kl"].detach()
-        
-        # === Representation / auxiliary losses ===
-        # (B, T, F)
-        feat = self.rssm.get_feat(post_stoch, post_deter)
+        if self.freeze_wm:
+            # No grads anywhere through the WM. All representation / KL losses
+            # are skipped — only the actor-critic branch below runs.
+            with torch.no_grad():
+                embed = self.encoder(data)
+                post_stoch, post_deter, post_logit = self.rssm.observe(
+                    embed, data["action"], initial, data["is_first"]
+                )
+        else:
+            # (B, T, E)
+            embed = self.encoder(data)
+            # (B, T, S, K), (B, T, D), (B, T, S, K)
+            post_stoch, post_deter, post_logit = self.rssm.observe(embed, data["action"], initial, data["is_first"])
+            # (B, T, S, K)
+            _, prior_logit = self.rssm.prior(post_deter)
+            dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
+            losses["dyn"] = torch.mean(dyn_loss)
+            losses["rep"] = torch.mean(rep_loss)
+
+            # === Text KL loss (auxiliar) ===
+            # El text encoder aprende a predecir el z del agente desde el texto.
+            # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
+            if self.mission_text and not self.wm_only:
+                # data["mission"]: (B, T, L) int8 token ids — TextEncoderGRU
+                # promotes to long and materialises the one-hot internally.
+                text_logit = self.text_encoder(data["mission"])  # (B, T, S, K)
+                text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
+                text_kl = torch.clip(text_kl, min=self.kl_free)
+                losses["text_kl"] = torch.mean(text_kl)
+                metrics["text_kl"] = losses["text_kl"].detach()
+
+            # === Representation / auxiliary losses ===
+            # (B, T, F)
+            feat = self.rssm.get_feat(post_stoch, post_deter)
+
+            # log
+            metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
+            metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
 
         # TODO: Create a method for this block
-        if self.rep_loss == "dreamer":
+        if self.freeze_wm:
+            pass
+        elif self.rep_loss == "dreamer":
             recon_losses = {
                 key: torch.mean(-dist.log_prob(data[key])) for key, dist in self.decoder(post_stoch, post_deter).items()
             }
@@ -482,10 +537,6 @@ class Dreamer(nn.Module):
             losses.update(proto_losses)
         else:
             raise NotImplementedError
-
-        # log
-        metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
-        metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
 
         # === Imagination rollout for actor-critic ===
         # Skipped entirely in wm_only mode: actor and value are frozen, so

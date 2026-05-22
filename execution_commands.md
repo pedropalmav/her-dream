@@ -62,10 +62,11 @@ ts -k {process_id}
 
 10. Post train:
 ```bash
-python3 post_train.py \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
       load_from=./logdir/wm_only_random_mission/01 \
       logdir=./logdir/post_train_from_wm_only/01 \
       freeze_wm=True wm_only=False \
       env=fixed_goal mission_text=True env.goal_sample=random \
-      buffer=her seed=1 trainer.steps=500000 trainer.update_log_every=1000
+      buffer=normal seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
 ```

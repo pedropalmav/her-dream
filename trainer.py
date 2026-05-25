@@ -172,8 +172,8 @@ class OnlineTrainer:
             act, agent_state, act_metrics = agent.act(trans.clone(), agent_state, eval=False)
             if self.obs_step_prob_log:
                 self.logger.write_step(
-                    "rssm/obs_step_sample_prob",
-                    act_metrics["obs_step_sample_prob"].item(),
+                    "rssm/obs_step_sample_log_prob",
+                    act_metrics["obs_step_sample_log_prob"].item(),
                     step,
                 )
                 self.logger.write_step("rssm/obs_step_episode", episode_ids[0].float().item(), step)

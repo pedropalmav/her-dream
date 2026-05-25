@@ -24,7 +24,9 @@ def main(eval_cfg):
 
     experiment_dir = pathlib.Path(eval_cfg.experiment_dir)
     train_cfg = OmegaConf.load(experiment_dir / ".hydra/config.yaml")
-    config = OmegaConf.merge(train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}})
+    config = OmegaConf.merge(
+        train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}}
+    )
 
     if "goal_index" in config.env and config.goal_type != "first_row":
         raise ValueError("goal_index is only supported for goal_type 'first_row'")
@@ -38,7 +40,7 @@ def main(eval_cfg):
     logdir.mkdir(parents=True, exist_ok=True)
     print("Logdir", logdir)
 
-    logger = tools.Logger(logdir)
+    logger = tools.make_logger(eval_cfg.logger, logdir)
     logger.log_hydra_config(config)
 
     print("Create env.")
@@ -171,7 +173,7 @@ def run_episode(env, agent, reward_function, manual_control=None):
         trans["action"] = action
         cache.append(trans.clone())
 
-        agent_action, agent_state = agent.act(trans, agent_state, eval=True)
+        agent_action, agent_state, _ = agent.act(trans, agent_state, eval=True)
         new_reward = reward_function(agent_state["stoch"], trans["goal"])
         print("step:", step, "reward:", new_reward.item())
 

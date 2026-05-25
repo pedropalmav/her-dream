@@ -1,3 +1,4 @@
+import atexit
 import contextlib
 import io
 import json
@@ -167,6 +168,29 @@ class Logger:
             with contextlib.suppress(TypeError):
                 # Avoid creating a timestamped subdirectory by specifying run_name (PyTorch >= 1.14)
                 self._writer.add_hparams(flat, {"_": 0}, run_name=hparams_run_name)
+
+
+def make_logger(config, logdir):
+    """Build a CompositeLogger from a logger config node.
+
+    config.backends is a list of strings, e.g. ["file", "tensorboard", "wandb"].
+    """
+    from .loggers import FileLogger, TensorboardLogger, WandbLogger, CompositeLogger
+
+    loggers = []
+    for backend in config.backends:
+        match backend:
+            case "file":
+                loggers.append(FileLogger(logdir))
+            case "tensorboard":
+                loggers.append(TensorboardLogger(logdir))
+            case "wandb":
+                wl = WandbLogger(config, logdir)
+                atexit.register(wl.close)
+                loggers.append(wl)
+            case _:
+                raise ValueError(f"Unknown logger backend: {backend!r}")
+    return CompositeLogger(loggers)
 
 
 def setup_console_log(logdir, filename="console.log"):

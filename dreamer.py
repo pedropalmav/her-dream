@@ -243,8 +243,7 @@ class Dreamer(nn.Module):
         )
         # (B, S, K), (B, D)
         stoch, deter, logit = self._frozen_rssm.obs_step(prev_stoch, prev_deter, prev_action, embed, obs["is_first"])
-        probs = torch.softmax(logit.float(), dim=-1)
-        obs_step_sample_prob = (probs[0] * stoch[0].float()).sum(dim=-1).mean()
+        obs_step_sample_log_prob = self._frozen_rssm.get_dist(logit).log_prob(stoch)[0]
         # (B, F)
         feat = self._frozen_rssm.get_feat(stoch, deter)
 
@@ -256,7 +255,7 @@ class Dreamer(nn.Module):
         return action, TensorDict(
             {"stoch": stoch, "deter": deter, "prev_action": action},
             batch_size=state.batch_size,
-        ), {"obs_step_sample_prob": obs_step_sample_prob}
+        ), {"obs_step_sample_log_prob": obs_step_sample_log_prob}
 
     @torch.no_grad()
     def get_initial_state(self, B):

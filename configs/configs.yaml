@@ -2,6 +2,7 @@ defaults:
   - env: random_goal
   - model: size12M
   - buffer: her
+  - logger: tensorboard
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
   - _self_
@@ -19,20 +20,10 @@ batch_size: 16
 batch_length: 64
 goal_type: full
 mission_text: False
-# Train only the world model (encoder, RSSM, projector). Actor, critic and
-# text_encoder are still instantiated (so the checkpoint contains them and
-# they can be trained later) but are excluded from the optimizer and their
-# losses are skipped. The env is stepped with uniform one-hot actions.
 wm_only: False
-# Inverse of wm_only: freeze the world model (encoder, RSSM, text_encoder,
-# rep_loss aux modules) and train ONLY the actor/critic. Used by post_train.py
-# to fine-tune a policy on top of a pretrained WM. Mutually exclusive with
-# wm_only.
 freeze_wm: False
-# Optional path to a previous logdir containing latest.pt. When set,
-# post_train.py loads the agent state_dict from <load_from>/latest.pt before
-# training. Leave null for a fresh run.
 load_from: null
+
 
 env:
   goal_type: ${goal_type}
@@ -71,6 +62,7 @@ trainer:
   train_ratio: ${env.train_ratio}
   video_pred_log: False
   params_hist_log: False
+  obs_step_prob_log: False
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   goal_sample: ${env.goal_sample}

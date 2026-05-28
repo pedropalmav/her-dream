@@ -1,4 +1,4 @@
-from .logging import Tee, Logger, setup_console_log
+from .logging import Tee, Logger, make_logger, setup_console_log
 from .training import Every, Once, set_seed_everywhere, enable_deterministic_run
 from .torch_utils import to_np, to_f32, to_i32, rpad
 from .nn_utils import weight_init_, convert, tensorstats
@@ -13,6 +13,7 @@ from .benchmark import CudaBenchmark
 __all__ = [
     "Tee",
     "Logger",
+    "make_logger",
     "setup_console_log",
     "Every",
     "Once",

@@ -80,7 +80,7 @@ def run_eval(agent, eval_envs, device, K, env_size, deterministic):
         # Override the environment's random goal with the text-encoder goal
         trans["goal"] = current_goals
 
-        act, agent_state = agent.act(trans, agent_state, eval=True)
+        act, agent_state, _ = agent.act(trans, agent_state, eval=True)
 
         new_reward = reward_function(agent_state["stoch"], current_goals)
         step_reward = new_reward[:, 0]

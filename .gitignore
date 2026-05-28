@@ -1,5 +1,6 @@
 # Logs / artifacts
 logdir/
+outputs/
 *.hydra/
 torch_compile_debug/
 plots/

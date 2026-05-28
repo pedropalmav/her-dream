@@ -86,8 +86,10 @@ def make_actions(exp_type: str, n_spin: int, n_forward: int) -> list[int]:
     side = max(1, n_forward)
     k    = max(0, n_spin)
 
-    if exp_type == "spin":
-        return spin(k)
+    if exp_type == "spin_left":
+        return spin(k, "left")
+    elif exp_type == "spin_right":
+        return spin(k, "right")
     elif exp_type == "loop_right":
         return loop(side, "right")
     elif exp_type == "loop_left":
@@ -395,13 +397,14 @@ def create_app(agent, env_factory, device: str, seed: int) -> Dash:
                                 dcc.Dropdown(
                                     id="exp-type",
                                     options=[
-                                        {"label": "⟳  Spin",          "value": "spin"},
+                                        {"label": "←⟳  Spin Left",          "value": "spin_left"},
+                                        {"label": "⟳→  Spin Right",          "value": "spin_right"},
                                         {"label": "□→  Loop Right",    "value": "loop_right"},
                                         {"label": "←□  Loop Left",     "value": "loop_left"},
                                         {"label": "□+⟳  Loop Left + Spin", "value": "loop_left_and_spin"},
                                         {"label": "□+⟳  Loop Right + Spin", "value": "loop_right_and_spin"},
                                     ],
-                                    value="spin",
+                                    value="spin_left",
                                     clearable=False,
                                     style={"fontSize": "13px"},
                                 ),

@@ -6,9 +6,10 @@ import warnings
 import hydra
 import torch
 from datetime import datetime
+from tensordict import TensorDict
 import tools
 from dreamer import Dreamer
-from envs import make_envs
+from envs import make_env
 from rewards import make_reward
 
 warnings.filterwarnings("ignore")
@@ -18,7 +19,15 @@ torch.set_float32_matmul_precision("high")
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="eval_configs")
-def main(config):
+def main(eval_cfg):
+    from omegaconf import OmegaConf
+
+    experiment_dir = pathlib.Path(eval_cfg.experiment_dir)
+    train_cfg = OmegaConf.load(experiment_dir / ".hydra/config.yaml")
+    config = OmegaConf.merge(
+        train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}}
+    )
+
     if "goal_index" in config.env and config.goal_type != "first_row":
         raise ValueError("goal_index is only supported for goal_type 'first_row'")
 
@@ -31,11 +40,13 @@ def main(config):
     logdir.mkdir(parents=True, exist_ok=True)
     print("Logdir", logdir)
 
-    logger = tools.Logger(logdir)
+    logger = tools.make_logger(eval_cfg.logger, logdir)
     logger.log_hydra_config(config)
 
-    print("Create envs.")
-    env, _, obs_space, act_space = make_envs(config.env)
+    print("Create env.")
+    env = make_env(config.env, 0)
+    obs_space = env.observation_space
+    act_space = env.action_space
 
     reward_function = make_reward(config)
 
@@ -47,49 +58,141 @@ def main(config):
         reward_function=reward_function,
     ).to(config.device)
 
-    weights_dir = pathlib.Path(config.logdir)
     agent.load_state_dict(
-        torch.load(weights_dir / "latest.pt", map_location=config.device)[
+        torch.load(experiment_dir / "latest.pt", map_location=config.device)[
             "agent_state_dict"
         ]
     )
     agent.eval()
 
+    manual_ctrl = ManualControl(act_space.shape[0]) if eval_cfg.manual_control else None
+
     video_cache = []
-    num_episodes = 6
-    for i in range(num_episodes):
+    for i in range(eval_cfg.num_episodes):
         print(f"Episode {i + 1}")
-        episode_cache = run_episode(env, agent, reward_function)
+        episode_cache = run_episode(env, agent, reward_function, manual_ctrl)
+        if episode_cache is None:
+            break
         video_cache.append(episode_cache["image"][:1])
+
+    if manual_ctrl is not None:
+        manual_ctrl.close()
 
     if video_cache:
         logger.video("eval_video", tools.to_np(make_video_grid(video_cache)))
 
-    logger.write(num_episodes * config.env.time_limit)
+    logger.write(len(video_cache) * config.env.time_limit)
 
 
-def run_episode(env, agent, reward_function):
-    done = torch.ones(env.env_num, dtype=torch.bool, device=agent.device)
-    once_done = torch.zeros(env.env_num, dtype=torch.bool, device=agent.device)
-    agent_state = agent.get_initial_state(env.env_num)
+class ManualControl:
+    """Pygame window that intercepts keyboard input and returns one-hot actions.
+
+    Key bindings (mirrors minigrid's ManualControl):
+        ← / →     turn left / right
+        ↑         move forward
+        space      toggle
+        page up    pickup
+        page down  drop
+        enter      done
+        escape     quit episode
+    """
+
+    _KEY_TO_ACTION = {
+        "left": 0,
+        "right": 1,
+        "up": 2,
+        "page up": 3,
+        "page down": 4,
+        "space": 5,
+        "return": 6,
+    }
+
+    def __init__(self, n_actions: int, screen_size: int = 512):
+        import pygame
+
+        self._pg = pygame
+        self.n_actions = n_actions
+        pygame.init()
+        pygame.display.set_caption(
+            "Manual Control — arrows: move, space: toggle, pgup/dn: pick/drop, enter: done, esc: quit"
+        )
+        self.screen = pygame.display.set_mode((screen_size, screen_size))
+        self.clock = pygame.time.Clock()
+
+    def render(self, image):
+        """Display the current observation image (H, W, C) uint8."""
+        pg = self._pg
+        surf = pg.surfarray.make_surface(image.transpose(1, 0, 2))
+        surf = pg.transform.scale(surf, self.screen.get_size())
+        self.screen.blit(surf, (0, 0))
+        pg.display.flip()
+
+    def get_action(self):
+        """Block until a valid key is pressed.
+
+        Returns a (1, n_actions) one-hot float32 tensor, or None if the user
+        closed the window or pressed Escape.
+        """
+        pg = self._pg
+        while True:
+            for event in pg.event.get():
+                if event.type == pg.QUIT:
+                    return None
+                if event.type == pg.KEYDOWN:
+                    key_name = pg.key.name(event.key)
+                    if key_name == "escape":
+                        return None
+                    if key_name in self._KEY_TO_ACTION:
+                        idx = self._KEY_TO_ACTION[key_name]
+                        action = torch.zeros(1, self.n_actions)
+                        action[0, idx] = 1.0
+                        return action
+                    print(f"unbound key: {key_name!r}")
+            self.clock.tick(30)
+
+    def close(self):
+        self._pg.quit()
+
+
+def run_episode(env, agent, reward_function, manual_control=None):
+    obs = env.reset()
+    done = False
+    agent_state = agent.get_initial_state(1)
     action = agent_state["prev_action"].clone()
     step = 0
     cache = []
-    while not once_done.all():
-        action_cpu = action.detach().to("cpu")
-        done_cpu = done.detach().to("cpu")
-        trans_cpu, done_cpu = env.step(action_cpu, done_cpu)
+
+    while True:
+        trans_cpu = TensorDict(
+            {k: torch.as_tensor(v, device="cpu").unsqueeze(0) for k, v in obs.items()},
+            batch_size=(1,),
+            device="cpu",
+        ).pin_memory()
 
         trans = trans_cpu.to(agent.device, non_blocking=True)
-        done = done_cpu.to(agent.device)
         trans["action"] = action
         cache.append(trans.clone())
 
-        action, agent_state = agent.act(trans, agent_state, eval=True)
+        agent_action, agent_state, _ = agent.act(trans, agent_state, eval=True)
         new_reward = reward_function(agent_state["stoch"], trans["goal"])
         print("step:", step, "reward:", new_reward.item())
 
-        once_done |= done
+        if manual_control is not None:
+            manual_control.render(obs["image"])
+
+        if done:
+            break
+
+        if manual_control is not None:
+            action = manual_control.get_action()
+            if action is None:
+                return None
+            action = action.to(agent.device)
+            agent_state["prev_action"] = action
+        else:
+            action = agent_action
+
+        obs, _, done, _ = env.step(tools.to_np(action[0]))
         step += 1
 
     return torch.stack(cache, dim=1)

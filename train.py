@@ -45,7 +45,7 @@ def main(config):
 
     print("Logdir", logdir)
 
-    logger = tools.Logger(logdir)
+    logger = tools.make_logger(config.logger, logdir)
     # save config
     logger.log_hydra_config(config)
 

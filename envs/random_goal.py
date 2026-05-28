@@ -7,6 +7,8 @@ from minigrid.core.world_object import Goal
 from minigrid.wrappers import RGBImgObsWrapper
 
 DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
+
+
 class RandomGoal(MiniGridEnv):
 
     def __init__(
@@ -41,7 +43,7 @@ class RandomGoal(MiniGridEnv):
     def _gen_grid(self, width, height):
         self.grid = Grid(width, height)
         self.grid.wall_rect(0, 0, width, height)
-        
+
         self._goal_pos = self.place_obj(Goal())
         self._put_agent()
 
@@ -81,7 +83,6 @@ class RandomGoal(MiniGridEnv):
         obs, reward, terminated, truncated, info = super().step(action)
         reward = self._reward()
         obs["mission"] = self._build_mission()
-        # print("mission description:", obs["mission"], "action_description:", action)
         # We use truncated to signal episode end instead of terminated
         terminated = False
         return obs, reward, terminated, truncated, info

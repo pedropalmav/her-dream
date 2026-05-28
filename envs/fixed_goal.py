@@ -6,7 +6,7 @@ from minigrid.core.grid import Grid
 from minigrid.core.world_object import Goal
 from minigrid.wrappers import RGBImgObsWrapper
 
-
+DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
 class FixedGoal(MiniGridEnv):
 
     def __init__(
@@ -23,6 +23,7 @@ class FixedGoal(MiniGridEnv):
         self.agent_start_pos = agent_start_pos
         self.agent_start_dir = agent_start_dir
         self.goal_pos = goal_pos
+        self.size = size
 
         mission_space = MissionSpace(mission_func=self._gen_mission)
 
@@ -52,6 +53,27 @@ class FixedGoal(MiniGridEnv):
             self.agent_dir = self.agent_start_dir
         else:
             self.place_agent()
+
+    def _build_mission(self):
+        ax, ay = self.agent_pos
+        direction = DIRECTIONS[self.agent_dir]
+        gx, gy = self._goal_pos
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
+
+    def random_mission(self, rng: np.random.RandomState = None) -> str:
+        """Return a mission string with randomly sampled [ax, ay, direction, gx, gy].
+
+        All positions are sampled uniformly from the grid interior (1 to size-2),
+        independently — agent and goal may coincide, matching the training distribution.
+        """
+        if rng is None:
+            rng = np.random.RandomState()
+        interior = np.arange(1, self.size - 1)
+        ax, ay = rng.choice(interior), rng.choice(interior)
+        gx, gy = self.goal_pos
+        direction = DIRECTIONS[rng.randint(0, 4)]
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
+
 
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)

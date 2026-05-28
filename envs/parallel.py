@@ -62,7 +62,10 @@ class ParallelEnv:
         obs_stacked = {k: np.stack([o[k] for o in new_o]) for k in new_o[0].keys()}
 
         # Build CPU tensors first to avoid implicit GPU syncs and enable async H2D in caller.
-        obs_tensors = {k: torch.as_tensor(v, device="cpu") for k, v in obs_stacked.items()}
+        obs_tensors = {
+            k: torch.as_tensor(v, device="cpu")
+            for k, v in obs_stacked.items()
+        }
         rew_stacked = torch.as_tensor(new_r, dtype=torch.float32, device="cpu")
 
         # Keep data on CPU; caller will .to(device, non_blocking=True) after pinning.
@@ -98,14 +101,22 @@ class Parallel:
     @staticmethod
     def _respond(constructor, state, message, name, *args, **kwargs):
         state = state or constructor()  # Instantiate at first time
+        # gymnasium >=1.0 removed Wrapper.__getattr__ forwarding, so accessing a
+        # method defined on an inner wrapper (e.g. MissionGridWrapper.encoded_random_mission)
+        # via getattr on the outermost wrapper raises AttributeError. Use the
+        # explicit get_wrapper_attr API which walks the wrapper chain.
+        if hasattr(state, "get_wrapper_attr"):
+            attr = state.get_wrapper_attr(name)
+        else:
+            attr = getattr(state, name)
         if message == PMessage.CALLABLE:
             assert not args and not kwargs, (args, kwargs)
-            result = callable(getattr(state, name))
+            result = callable(attr)
         elif message == PMessage.CALL:
-            result = getattr(state, name)(*args, **kwargs)
+            result = attr(*args, **kwargs)
         elif message == PMessage.READ:
             assert not args and not kwargs, (args, kwargs)
-            result = getattr(state, name)
+            result = attr
         return state, result
 
 

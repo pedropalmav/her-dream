@@ -19,14 +19,18 @@ hydra:
 batch_size: 16
 batch_length: 64
 goal_type: full
+mission_text: False
 
 env:
   goal_type: ${goal_type}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
+  goal_sample: buffer # buffer|text|random
+  mission_text: ${mission_text}
 
 model:
   goal_type: ${goal_type}
+  mission_text: ${mission_text}
 
 buffer:
   goal_type: ${goal_type}
@@ -55,3 +59,4 @@ trainer:
   obs_step_prob_log: False
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
+  goal_sample: ${env.goal_sample}

@@ -4,6 +4,14 @@ import torch
 
 import tools
 
+def get_wrapper(env, wrapper_type):
+    current = env
+    while hasattr(current, "env"):
+        if isinstance(current, wrapper_type):
+            return current
+        current = current.env
+    return None
+
 
 class TimeLimit(gym.Wrapper):
     def __init__(self, env, duration):
@@ -64,7 +72,7 @@ class OneHotAction(gym.Wrapper):
         if not np.allclose(reference, action):
             raise ValueError(f"Invalid one-hot action:\n{action}")
         return self.env.step(index)
-
+    
     def reset(self):
         return self.env.reset()
 
@@ -244,6 +252,62 @@ class MiniGridWrapper(gym.Wrapper):
         return obs, reward, terminated or truncated, info
 
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+        obs["is_first"] = is_first
+        obs["is_last"] = is_last
+        obs["is_terminal"] = is_terminal
+        return obs
+
+
+MAX_LEN = 500  # largo máximo del string
+VOCAB = {c: i+1 for i, c in enumerate(" abcdefghijklmnopqrstuvwxyz0123456789.,!?-:()")}
+VOCAB["<pad>"] = 0
+VOCAB_SIZE = len(VOCAB)  # 46 caracteres + padding
+
+def encode_mission(text: str, max_len: int = MAX_LEN) -> np.ndarray:
+    text = text.lower()[:max_len]
+    ids = [VOCAB[c] for c in text]
+    ids += [0] * (max_len - len(ids))
+    one_hot = np.zeros((max_len, VOCAB_SIZE), dtype=np.float32)
+    for i, idx in enumerate(ids):
+        one_hot[i, idx] = 1.0
+    return one_hot
+
+
+class MissionGridWrapper(gym.Wrapper):
+    def __init__(self, env):
+        env = OneHotDirection(env)
+        super().__init__(env)
+
+        self.env.observation_space = gym.spaces.Dict(
+            {
+                **self.env.observation_space.spaces,
+                "mission": gym.spaces.Box(0, 1, (MAX_LEN, VOCAB_SIZE), dtype=np.float32),
+                "is_first": gym.spaces.Box(0, 1, (), bool),
+                "is_last": gym.spaces.Box(0, 1, (), bool),
+                "is_terminal": gym.spaces.Box(0, 1, (), bool),
+            }
+        )
+
+    def reset(self):
+        obs, _ = self.env.reset()
+        return self._parse_observation(obs, is_first=True)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        obs = self._parse_observation(
+            obs,
+            is_first=False,
+            is_last=terminated or truncated,
+            is_terminal=terminated,
+        )
+        return obs, reward, terminated or truncated, info
+
+    def encoded_random_mission(self):
+        return encode_mission(self.env.unwrapped.random_mission())
+
+    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+        if "mission" in obs:
+            obs["mission"] = encode_mission(obs["mission"])
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal

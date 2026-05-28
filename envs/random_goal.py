@@ -6,6 +6,8 @@ from minigrid.core.grid import Grid
 from minigrid.core.world_object import Goal
 from minigrid.wrappers import RGBImgObsWrapper
 
+DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
+
 
 class RandomGoal(MiniGridEnv):
 
@@ -21,6 +23,7 @@ class RandomGoal(MiniGridEnv):
 
         self.agent_start_pos = agent_start_pos
         self.agent_start_dir = agent_start_dir
+        self.size = size
 
         mission_space = MissionSpace(mission_func=self._gen_mission)
 
@@ -41,7 +44,7 @@ class RandomGoal(MiniGridEnv):
         self.grid = Grid(width, height)
         self.grid.wall_rect(0, 0, width, height)
 
-        self.place_obj(Goal())
+        self._goal_pos = self.place_obj(Goal())
         self._put_agent()
 
     def _put_agent(self):
@@ -51,9 +54,35 @@ class RandomGoal(MiniGridEnv):
         else:
             self.place_agent()
 
+    def _build_mission(self):
+        ax, ay = self.agent_pos
+        direction = DIRECTIONS[self.agent_dir]
+        gx, gy = self._goal_pos
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
+
+    def random_mission(self, rng: np.random.RandomState = None) -> str:
+        """Return a mission string with randomly sampled [ax, ay, direction, gx, gy].
+
+        All positions are sampled uniformly from the grid interior (1 to size-2),
+        independently — agent and goal may coincide, matching the training distribution.
+        """
+        if rng is None:
+            rng = np.random.RandomState()
+        interior = np.arange(1, self.size - 1)
+        ax, ay = rng.choice(interior), rng.choice(interior)
+        gx, gy = rng.choice(interior), rng.choice(interior)
+        direction = DIRECTIONS[rng.randint(0, 4)]
+        return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
+
+    def reset(self, **kwargs):
+        obs, info = super().reset(**kwargs)
+        obs["mission"] = self._build_mission()
+        return obs, info
+
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
         reward = self._reward()
+        obs["mission"] = self._build_mission()
         # We use truncated to signal episode end instead of terminated
         terminated = False
         return obs, reward, terminated, truncated, info

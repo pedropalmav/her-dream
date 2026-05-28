@@ -75,7 +75,11 @@ def make_env(config, id):
             max_steps=config.time_limit,
             render_mode=config.render_mode,
         )
-        env = wrappers.MiniGridWrapper(env)
+        if config.mission_text:
+            env = wrappers.MissionGridWrapper(env)
+        else:
+            env = wrappers.MiniGridWrapper(env)
+        
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
 
@@ -91,10 +95,12 @@ def make_env(config, id):
             goal_pos=goal_pos,
             max_steps=config.time_limit,
         )
-        env = wrappers.MiniGridWrapper(env)
+        if config.mission_text:
+            env = wrappers.MissionGridWrapper(env)
+        else:
+            env = wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
-
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

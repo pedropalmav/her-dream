@@ -13,7 +13,7 @@ class MultiEncoder(nn.Module):
         shapes,
     ):
         super().__init__()
-        excluded = ("is_first", "is_last", "is_terminal", "reward")
+        excluded = ("is_first", "is_last", "is_terminal", "reward", "mission")
         shapes = {
             k: v
             for k, v in shapes.items()

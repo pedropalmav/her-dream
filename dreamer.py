@@ -8,6 +8,7 @@ from tensordict import TensorDict
 from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
+import distributions as dists
 
 import networks
 import rssm
@@ -29,9 +30,11 @@ class Dreamer(nn.Module):
         self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
+        self.mission_text = config.mission_text
 
         # World model components
-        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        excluded = ("is_first", "is_last", "is_terminal", "reward", "mission")
+        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items() if k not in excluded}
         self.encoder = networks.MultiEncoder(config.encoder, shapes)
         self.embed_size = self.encoder.out_dim
         self.rssm = rssm.RSSM(
@@ -123,6 +126,16 @@ class Dreamer(nn.Module):
                 "ema_obs_proj": self._ema_obs_proj,
             })
 
+        # === Text encoder (auxiliar, solo si hay mission en el obs) ===
+        if self.mission_text:
+            self.text_encoder = networks.TextEncoderGRU(
+                config=config.text_encoder,
+                stoch=self.rssm._stoch,
+                discrete=self.rssm._discrete,
+                act=config.rssm.act,
+            )
+            modules["text_encoder"] = self.text_encoder
+            
 
         # count number of parameters in each module
         for key, module in modules.items():
@@ -324,6 +337,7 @@ class Dreamer(nn.Module):
         self._scheduler.step()  # increment scheduler
         self._optimizer.zero_grad(set_to_none=True)  # reset grads
         mets["opt/lr"] = self._scheduler.get_lr()[0]
+        mets["opt/lr_last"] = self._scheduler.get_last_lr()[0]
         mets["opt/grad_scale"] = self._scaler.get_scale()
         if self._log_grads:
             updates = [(new - old) for (new, old) in zip(self._named_params.values(), old_params)]
@@ -362,6 +376,18 @@ class Dreamer(nn.Module):
         dyn_loss, rep_loss = self.rssm.kl_loss(post_logit, prior_logit, self.kl_free)
         losses["dyn"] = torch.mean(dyn_loss)
         losses["rep"] = torch.mean(rep_loss)
+        
+        # === Text KL loss (auxiliar) ===
+        # El text encoder aprende a predecir el z del agente desde el texto.
+        # detach en post_logit: la loss no modifica el world model, solo entrena text_encoder.
+        if self.mission_text:
+            # data["mission"]: (B, T, L, V) float32 one-hot
+            text_logit = self.text_encoder(data["mission"].float())  # (B, T, S, K)
+            text_kl = dists.kl(post_logit.detach(), text_logit).sum(-1)  # (B, T, S)
+            text_kl = torch.clip(text_kl, min=self.kl_free)
+            losses["text_kl"] = torch.mean(text_kl)
+            metrics["text_kl"] = losses["text_kl"].detach()
+        
         # === Representation / auxiliary losses ===
         # (B, T, F)
         feat = self.rssm.get_feat(post_stoch, post_deter)

@@ -116,10 +116,7 @@ class OnlineTrainer:
             # (B, A)
             act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._wm_only)
 
-            # TODO: DRY with begin() method
-            if self.reward_function:
-                new_reward = self.reward_function(agent_state["stoch"], trans["goal"])
-                trans["reward"] = new_reward
+            self._apply_reward(agent_state["stoch"], trans)
             returns += trans["reward"][:, 0] * ~once_done
 
             for key, value in trans.items():
@@ -245,10 +242,7 @@ class OnlineTrainer:
             trans["env"] = envs_ids
             trans["episode"] = episode_ids
 
-            # TODO: DRY with eval() method
-            if self.reward_function:
-                new_reward = self.reward_function(trans["stoch"], trans["goal"])
-                trans["reward"] = new_reward
+            self._apply_reward(trans["stoch"], trans)
 
             if "image" in trans:
                 video_cache.append(trans["image"][0])
@@ -281,6 +275,10 @@ class OnlineTrainer:
                         for name, param in agent._named_params.items():
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
+
+    def _apply_reward(self, stoch, trans):
+        if self.reward_function:
+            trans["reward"] = self.reward_function(stoch, trans["goal"])
 
     def _relabel_goal(self, envs, goals, trans):
         # Si es que hay algun valor diferente de 0 en el goals, entonces relabel.

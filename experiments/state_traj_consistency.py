@@ -202,6 +202,7 @@ def run_trajectory(
       "pos":    (T+1, 2),     # (ax, ay) del agente en cada paso
       "dir":    (T+1,),       # entero 0..3
       "goal_pos": (2,),       # posición del goal (constante)
+      "images": (T+1, H, W, 3) numpy uint8  # observación visual en cada paso
       "last_image": (H, W, 3) numpy uint8
     }
     """
@@ -223,7 +224,7 @@ def run_trajectory(
     stoch, deter = agent.rssm.initial(1)
     prev_action = torch.zeros(1, n_actions, device=device)
 
-    logits, zs, deters, poses, dirs = [], [], [], [], []
+    logits, zs, deters, poses, dirs, images = [], [], [], [], [], []
 
     def _record(stoch_, deter_, logit_):
         logits.append(logit_.squeeze(0).cpu())
@@ -244,6 +245,7 @@ def run_trajectory(
     _record(stoch, deter, logit)
 
     last_image = obs["image"]
+    images.append(np.array(last_image))
 
     for act_idx in action_indices:
         act_np = _onehot_action(act_idx, n_actions)
@@ -256,6 +258,7 @@ def run_trajectory(
         embed = agent.encoder(obs_t)
         stoch, deter, logit = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
         _record(stoch, deter, logit)
+        images.append(np.array(last_image))
 
         if done:
             print(f"  [warn] episodio terminó tempranamente en paso {len(logits)-1}")
@@ -281,6 +284,7 @@ def run_trajectory(
         "pos":       np.array(poses, dtype=np.int32),
         "dir":       np.array(dirs, dtype=np.int32),
         "goal_pos":  goal_pos,
+        "images":    np.stack(images, axis=0),       # (T+1, H, W, 3)
         "last_image": np.array(last_image),
     }
 
@@ -341,6 +345,7 @@ def run_state_traj_consistency(
     n_samples_intra: int = 50,
     seed: int = 0,
     outdir: Path = Path("results/state_traj_consistency"),
+    gif_fps: int = 2,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
     device = agent.device
@@ -446,6 +451,9 @@ def run_state_traj_consistency(
         H_max=H_max,
     )
 
+    # ── GIFs de loops y spin (obs ‖ probs ‖ z) ───────────────────────────────
+    make_loop_spin_gifs(agent, runs, outdir, fps=gif_fps)
+
     # ── JSON ─────────────────────────────────────────────────────────────────
     results = {
         "seed": seed,
@@ -481,6 +489,75 @@ def _save(fig, path):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Plot: {path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GIFs por trayectoria: observación ‖ probs posterior ‖ z muestreado
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DIR_NAME = {0: "east", 1: "south", 2: "west", 3: "north"}
+
+
+def _render_gif_frame(image, probs_sk, z_sk, *, step, n_steps, name, dir_, pos):
+    """Un frame del gif: obs (RGB) | probs posterior (S×K) | z one-hot (S×K)."""
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5.2), constrained_layout=True)
+
+    axes[0].imshow(image)
+    axes[0].set_title(f"observación   t={step}/{n_steps}\n"
+                      f"pos={tuple(int(p) for p in pos)}  dir={_DIR_NAME[int(dir_)]}")
+    axes[0].axis("off")
+
+    im1 = axes[1].imshow(probs_sk, aspect="auto", cmap="Blues", vmin=0, vmax=1,
+                         interpolation="nearest")
+    axes[1].set_title("probs posterior  p(z|·)")
+    axes[1].set_xlabel("clase k"); axes[1].set_ylabel("slot s")
+    fig.colorbar(im1, ax=axes[1], fraction=0.046, label="p_sk")
+
+    im2 = axes[2].imshow(z_sk, aspect="auto", cmap="Greys", vmin=0, vmax=1,
+                         interpolation="nearest")
+    axes[2].set_title("z muestreado  (one-hot)")
+    axes[2].set_xlabel("clase k"); axes[2].set_ylabel("slot s")
+    fig.colorbar(im2, ax=axes[2], fraction=0.046, label="z_sk")
+
+    fig.suptitle(name, fontsize=13, fontweight="bold")
+    fig.canvas.draw()
+    frame = np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
+    plt.close(fig)
+    return frame
+
+
+def _make_trajectory_gif(agent, name, run, outdir, fps=2):
+    """Crea {outdir}/gif_{name}.gif con un frame por paso de la trayectoria."""
+    import imageio.v2 as imageio
+
+    logits_t = run["logits"]                       # (T+1, S, K)
+    probs_t  = agent.rssm.get_dist(
+        logits_t.to(agent.device)).base_dist.probs.cpu().numpy()  # (T+1, S, K)
+    z_t      = run["zs"].cpu().numpy()             # (T+1, S, K)  one-hot
+    images   = run["images"]                       # (T+1, H, W, 3)
+    n_steps  = len(images) - 1
+
+    frames = [
+        _render_gif_frame(
+            images[t], probs_t[t], z_t[t],
+            step=t, n_steps=n_steps, name=name,
+            dir_=run["dir"][t], pos=run["pos"][t],
+        )
+        for t in range(len(images))
+    ]
+    path = outdir / f"gif_{name}.gif"
+    imageio.mimsave(path, frames, fps=fps, loop=0)
+    print(f"  GIF:  {path}  ({len(frames)} frames)")
+
+
+def make_loop_spin_gifs(agent, runs, outdir, fps=2):
+    """Genera un gif por cada trayectoria de loop / spin."""
+    gif_dir = outdir / "gifs"
+    gif_dir.mkdir(parents=True, exist_ok=True)
+    selected = [n for n in runs if n.startswith(("loop", "spin"))]
+    print(f"\nGenerando {len(selected)} gifs (loops + spin) en {gif_dir} …")
+    for name in selected:
+        _make_trajectory_gif(agent, name, runs[name], gif_dir, fps=fps)
 
 
 def _plot_all(
@@ -616,6 +693,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_loop",  type=int, default=None,
                         help="Lado máximo del loop. Si se omite, se usa el máximo "
                              "geométrico que cabe dado el agent_start_pos del env.")
+    parser.add_argument("--gif_fps",   type=int, default=2,
+                        help="FPS de los gifs por trayectoria (loops y spin).")
     args = parser.parse_args()
 
     logdir = pathlib.Path(args.logdir)
@@ -665,4 +744,5 @@ if __name__ == "__main__":
         n_samples_intra= args.n_samples,
         seed           = args.seed,
         outdir         = logdir / "experiments" / "state_traj_consistency",
+        gif_fps        = args.gif_fps,
     )

@@ -264,13 +264,13 @@ VOCAB["<pad>"] = 0
 VOCAB_SIZE = len(VOCAB)  # 46 caracteres + padding
 
 def encode_mission(text: str, max_len: int = MAX_LEN) -> np.ndarray:
+    # Stored as int8 token ids (0 = <pad>) to keep the replay buffer small.
+    # The one-hot expansion happens inside TextEncoderGRU on the fly.
     text = text.lower()[:max_len]
-    ids = [VOCAB[c] for c in text]
-    ids += [0] * (max_len - len(ids))
-    one_hot = np.zeros((max_len, VOCAB_SIZE), dtype=np.float32)
-    for i, idx in enumerate(ids):
-        one_hot[i, idx] = 1.0
-    return one_hot
+    ids = np.zeros(max_len, dtype=np.int8)
+    for i, c in enumerate(text):
+        ids[i] = VOCAB[c]
+    return ids
 
 
 class MissionGridWrapper(gym.Wrapper):
@@ -281,7 +281,7 @@ class MissionGridWrapper(gym.Wrapper):
         self.env.observation_space = gym.spaces.Dict(
             {
                 **self.env.observation_space.spaces,
-                "mission": gym.spaces.Box(0, 1, (MAX_LEN, VOCAB_SIZE), dtype=np.float32),
+                "mission": gym.spaces.Box(0, VOCAB_SIZE - 1, (MAX_LEN,), dtype=np.int8),
                 "is_first": gym.spaces.Box(0, 1, (), bool),
                 "is_last": gym.spaces.Box(0, 1, (), bool),
                 "is_terminal": gym.spaces.Box(0, 1, (), bool),

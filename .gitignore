@@ -136,3 +136,4 @@ dmypy.json
 
 # Nano
 .DS_Store
+bitacora_nano/*

@@ -6,7 +6,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
 from omegaconf import OmegaConf
 
 from dreamer import Dreamer
@@ -107,12 +106,12 @@ def _preprocess_obs(obs: dict, device: str) -> dict:
 # d(i,j)  = (1/S) * sum_s 1[ mode_i_s != mode_j_s ]
 # D_inter = 2/(N(N-1)) * sum_{i<j} d(i,j)
 
-def exp1_inter_traj_diversity(logits: torch.Tensor) -> dict:
+def exp1_inter_traj_diversity(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
     N = logits.shape[0]
-    probs = F.softmax(logits, dim=-1)                      # (N, S, K)
+    probs = agent.rssm.get_dist(logits).base_dist.probs    # (N, S, K)
     modes = probs.argmax(-1)                               # (N, S)
 
     diff = (modes.unsqueeze(0) != modes.unsqueeze(1)).float()  # (N, N, S)
@@ -163,11 +162,11 @@ def exp2_intra_state_variance(
 # ── Exp 3 — Entropía de los logits posteriores ───────────────────────────────
 # H^n_s = - sum_k p^n_sk * log p^n_sk
 
-def exp3_posterior_entropy(logits: torch.Tensor) -> dict:
+def exp3_posterior_entropy(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
-    probs = F.softmax(logits, dim=-1)
+    probs = agent.rssm.get_dist(logits).base_dist.probs
     H     = -(probs * (probs + 1e-8).log()).sum(-1)    # (N, S)
     H_np  = H.cpu().numpy()
     K     = logits.shape[-1]
@@ -187,11 +186,11 @@ def exp3_posterior_entropy(logits: torch.Tensor) -> dict:
 # ── Exp 4 — Peak probability ──────────────────────────────────────────────────
 # pi^n_s = max_k p^n_sk
 
-def exp4_peak_probability(logits: torch.Tensor) -> dict:
+def exp4_peak_probability(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
-    probs = F.softmax(logits, dim=-1)
+    probs = agent.rssm.get_dist(logits).base_dist.probs
     pi    = probs.max(-1).values.cpu().numpy()         # (N, S)
     K     = logits.shape[-1]
 
@@ -204,12 +203,12 @@ def exp4_peak_probability(logits: torch.Tensor) -> dict:
 
 # ── Exp 5 — Heatmaps de probabilidad por trayectoria ─────────────────────────
 
-def exp5_probability_heatmaps(logits: torch.Tensor, n_show: int = 4) -> np.ndarray:
+def exp5_probability_heatmaps(agent, logits: torch.Tensor, n_show: int = 4) -> np.ndarray:
     """
     logits : (N, S, K)
-    Devuelve (n_show, S, K) con la distribución softmax por trayectoria.
+    Devuelve (n_show, S, K) con la distribución por trayectoria (con unimix del RSSM).
     """
-    probs = F.softmax(logits[:n_show], dim=-1)
+    probs = agent.rssm.get_dist(logits[:n_show]).base_dist.probs
     return probs.cpu().numpy()
 
 
@@ -240,19 +239,19 @@ def run_wm_stochasticity(
 
     # ── Experimentos ──────────────────────────────────────────────────────────
     print("Exp 1: diversidad inter-trayectoria …")
-    r1 = exp1_inter_traj_diversity(logits)
+    r1 = exp1_inter_traj_diversity(agent, logits)
 
     print("Exp 2: varianza intra-estado …")
     r2 = exp2_intra_state_variance(agent, logits, n_samples_per_state)
 
     print("Exp 3: entropía posterior …")
-    r3 = exp3_posterior_entropy(logits)
+    r3 = exp3_posterior_entropy(agent, logits)
 
     print("Exp 4: peak probability …")
-    r4 = exp4_peak_probability(logits)
+    r4 = exp4_peak_probability(agent, logits)
 
     print("Exp 5: heatmaps de probabilidad …")
-    r5 = exp5_probability_heatmaps(logits, n_show=n_show_heatmaps)
+    r5 = exp5_probability_heatmaps(agent, logits, n_show=n_show_heatmaps)
 
     # ── Consola ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -429,7 +428,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
 if __name__ == "__main__":
     """
     uv run python -m experiments.WM_stochasticity_state \
-        --logdir logdir/text_goal_sample_8x8_goal/01 \
+        --logdir logdir/text_goal_sample_normal_buffer/01 \
         --device cpu \
         --n_traj 200 \
         --traj_len 50 \
@@ -452,6 +451,11 @@ if __name__ == "__main__":
     config        = OmegaConf.load(logdir / ".hydra" / "config.yaml")
     device        = args.device or config.device
     config.device = device
+
+    # Backfill defaults for keys added after this run was trained.
+    if "wm_only" not in config.model:
+        OmegaConf.set_struct(config.model, False)
+        config.model.wm_only = False
 
     # ── Agente ───────────────────────────────────────────────────────────────
     reward_function = make_reward(config)

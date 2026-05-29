@@ -28,6 +28,7 @@ class OnlineTrainer:
         self._should_eval = tools.Every(self.eval_every)
         self._action_repeat = config.action_repeat
         self._goal_sample = config.goal_sample
+        self._wm_only = bool(config.wm_only)
 
         self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
 
@@ -48,8 +49,8 @@ class OnlineTrainer:
         if not indices:
             return None
         promises = [envs.envs[i].encoded_random_mission() for i in indices]
-        missions = np.stack([p() for p in promises])  # (N, L, V)
-        mission_t = torch.as_tensor(missions, dtype=torch.float32, device=agent.device)
+        missions = np.stack([p() for p in promises])  # (N, L) int8 token ids
+        mission_t = torch.as_tensor(missions, device=agent.device)
         logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
         one_hot = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
         goal_shape = envs.observation_space["goal"].shape
@@ -113,7 +114,7 @@ class OnlineTrainer:
             if len(cache) < self.batch_length:
                 cache.append(trans.clone())
             # (B, A)
-            act, agent_state, _ = agent.act(trans, agent_state, eval=True)
+            act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._wm_only)
 
             # TODO: DRY with begin() method
             if self.reward_function:
@@ -224,8 +225,9 @@ class OnlineTrainer:
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
+            # In wm_only mode the actor is bypassed and uniform one-hot actions are used.
             # (B, A)
-            act, agent_state, act_metrics = agent.act(trans.clone(), agent_state, eval=False)
+            act, agent_state, act_metrics = agent.act(trans.clone(), agent_state, eval=False, random=self._wm_only)
             if self.obs_step_prob_log:
                 self.logger.write_step(
                     "rssm/obs_step_sample_log_prob",

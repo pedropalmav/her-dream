@@ -7,28 +7,17 @@ import hydra
 import torch
 
 import tools
-from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
 from trainer import OnlineTrainer
 
 from rewards import make_reward
+from buffers import make_buffer
 
 warnings.filterwarnings("ignore")
 sys.path.append(str(pathlib.Path(__file__).parent))
 # torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision("high")
-
-
-# TODO: move this funciton to buffer module __init__.py
-def make_buffer(config, reward_function):
-    match config.buffer.type:
-        case "her":
-            return HERBuffer(config.buffer, reward_function)
-        case "normal":
-            return Buffer(config.buffer)
-        case _:
-            raise ValueError(f"Tipo de buffer no soportado: {config.buffer.type}")
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="configs")

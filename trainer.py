@@ -295,7 +295,7 @@ class OnlineTrainer:
         """Populate goals[i] for envs where mask[i] is True (typically is_first).
 
         Source is selected by self._goal_sample:
-            - "buffer": sample a past goal uniformly from the replay buffer.
+            - "buffer": sample a past stoch uniformly from the replay buffer.
                         Skipped silently when the buffer is empty.
             - "text":   sample a fresh goal from the live text encoder applied
                         to a random mission produced by each env.
@@ -304,7 +304,7 @@ class OnlineTrainer:
             if self.replay_buffer.count() == 0:
                 return
             data, _, _ = self.replay_buffer.sample()
-            goal_sample = data["goal"]
+            goal_sample = data["stoch"]
             goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
             for i in range(envs.env_num):
                 if mask[i]:

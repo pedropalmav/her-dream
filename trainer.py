@@ -28,6 +28,7 @@ class OnlineTrainer:
         self._should_eval = tools.Every(self.eval_every)
         self._action_repeat = config.action_repeat
         self._goal_sample = config.goal_sample
+        self._goal_type = config.goal_type
         self._wm_only = bool(config.wm_only)
         self._train_text_only = bool(getattr(config, "train_text_only", False))
         # The policy is irrelevant for both world-model pretraining and
@@ -228,7 +229,9 @@ class OnlineTrainer:
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
             # In wm_only / train_text_only mode the actor is bypassed and uniform one-hot actions are used.
             # (B, A)
-            act, agent_state, act_metrics = agent.act(trans.clone(), agent_state, eval=False, random=self._random_actions)
+            act, agent_state, act_metrics = agent.act(
+                trans.clone(), agent_state, eval=False, random=self._random_actions
+            )
             if self.obs_step_prob_log:
                 self.logger.write_step(
                     "rssm/obs_step_sample_log_prob",
@@ -305,6 +308,8 @@ class OnlineTrainer:
                 return
             data, _, _ = self.replay_buffer.sample()
             goal_sample = data["stoch"]
+            if self._goal_type == "first_row":
+                goal_sample = goal_sample[..., 0, :]
             goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
             for i in range(envs.env_num):
                 if mask[i]:

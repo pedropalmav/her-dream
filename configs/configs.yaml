@@ -68,5 +68,6 @@ trainer:
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   goal_sample: ${env.goal_sample}
+  goal_type: ${goal_type}
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}

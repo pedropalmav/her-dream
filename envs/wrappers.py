@@ -169,7 +169,7 @@ class GoalConditioned(gym.Wrapper):
     # TODO: Evolve this method
     def _generate_goal(self):
         if self.goal_type == "first_row":
-            if self.goal_index:
+            if self.goal_index is not None:
                 goal = np.zeros(self.stochastic_classes, dtype=np.float32)
                 goal[self.goal_index] = 1.0
             else:

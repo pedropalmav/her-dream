@@ -305,9 +305,12 @@ class MissionGridWrapper(gym.Wrapper):
     def encoded_random_mission(self):
         return encode_mission(self.env.unwrapped.random_mission())
 
+    def encoded_current_mission(self):
+        return encode_mission(self.env.unwrapped._build_mission())
+
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:
-            obs["mission"] = encode_mission(obs["mission"])
+            obs["mission"] = self.encoded_current_mission()
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal

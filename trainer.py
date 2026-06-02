@@ -119,7 +119,7 @@ class OnlineTrainer:
             if len(cache) < self.batch_length:
                 cache.append(trans.clone())
             # (B, A)
-            act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._wm_only)
+            act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._random_actions)
 
             self._apply_reward(agent_state["stoch"], trans)
             returns += trans["reward"][:, 0] * ~once_done

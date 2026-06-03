@@ -2,6 +2,9 @@ import numpy as np
 from tensordict import TensorDict
 from enum import Enum
 
+import torch
+import torch.nn.functional as F
+
 from .buffer import Buffer
 
 
@@ -124,5 +127,12 @@ class HERBuffer(Buffer):
         transition_indices = (
             ep_start + transition_indices_in_episode
         ) % self.max_columns
-        new_goal = self._buffer[env_indices, transition_indices]["stoch"]
+        new_goal = self._buffer[env_indices, transition_indices]
+        if self.goal_type == "argmax_full":
+            new_goal = new_goal["logit"]
+            K = new_goal.shape[-1]
+            new_goal = torch.argmax(new_goal, dim=-1)
+            new_goal = F.one_hot(new_goal, num_classes=K).float()
+        else:
+            new_goal = new_goal["stoch"]
         return new_goal[:, 0] if self.goal_type == "first_row" else new_goal

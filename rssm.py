@@ -117,8 +117,8 @@ class RSSM(nn.Module):
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action)
         # (B, S, K)
-        stoch, _ = self.prior(deter)
-        return stoch, deter
+        stoch, logit = self.prior(deter)
+        return stoch, deter, logit
 
     def prior(self, deter):
         """Compute prior distribution parameters and sample stoch."""
@@ -134,7 +134,7 @@ class RSSM(nn.Module):
         L = actions.shape[1]
         stochs, deters = [], []
         for i in range(L):
-            stoch, deter = self.img_step(stoch, deter, actions[:, i])
+            stoch, deter, _ = self.img_step(stoch, deter, actions[:, i])
             stochs.append(stoch)
             deters.append(deter)
         # (B, T, S, K), (B, T, D)

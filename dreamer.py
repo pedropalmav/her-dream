@@ -30,6 +30,7 @@ class Dreamer(nn.Module):
         self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
+        self.goal_type = str(config.goal_type)
         self.mission_text = config.mission_text
         self.wm_only = bool(config.wm_only)
         self.freeze_wm = bool(getattr(config, "freeze_wm", False))
@@ -322,8 +323,11 @@ class Dreamer(nn.Module):
             action_dist = self._frozen_actor(policy_input)
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
+        state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
+        if self.goal_type == "argmax_full":
+            state_dict["logit"] = logit
         return action, TensorDict(
-            {"stoch": stoch, "deter": deter, "prev_action": action},
+            state_dict,
             batch_size=state.batch_size,
         ), {"obs_step_sample_log_prob": obs_step_sample_log_prob}
 
@@ -557,14 +561,15 @@ class Dreamer(nn.Module):
         )
         # (B, T, ...) -> (B*T, ...)
         goal = data["goal"].reshape(-1, *data["goal"].shape[2:])
-        imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1, goal)
-        imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
+        imag_feat, imag_action, imag_logit = self._imagine(start, self.imag_horizon + 1, goal)
+        imag_feat, imag_action, imag_logit = imag_feat.detach(), imag_action.detach(), imag_logit.detach()
 
         # (B*T, T_imag, 1)
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
         imag_stoch = get_stoch_from_feat(imag_feat)
-        imag_reward = self.reward_function(imag_stoch, goal)
+        reward_input = imag_logit if self.goal_type == "argmax_full" else imag_stoch
+        imag_reward = self.reward_function(reward_input, goal)
 
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)
@@ -668,6 +673,7 @@ class Dreamer(nn.Module):
         # (B, S, K), (B, D)
         feats = []
         actions = []
+        logits = []
         stoch, deter = start
         for _ in range(imag_horizon):
             # (B, F)
@@ -679,11 +685,12 @@ class Dreamer(nn.Module):
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)
-            stoch, deter = self._frozen_rssm.img_step(stoch, deter, action)
+            stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
+            logits.append(logit)
 
         # Stack along sequence dim T_imag.
-        # (B, T_imag, F), (B, T_imag, A)
-        return torch.stack(feats, dim=1), torch.stack(actions, dim=1)
+        # (B, T_imag, F), (B, T_imag, A), (B, T_imag, S, K)
+        return torch.stack(feats, dim=1), torch.stack(actions, dim=1), torch.stack(logits, dim=1)
 
     @torch.no_grad()
     def _lambda_return(self, last, term, reward, value, boot, disc, lamb):

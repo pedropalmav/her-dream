@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 import tools
 from buffers.her_buffer import HERBuffer
@@ -116,7 +117,10 @@ class OnlineTrainer:
             # (B, A)
             act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._wm_only)
 
-            self._apply_reward(agent_state["stoch"], trans)
+            trans["stoch"] = agent_state["stoch"]
+            if "logit" in agent_state.keys():
+                trans["logit"] = agent_state["logit"]
+            self._apply_reward(trans)
             returns += trans["reward"][:, 0] * ~once_done
 
             for key, value in trans.items():
@@ -241,8 +245,10 @@ class OnlineTrainer:
             trans["deter"] = agent_state["deter"]
             trans["env"] = envs_ids
             trans["episode"] = episode_ids
+            if "logit" in agent_state.keys():
+                trans["logit"] = agent_state["logit"]
 
-            self._apply_reward(trans["stoch"], trans)
+            self._apply_reward(trans)
 
             if "image" in trans:
                 video_cache.append(trans["image"][0])
@@ -276,9 +282,10 @@ class OnlineTrainer:
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
 
-    def _apply_reward(self, stoch, trans):
+    def _apply_reward(self, trans):
         if self.reward_function:
-            trans["reward"] = self.reward_function(stoch, trans["goal"])
+            state = trans["logit"] if "logit" in trans else trans["stoch"]
+            trans["reward"] = self.reward_function(state, trans["goal"])
 
     def _relabel_goal(self, envs, goals, trans):
         # Si es que hay algun valor diferente de 0 en el goals, entonces relabel.
@@ -300,8 +307,13 @@ class OnlineTrainer:
             if self.replay_buffer.count() == 0:
                 return
             data, _, _ = self.replay_buffer.sample()
-            goal_sample = data["stoch"]
-            goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
+            if "logit" in data:
+                raw = data["logit"].reshape(-1, *data["logit"].shape[2:])
+                K = raw.shape[-1]
+                goal_sample = F.one_hot(torch.argmax(raw, dim=-1), num_classes=K).float()
+            else:
+                goal_sample = data["stoch"]
+                goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
             for i in range(envs.env_num):
                 if mask[i]:
                     goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]

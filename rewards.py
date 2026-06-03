@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 
 def make_reward(config):
@@ -9,6 +10,8 @@ def make_reward(config):
             return row_by_row_reward
         case "full":
             return full_goal_reward
+        case "argmax_full":
+            return argmax_full_reward
         case _:
             raise ValueError(f"Tipo de objetivo no soportado: {config.goal_type}")
 
@@ -107,3 +110,19 @@ def full_goal_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         )
 
     return torch.where(matches, torch.tensor(0), torch.tensor(-1))
+
+
+def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+    """
+    Compute reward by comparing the goal against the argmax one-hot of the logits.
+
+    Args:
+        logit (torch.Tensor): Prior logits. Shape (B, S, K) or (B, T, S, K).
+        goal (torch.Tensor): The desired goal state. Shape (S, K) or (B, S, K).
+
+    Returns:
+        torch.Tensor: Reward tensor of shape (B, 1) or (B, T, 1).
+    """
+    K = logit.shape[-1]
+    hard_stoch = F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
+    return full_goal_reward(hard_stoch, goal)

@@ -18,13 +18,12 @@ hydra:
 
 batch_size: 16
 batch_length: 64
-goal_type: full
+goal_type: full # first_row|row_by_row|full|argmax_full
 mission_text: False
 wm_only: False
 freeze_wm: False
 train_text_only: False
 load_from: null
-
 
 env:
   goal_type: ${goal_type}

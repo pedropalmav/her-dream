@@ -10,6 +10,7 @@ rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
 goal_type: ${goal_type}
 wm_only: False
 freeze_wm: False
+train_text_only: False
 
 lr: 4e-5
 agc: 0.3

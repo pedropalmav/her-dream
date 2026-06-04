@@ -22,6 +22,7 @@ goal_type: full # first_row|row_by_row|full|argmax_full
 mission_text: False
 wm_only: False
 freeze_wm: False
+train_text_only: False
 load_from: null
 
 env:
@@ -36,6 +37,7 @@ model:
   mission_text: ${mission_text}
   wm_only: ${wm_only}
   freeze_wm: ${freeze_wm}
+  train_text_only: ${train_text_only}
 
 buffer:
   goal_type: ${goal_type}
@@ -65,4 +67,6 @@ trainer:
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   goal_sample: ${env.goal_sample}
+  goal_type: ${goal_type}
   wm_only: ${wm_only}
+  train_text_only: ${train_text_only}

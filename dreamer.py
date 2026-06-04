@@ -36,6 +36,14 @@ class Dreamer(nn.Module):
         self.freeze_wm = bool(getattr(config, "freeze_wm", False))
         if self.wm_only and self.freeze_wm:
             raise ValueError("wm_only=True and freeze_wm=True are mutually exclusive.")
+        # Text-encoder distillation mode: world model and actor-critic are kept
+        # fixed, and only the text encoder is trained to predict the (frozen)
+        # posterior from the mission text. See distill_text.py.
+        self.train_text_only = bool(getattr(config, "train_text_only", False))
+        if self.train_text_only and (self.wm_only or self.freeze_wm):
+            raise ValueError("train_text_only is exclusive with wm_only and freeze_wm.")
+        if self.train_text_only and not self.mission_text:
+            raise ValueError("train_text_only=True requires mission_text=True.")
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -84,10 +92,10 @@ class Dreamer(nn.Module):
         self._log_grads = bool(config.log_grads)
 
         modules = {}
-        if not self.freeze_wm:
+        if not self.freeze_wm and not self.train_text_only:
             modules["rssm"] = self.rssm
             modules["encoder"] = self.encoder
-        if not self.wm_only:
+        if not self.wm_only and not self.train_text_only:
             modules["actor"] = self.actor
             modules["value"] = self.value
 
@@ -101,12 +109,12 @@ class Dreamer(nn.Module):
             )
             recon = self._loss_scales.pop("recon")
             self._loss_scales.update({k: recon for k in self.decoder.all_keys})
-            if not self.freeze_wm:
+            if not self.freeze_wm and not self.train_text_only:
                 modules.update({"decoder": self.decoder})
         elif self.rep_loss == "r2dreamer" or self.rep_loss == "infonce":
             # add projector for latent to embedding
             self.prj = Projector(self.rssm.feat_size, self.embed_size)
-            if not self.freeze_wm:
+            if not self.freeze_wm and not self.train_text_only:
                 modules.update({"projector": self.prj})
             self.barlow_lambd = float(config.r2dreamer.lambd)
         elif self.rep_loss == "dreamerpro":
@@ -134,7 +142,7 @@ class Dreamer(nn.Module):
             for param in self._ema_obs_proj.parameters():
                 param.requires_grad = False
             self._ema_updates = 0
-            if not self.freeze_wm:
+            if not self.freeze_wm and not self.train_text_only:
                 modules.update({
                     "prototypes": self._prototypes,
                     "obs_proj": self.obs_proj,
@@ -151,7 +159,7 @@ class Dreamer(nn.Module):
                 discrete=self.rssm._discrete,
                 act=config.rssm.act,
             )
-            if not self.wm_only and not self.freeze_wm:
+            if self.train_text_only or (not self.wm_only and not self.freeze_wm):
                 modules["text_encoder"] = self.text_encoder
 
 
@@ -193,6 +201,8 @@ class Dreamer(nn.Module):
         self.clone_and_freeze()
         if self.freeze_wm:
             self._apply_freeze_wm()
+        if self.train_text_only:
+            self._apply_train_text_only()
         if config.compile:
             print("Compiling update function with torch.compile...")
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
@@ -261,6 +271,8 @@ class Dreamer(nn.Module):
         self.clone_and_freeze()
         if self.freeze_wm:
             self._apply_freeze_wm()
+        if self.train_text_only:
+            self._apply_train_text_only()
         return self
 
     def _apply_freeze_wm(self):
@@ -288,6 +300,21 @@ class Dreamer(nn.Module):
         if self.mission_text and hasattr(self, "text_encoder"):
             for param in self.text_encoder.parameters():
                 param.requires_grad_(False)
+
+    def _apply_train_text_only(self):
+        """Freeze everything except the text encoder.
+
+        Distillation mode: the world model and actor-critic stay fixed and only
+        the `TextEncoderGRU` is optimized. Mirrors `_apply_freeze_wm` but also
+        freezes the actor/value and explicitly keeps the text encoder trainable.
+        """
+        self._apply_freeze_wm()  # freezes encoder/rssm/rep modules + text encoder
+        for module in (self.actor, self.value):
+            for param in module.parameters():
+                param.requires_grad_(False)
+        # Re-enable the text encoder, which _apply_freeze_wm just disabled.
+        for param in self.text_encoder.parameters():
+            param.requires_grad_(True)
 
     @torch.no_grad()
     def act(self, obs, state, eval=False, random=False):
@@ -451,14 +478,29 @@ class Dreamer(nn.Module):
         B, T = data.shape
 
         # === World model: posterior rollout and KL losses ===
-        if self.freeze_wm:
+        if self.freeze_wm or self.train_text_only:
             # No grads anywhere through the WM. All representation / KL losses
-            # are skipped — only the actor-critic branch below runs.
+            # are skipped — only the actor-critic branch below runs (freeze_wm),
+            # or only the text encoder is trained (train_text_only).
             with torch.no_grad():
                 embed = self.encoder(data)
                 post_stoch, post_deter, post_logit = self.rssm.observe(
                     embed, data["action"], initial, data["is_first"]
                 )
+            if self.train_text_only:
+                # Distill the text encoder against the frozen WM posterior. The
+                # posterior is a fixed (no-grad) target; gradients flow only into
+                # the text encoder. Imagination and actor-critic are skipped.
+                text_logit = self.text_encoder(data["mission"])  # (B, T, S, K)
+                text_kl = dists.kl(post_logit, text_logit).sum(-1)  # (B, T, S)
+                text_kl = torch.clip(text_kl, min=self.kl_free)
+                losses["text_kl"] = torch.mean(text_kl)
+                metrics["text_kl"] = losses["text_kl"].detach()
+                total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
+                self._scaler.scale(total_loss).backward()
+                metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
+                metrics.update({"opt/loss": total_loss})
+                return (post_stoch, post_deter), metrics
         else:
             # (B, T, E)
             embed = self.encoder(data)

@@ -92,3 +92,47 @@ ts -k {process_id}
       buffer=her seed=1 \
       trainer.steps=500000 trainer.update_log_every=1000
 ```
+
+13. Fase B — Destilar el text encoder sobre el WM congelado. Carga el checkpoint de `wm_only_random_mission/01`, mantiene WM y actor/critic fijos y entrena SOLO el `TextEncoderGRU` contra el posterior congelado (target estacionario). Usa el mismo `env`/`buffer` que la corrida wm_only (item 1.b) para que la distribución de datos coincida; `goal_sample=random` evita usar el text encoder (aún sin entrenar) para muestrear goals. `text_kl=1.0` porque es la única loss:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/distill_text.sh \
+      load_from=./logdir/wm_only_random_mission/01 \
+      logdir=./logdir/distill_text_from_wm_only/01 \
+      mission_text=True \
+      env=fixed_goal env.goal_sample=random buffer=normal \
+      seed=1 trainer.steps=200000 trainer.update_log_every=1000 \
+      model.loss_scales.text_kl=1.0
+```
+
+14. Fase C — Entrenar la política sobre el checkpoint destilado (item 13), con WM y text encoder ya entrenados y AMBOS congelados. `goal_sample=text` muestrea los goals desde el text encoder entrenado en la fase B:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+      load_from=./logdir/distill_text_from_wm_only/01 \
+      logdir=./logdir/post_train_from_distill/01 \
+      freeze_wm=True wm_only=False mission_text=True \
+      env=fixed_goal env.goal_sample=text \
+      buffer=her seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
+```
+
+15. Post-train del checkpoint destilado (item 13) con reward **argmax_full** (doble argmax: moda del estado imaginado vs moda del goal) y HER. Goals muestreados desde el **text encoder** entrenado (`goal_sample=text`); con `goal_type=argmax_full` el goal de texto se toma como `argmax(text_logits)`:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+      load_from=./logdir/distill_text_from_wm_only/01 \
+      logdir=./logdir/post_train_from_distill/02_argmax_text_her \
+      freeze_wm=True wm_only=False mission_text=True \
+      env=fixed_goal env.goal_sample=text \
+      buffer=her goal_type=argmax_full seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
+```
+
+16. Igual que el item 15 pero con goals muestreados desde el **replay buffer** (`goal_sample=buffer`); con `goal_type=argmax_full` el goal se toma como `argmax(data["logit"])`. Reward argmax_full + HER:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+      load_from=./logdir/distill_text_from_wm_only/01 \
+      logdir=./logdir/post_train_from_distill/03_argmax_buffer_her \
+      freeze_wm=True wm_only=False mission_text=True \
+      env=fixed_goal env.goal_sample=buffer \
+      buffer=her goal_type=argmax_full seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
+```

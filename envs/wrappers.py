@@ -169,7 +169,7 @@ class GoalConditioned(gym.Wrapper):
     # TODO: Evolve this method
     def _generate_goal(self):
         if self.goal_type == "first_row":
-            if self.goal_index:
+            if self.goal_index is not None:
                 goal = np.zeros(self.stochastic_classes, dtype=np.float32)
                 goal[self.goal_index] = 1.0
             else:
@@ -305,9 +305,12 @@ class MissionGridWrapper(gym.Wrapper):
     def encoded_random_mission(self):
         return encode_mission(self.env.unwrapped.random_mission())
 
+    def encoded_current_mission(self):
+        return encode_mission(self.env.unwrapped._build_mission())
+
     def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
         if "mission" in obs:
-            obs["mission"] = encode_mission(obs["mission"])
+            obs["mission"] = self.encoded_current_mission()
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal

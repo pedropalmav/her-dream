@@ -21,6 +21,7 @@ class HERBuffer(Buffer):
 
         self.reward_function = reward_function
         self.goal_type = config.goal_type
+        self.rssm = None
         self.her_ratio = float(config.her_ratio)
         self.her_strategy = HERStrategy[config.her_strategy.upper()]
 
@@ -100,7 +101,10 @@ class HERBuffer(Buffer):
             new_goal = self._sample_goal(envs[batch_idx], steps[batch_idx])
             sample_td["goal"][batch_idx] = new_goal
 
-            achieved = sample_td["stoch"][batch_idx]
+            if self.goal_type == "log_prob" and self.rssm is not None:
+                achieved = self.rssm.get_dist(sample_td["logit"][batch_idx])
+            else:
+                achieved = sample_td["stoch"][batch_idx]
             desired = new_goal.to(self.device)
             new_reward = self.reward_function(achieved, desired)
             sample_td["reward"][batch_idx] = new_reward
@@ -128,7 +132,7 @@ class HERBuffer(Buffer):
             ep_start + transition_indices_in_episode
         ) % self.max_columns
         new_goal = self._buffer[env_indices, transition_indices]
-        if self.goal_type == "argmax_full":
+        if self.goal_type in ("argmax_full", "log_prob"):
             new_goal = new_goal["logit"]
             K = new_goal.shape[-1]
             new_goal = torch.argmax(new_goal, dim=-1)

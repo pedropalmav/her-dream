@@ -50,12 +50,8 @@ def main(config):
     replay_buffer = make_buffer(config, reward_function)
 
     print("Simulate agent.")
-    agent = Dreamer(
-        config.model,
-        obs_space,
-        act_space,
-        reward_function=reward_function,
-    ).to(config.device)
+    agent = Dreamer(config.model, obs_space, act_space, reward_function=reward_function).to(config.device)
+    replay_buffer.rssm = agent.rssm
 
     policy_trainer = OnlineTrainer(
         config.trainer,

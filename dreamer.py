@@ -79,8 +79,18 @@ class Dreamer(nn.Module):
 
         # Actor-critic components
         goal_shape = self.rssm._discrete if config.goal_type == "first_row" else self.rssm.flat_stoch
-        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape)
-        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape)
+        threshold_bins = (
+            int(round(1.0 / config.prob_threshold_step)) + 1
+            if config.goal_type == "log_prob" else 0
+        )
+        self.threshold_bins = threshold_bins
+        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape + threshold_bins)
+        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape + threshold_bins)
+        if threshold_bins > 0:
+            idx = int(round(config.prob_threshold / config.prob_threshold_step))
+            t_oh = torch.zeros(threshold_bins)
+            t_oh[idx] = 1.0
+            self.register_buffer("threshold_onehot", t_oh)  # shape (threshold_bins,)
         self.slow_target_update = int(config.slow_target_update)
         self.slow_target_fraction = float(config.slow_target_fraction)
         self._slow_value = copy.deepcopy(self.value)
@@ -347,11 +357,14 @@ class Dreamer(nn.Module):
             # (B, F)
             goal = obs["goal"].reshape(feat.shape[0], -1)
             policy_input = torch.cat([feat, goal], dim=-1)
+            if self.threshold_bins > 0:
+                t = self.threshold_onehot.expand(feat.shape[0], -1)
+                policy_input = torch.cat([policy_input, t], dim=-1)
             action_dist = self._frozen_actor(policy_input)
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
-        if self.goal_type == "argmax_full":
+        if self.goal_type in ("argmax_full", "log_prob"):
             state_dict["logit"] = logit
         return action, TensorDict(
             state_dict,
@@ -610,7 +623,12 @@ class Dreamer(nn.Module):
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
         imag_stoch = get_stoch_from_feat(imag_feat)
-        reward_input = imag_logit if self.goal_type == "argmax_full" else imag_stoch
+        if self.goal_type == "log_prob":
+            reward_input = self.rssm.get_dist(imag_logit)
+        elif self.goal_type == "argmax_full":
+            reward_input = imag_logit
+        else:
+            reward_input = imag_stoch
         imag_reward = self.reward_function(reward_input, goal)
 
         # (B*T, T_imag, 1)  probability of continuation
@@ -626,6 +644,10 @@ class Dreamer(nn.Module):
         )
         imag_goal = imag_goal.reshape(imag_goal.shape[0], imag_goal.shape[1], -1)
         imag_input = torch.cat([imag_feat, imag_goal], dim=-1)
+        if self.threshold_bins > 0:
+            B2, Ti = imag_input.shape[:2]
+            t = self.threshold_onehot.expand(B2, Ti, -1)
+            imag_input = torch.cat([imag_input, t], dim=-1)
         imag_value = self._frozen_value(imag_input).mode
         imag_slow_value = self._frozen_slow_value(imag_input).mode
         disc = 1 - 1 / self.horizon
@@ -682,6 +704,10 @@ class Dreamer(nn.Module):
         boot = ret[:, 0].reshape(B, T, 1)
         goal = data["goal"].reshape(feat.shape[0], feat.shape[1], -1)
         value_input = torch.cat([feat, goal], dim=-1)
+        if self.threshold_bins > 0:
+            B2, T2 = value_input.shape[:2]
+            t = self.threshold_onehot.expand(B2, T2, -1)
+            value_input = torch.cat([value_input, t], dim=-1)
         value = self._frozen_value(value_input).mode
         slow_value = self._frozen_slow_value(value_input).mode
         disc = 1 - 1 / self.horizon
@@ -723,6 +749,9 @@ class Dreamer(nn.Module):
             # (B, A)
             goal = goal.reshape(feat.shape[0], -1)
             policy_input = torch.cat([feat, goal], dim=-1)
+            if self.threshold_bins > 0:
+                t = self.threshold_onehot.expand(feat.shape[0], -1)
+                policy_input = torch.cat([policy_input, t], dim=-1)
             action = self._frozen_actor(policy_input).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)

@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -12,6 +14,9 @@ def make_reward(config):
             return full_goal_reward
         case "argmax_full":
             return argmax_full_reward
+        case "log_prob":
+            log_threshold = math.log(config.prob_threshold)
+            return lambda dist, goal: log_prob_reward(dist, goal, log_threshold)
         case _:
             raise ValueError(f"Tipo de objetivo no soportado: {config.goal_type}")
 
@@ -110,6 +115,23 @@ def full_goal_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         )
 
     return torch.where(matches, torch.tensor(0), torch.tensor(-1))
+
+
+def log_prob_reward(dist, goal: torch.Tensor, log_threshold: float) -> torch.Tensor:
+    """
+    Args:
+        dist: Independent(OneHotCategorical(...), 1) built from RSSM logits
+        goal: (S, K) or (B, S, K) — one-hot goal
+        log_threshold: log of the probability threshold
+    Returns:
+        Reward tensor (B, 1) or (B, T, 1): 0 if log_prob >= log_threshold, else -1.
+    """
+    if dist.base_dist.logits.dim() == 4:  # (B, T, S, K) case
+        goal = goal.unsqueeze(1).expand_as(dist.base_dist.logits)
+    total_log_prob = dist.log_prob(goal).unsqueeze(-1)
+    return torch.where(
+        total_log_prob >= log_threshold, torch.tensor(0), torch.tensor(-1)
+    )
 
 
 def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:

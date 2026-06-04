@@ -114,3 +114,25 @@ ts -k {process_id}
       buffer=her seed=1 \
       trainer.steps=500000 trainer.update_log_every=1000
 ```
+
+15. Post-train del checkpoint destilado (item 13) con reward **argmax_full** (doble argmax: moda del estado imaginado vs moda del goal) y HER. Goals muestreados desde el **text encoder** entrenado (`goal_sample=text`); con `goal_type=argmax_full` el goal de texto se toma como `argmax(text_logits)`:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+      load_from=./logdir/distill_text_from_wm_only/01 \
+      logdir=./logdir/post_train_from_distill/02_argmax_text_her \
+      freeze_wm=True wm_only=False mission_text=True \
+      env=fixed_goal env.goal_sample=text \
+      buffer=her goal_type=argmax_full seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
+```
+
+16. Igual que el item 15 pero con goals muestreados desde el **replay buffer** (`goal_sample=buffer`); con `goal_type=argmax_full` el goal se toma como `argmax(data["logit"])`. Reward argmax_full + HER:
+```bash
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+      load_from=./logdir/distill_text_from_wm_only/01 \
+      logdir=./logdir/post_train_from_distill/03_argmax_buffer_her \
+      freeze_wm=True wm_only=False mission_text=True \
+      env=fixed_goal env.goal_sample=buffer \
+      buffer=her goal_type=argmax_full seed=1 \
+      trainer.steps=500000 trainer.update_log_every=1000
+```

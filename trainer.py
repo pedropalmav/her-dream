@@ -131,7 +131,7 @@ class OnlineTrainer:
             trans["stoch"] = agent_state["stoch"]
             if "logit" in agent_state.keys():
                 trans["logit"] = agent_state["logit"]
-            self._apply_reward(trans)
+            self._apply_reward(trans, agent.rssm)
             returns += trans["reward"][:, 0] * ~once_done
 
             for key, value in trans.items():
@@ -261,7 +261,7 @@ class OnlineTrainer:
             if "logit" in agent_state.keys():
                 trans["logit"] = agent_state["logit"]
 
-            self._apply_reward(trans)
+            self._apply_reward(trans, agent.rssm)
 
             if "image" in trans:
                 video_cache.append(trans["image"][0])
@@ -295,9 +295,12 @@ class OnlineTrainer:
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
 
-    def _apply_reward(self, trans):
+    def _apply_reward(self, trans, rssm=None):
         if self.reward_function:
-            state = trans["logit"] if "logit" in trans else trans["stoch"]
+            if self._goal_type == "log_prob" and rssm is not None:
+                state = rssm.get_dist(trans["logit"])
+            else:
+                state = trans["logit"] if "logit" in trans else trans["stoch"]
             trans["reward"] = self.reward_function(state, trans["goal"])
 
     def _relabel_goal(self, envs, goals, trans):

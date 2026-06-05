@@ -130,3 +130,5 @@ dmypy.json
 # IDE
 .vscode
 .clinerules
+bitacora_nano/
+.DS_Store

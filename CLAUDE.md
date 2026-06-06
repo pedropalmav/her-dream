@@ -39,9 +39,9 @@ This branch only adds two commits on top of the fork point, and **neither touche
   (deps only; torch stays `==2.8.0`).
 - `6fd5ee5` — removes the hardcoded `stochastic_classes` line in `train.py` (see below).
 
-So `dreamer.py` here is **byte-identical to the pre-fork `330ea03`**. Any crash in the
-model code is inherited from that original world model, **not** introduced by a commit on
-this branch.
+So `dreamer.py` here is the pre-fork `330ea03` code, differing **only** by the
+`.mode()` → `.mode` property fix (see gotcha #2). Any crash in the model code is inherited
+from that original world model, **not** introduced by a commit on this branch.
 
 An alternative strategy to reach the same "vanilla Crafter" goal — adding a
 `goal_conditioned` flag on top of `main` and restoring the heads from `10f4afc` — is
@@ -58,31 +58,25 @@ takes the *other* route: fork the original vanilla WM directly.
    `random_goal`. The line was simply removed (Crafter is vanilla and needs no goal).
    If you ever need to add a key to a struct config, use `with open_dict(config.env): ...`.
 
-2. **`TypeError: 'Tensor' object is not callable` at `self._frozen_reward(imag_feat)`**
-   inside `_cal_grad`. **Root cause: `torch.compile` mis-resolves the `deepcopy`'d frozen
-   submodules.** `_cal_grad` is wrapped in `torch.compile(mode="reduce-overhead")`. The
-   `_frozen_*` modules are created in `clone_and_freeze` via `copy.deepcopy` with shared
-   `.data`, and `clone_and_freeze` is called again inside `.to()` (i.e. *after* compile).
-   Dynamo represents those frozen attributes as a Tensor, so calling them raises
-   "'Tensor' object is not callable". The **live** modules (`self.reward`, etc.),
-   registered in `__init__` before compile, trace fine — which is why `self.reward(feat)`
-   in the WM loss never fails. This whole frozen-module pattern was **removed in `main`**.
+2. **`TypeError: 'Tensor' object is not callable` at `...mode()`** inside `_cal_grad`.
+   **Root cause: a property called like a method in the original fork.** In
+   `distributions/distributions.py`, every distribution defines `mode` (and `mean`) as a
+   `@property` returning a `torch.Tensor`. But the pre-fork `dreamer.py` calls it as
+   `.mode()` (with parens) on several lines (imagination/replay targets, decoder preds),
+   so `dist.mode` yields a Tensor and the trailing `()` tries to **call the Tensor**. Read
+   the traceback carets carefully: they span `...().mode` (not the final `()`), i.e. the
+   object being called is `.mode`, a Tensor.
 
-   > Note: an earlier guess blamed a graph break from the boolean-mask indexing
-   > `c[off_diag_mask]` in the `r2dreamer` branch. That break was real and was removed
-   > (replaced by `c.pow(2).sum() - torch.diagonal(c).pow(2).sum()`), but the crash
-   > **persisted without it** — so the graph break was not the cause.
+   This fails in **eager too** — it is not a `torch.compile` / dynamo / Python-3.12 / frozen-
+   module problem (those were earlier wrong guesses). The fork is simply internally
+   inconsistent: line 265 already uses `action_dist.mode` and line 453 uses `.mean`
+   (no parens, correct), while the imagination/replay/decoder lines use `.mode()` (broken).
+   `main` has the correct `.mode` everywhere — the project fixed this after the fork.
 
-   Fix applied: in the imagination/replay target computations, call the **live** heads
-   (`self.reward`/`self.cont`/`self.value`/`self._slow_value`) instead of the `_frozen_*`
-   copies. Value- and gradient-equivalent here, since `imag_feat` is already detached, all
-   those outputs only feed `.detach()`'d quantities, and frozen params share `.data` with
-   the live ones. Fallbacks if anything still misbehaves under compile:
-   - `model.compile=false` (slower, but bypasses dynamo entirely).
-   - **Use Python 3.11, not 3.12.** The project is documented/locked for 3.11 (`main`'s
-     CLAUDE.md; `uv.lock` is cp311), but the training box runs **3.12.3** — a likely
-     amplifier of dynamo issues. Note also API drift: this branch uses `.mode()` (method),
-     `main` uses `.mode` (property).
+   Fix applied: `.mode()` → `.mode` (the only change vs the pre-fork `dreamer.py`).
+   Frozen modules and the `r2dreamer` boolean-mask are left exactly as in the original.
+   (Optional, unrelated to this crash: `model.compile=false` disables torch.compile, and
+   the project is documented/locked for Python 3.11 though it currently runs on 3.12.3.)
 
 ## Commands
 

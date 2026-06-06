@@ -295,14 +295,14 @@ class Dreamer(nn.Module):
             tuple(val[:B] for val in initial),
             data["is_first"][:B, :5],
         )
-        recon = self.decoder(post_stoch, post_deter)["image"].mode()[:B]
+        recon = self.decoder(post_stoch, post_deter)["image"].mode[:B]
         init_stoch, init_deter = post_stoch[:, -1], post_deter[:, -1]
         prior_stoch, prior_deter = self.rssm.imagine_with_action(
             init_stoch,
             init_deter,
             data["action"][:B, 5:],
         )
-        openl = self.decoder(prior_stoch, prior_deter)["image"].mode()
+        openl = self.decoder(prior_stoch, prior_deter)["image"].mode
         model = torch.cat([recon[:, :5], openl], 1)
         truth = data["image"][:B]
         error = (model - truth + 1.0) / 2.0
@@ -396,10 +396,8 @@ class Dreamer(nn.Module):
 
             c = torch.mm(x1_norm.T, x2_norm) / (B * T)
             invariance_loss = (torch.diagonal(c) - 1.0).pow(2).sum()
-            # Sum of squared off-diagonal entries, written without boolean-mask
-            # indexing so torch.compile does not graph-break on a data-dependent
-            # shape: sum(off-diag^2) = sum(all^2) - sum(diag^2).
-            redundancy_loss = c.pow(2).sum() - torch.diagonal(c).pow(2).sum()
+            off_diag_mask = ~torch.eye(x1.shape[-1], dtype=torch.bool, device=x1.device)
+            redundancy_loss = c[off_diag_mask].pow(2).sum()
             losses["barlow"] = invariance_loss + self.barlow_lambd * redundancy_loss
         elif self.rep_loss == "infonce":
             # Contrastive (InfoNCE) objective between projected latent features and encoder embeddings.
@@ -449,19 +447,13 @@ class Dreamer(nn.Module):
         imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
 
-        # Use the live heads (not the _frozen_* deepcopies) as imagination targets.
-        # torch.compile/dynamo mis-resolves the deepcopy'd frozen submodules to a
-        # Tensor ("'Tensor' object is not callable"); the live modules trace fine.
-        # This is value- and gradient-equivalent here: imag_feat is already
-        # detached, all of these outputs only feed .detach()'d quantities below,
-        # and the frozen params share .data with the live ones.
         # (B*T, T_imag, 1)
-        imag_reward = self.reward(imag_feat).mode()
+        imag_reward = self._frozen_reward(imag_feat).mode
         # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = self.cont(imag_feat).mean
+        imag_cont = self._frozen_cont(imag_feat).mean
         # (B*T, T_imag, 1)
-        imag_value = self.value(imag_feat).mode()
-        imag_slow_value = self._slow_value(imag_feat).mode()
+        imag_value = self._frozen_value(imag_feat).mode
+        imag_slow_value = self._frozen_slow_value(imag_feat).mode
         disc = 1 - 1 / self.horizon
         # (B*T, T_imag, 1)
         weight = torch.cumprod(imag_cont * disc, dim=1)
@@ -513,10 +505,8 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter)
         boot = ret[:, 0].reshape(B, T, 1)
-        # Live heads instead of _frozen_* (see imagination block above); outputs
-        # are .detach()'d before use, so this is equivalent and dynamo-safe.
-        value = self.value(feat).mode()
-        slow_value = self._slow_value(feat).mode()
+        value = self._frozen_value(feat).mode
+        slow_value = self._frozen_slow_value(feat).mode
         disc = 1 - 1 / self.horizon
         weight = 1.0 - last
         ret = self._lambda_return(last, term, reward, value, boot, disc, self.lamb)

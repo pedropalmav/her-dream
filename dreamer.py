@@ -396,8 +396,10 @@ class Dreamer(nn.Module):
 
             c = torch.mm(x1_norm.T, x2_norm) / (B * T)
             invariance_loss = (torch.diagonal(c) - 1.0).pow(2).sum()
-            off_diag_mask = ~torch.eye(x1.shape[-1], dtype=torch.bool, device=x1.device)
-            redundancy_loss = c[off_diag_mask].pow(2).sum()
+            # Sum of squared off-diagonal entries, written without boolean-mask
+            # indexing so torch.compile does not graph-break on a data-dependent
+            # shape: sum(off-diag^2) = sum(all^2) - sum(diag^2).
+            redundancy_loss = c.pow(2).sum() - torch.diagonal(c).pow(2).sum()
             losses["barlow"] = invariance_loss + self.barlow_lambd * redundancy_loss
         elif self.rep_loss == "infonce":
             # Contrastive (InfoNCE) objective between projected latent features and encoder embeddings.

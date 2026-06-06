@@ -449,13 +449,19 @@ class Dreamer(nn.Module):
         imag_feat, imag_action = self._imagine(start, self.imag_horizon + 1)
         imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
 
+        # Use the live heads (not the _frozen_* deepcopies) as imagination targets.
+        # torch.compile/dynamo mis-resolves the deepcopy'd frozen submodules to a
+        # Tensor ("'Tensor' object is not callable"); the live modules trace fine.
+        # This is value- and gradient-equivalent here: imag_feat is already
+        # detached, all of these outputs only feed .detach()'d quantities below,
+        # and the frozen params share .data with the live ones.
         # (B*T, T_imag, 1)
-        imag_reward = self._frozen_reward(imag_feat).mode()
+        imag_reward = self.reward(imag_feat).mode()
         # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = self._frozen_cont(imag_feat).mean
+        imag_cont = self.cont(imag_feat).mean
         # (B*T, T_imag, 1)
-        imag_value = self._frozen_value(imag_feat).mode()
-        imag_slow_value = self._frozen_slow_value(imag_feat).mode()
+        imag_value = self.value(imag_feat).mode()
+        imag_slow_value = self._slow_value(imag_feat).mode()
         disc = 1 - 1 / self.horizon
         # (B*T, T_imag, 1)
         weight = torch.cumprod(imag_cont * disc, dim=1)
@@ -507,8 +513,10 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter)
         boot = ret[:, 0].reshape(B, T, 1)
-        value = self._frozen_value(feat).mode()
-        slow_value = self._frozen_slow_value(feat).mode()
+        # Live heads instead of _frozen_* (see imagination block above); outputs
+        # are .detach()'d before use, so this is equivalent and dynamo-safe.
+        value = self.value(feat).mode()
+        slow_value = self._slow_value(feat).mode()
         disc = 1 - 1 / self.horizon
         weight = 1.0 - last
         ret = self._lambda_return(last, term, reward, value, boot, disc, self.lamb)

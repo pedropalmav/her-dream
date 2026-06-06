@@ -59,25 +59,30 @@ takes the *other* route: fork the original vanilla WM directly.
    If you ever need to add a key to a struct config, use `with open_dict(config.env): ...`.
 
 2. **`TypeError: 'Tensor' object is not callable` at `self._frozen_reward(imag_feat)`**
-   inside `_cal_grad`. Root cause: `_cal_grad` is wrapped in
-   `torch.compile(mode="reduce-overhead")`, and the `r2dreamer` representation branch does
-   boolean-mask indexing `c[off_diag_mask]` (data-dependent shape → **graph break** →
-   `torch_dynamo_resume_in__cal_grad_at_400`). In the resumed region, calls to the
-   `deepcopy`'d frozen submodules (`_frozen_reward`/`_frozen_cont`/`_frozen_value`) get
-   mis-handled and resolve to a Tensor. This pattern was **abandoned in `main`**
-   (`_frozen_reward` no longer exists there), which is why `main` doesn't hit it.
-   Workarounds, in order of preference:
-   - Avoid the graph break: replace
-     `c[off_diag_mask].pow(2).sum()` with
-     `c.pow(2).sum() - torch.diagonal(c).pow(2).sum()` (mathematically identical, no
-     boolean indexing). Already applied in the working tree.
-   - If it still fails, run with `model.compile=false` to confirm it is a
-     `torch.compile` issue and as a fallback.
-   - **Use Python 3.11, not 3.12.** The project is documented/locked for Python 3.11
-     (`main`'s CLAUDE.md says so; `uv.lock` is cp311). The current `.venv` and
-     `uv run python` on the training box are **3.12.3**, and dynamo graph-break/resume
-     handling is the most likely environment-specific trigger here. Note also stale API
-     drift: this branch calls `.mode()` (method) while `main` uses `.mode` (property).
+   inside `_cal_grad`. **Root cause: `torch.compile` mis-resolves the `deepcopy`'d frozen
+   submodules.** `_cal_grad` is wrapped in `torch.compile(mode="reduce-overhead")`. The
+   `_frozen_*` modules are created in `clone_and_freeze` via `copy.deepcopy` with shared
+   `.data`, and `clone_and_freeze` is called again inside `.to()` (i.e. *after* compile).
+   Dynamo represents those frozen attributes as a Tensor, so calling them raises
+   "'Tensor' object is not callable". The **live** modules (`self.reward`, etc.),
+   registered in `__init__` before compile, trace fine — which is why `self.reward(feat)`
+   in the WM loss never fails. This whole frozen-module pattern was **removed in `main`**.
+
+   > Note: an earlier guess blamed a graph break from the boolean-mask indexing
+   > `c[off_diag_mask]` in the `r2dreamer` branch. That break was real and was removed
+   > (replaced by `c.pow(2).sum() - torch.diagonal(c).pow(2).sum()`), but the crash
+   > **persisted without it** — so the graph break was not the cause.
+
+   Fix applied: in the imagination/replay target computations, call the **live** heads
+   (`self.reward`/`self.cont`/`self.value`/`self._slow_value`) instead of the `_frozen_*`
+   copies. Value- and gradient-equivalent here, since `imag_feat` is already detached, all
+   those outputs only feed `.detach()`'d quantities, and frozen params share `.data` with
+   the live ones. Fallbacks if anything still misbehaves under compile:
+   - `model.compile=false` (slower, but bypasses dynamo entirely).
+   - **Use Python 3.11, not 3.12.** The project is documented/locked for 3.11 (`main`'s
+     CLAUDE.md; `uv.lock` is cp311), but the training box runs **3.12.3** — a likely
+     amplifier of dynamo issues. Note also API drift: this branch uses `.mode()` (method),
+     `main` uses `.mode` (property).
 
 ## Commands
 

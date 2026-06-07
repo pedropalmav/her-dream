@@ -30,9 +30,8 @@ import tools
 from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
-from trainer import OnlineTrainer
-
 from rewards import make_reward
+from trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
 sys.path.append(str(pathlib.Path(__file__).parent))
@@ -81,9 +80,7 @@ def main(config):
     logger.log_hydra_config(config)
 
     if config.env.goal_sample == "text":
-        assert config.mission_text, (
-            "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
-        )
+        assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
 
     print("Create envs.")
     train_envs, eval_envs, obs_space, act_space = make_envs(config.env)

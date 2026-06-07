@@ -1,9 +1,9 @@
-import numpy as np
-from tensordict import TensorDict
 from enum import Enum
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from tensordict import TensorDict
 
 from .buffer import Buffer
 
@@ -15,7 +15,6 @@ class HERStrategy(Enum):
 
 
 class HERBuffer(Buffer):
-
     def __init__(self, config, reward_function):
         super().__init__(config)
 
@@ -87,8 +86,7 @@ class HERBuffer(Buffer):
     def _get_valid_batches(self, envs, steps):
         is_valid = self.ep_length > 0
         envs, steps = envs.numpy(), steps.numpy()
-        valid_batches = is_valid[envs, steps].all(axis=1)
-        return valid_batches
+        return is_valid[envs, steps].all(axis=1)
 
     def _apply_her(
         self,
@@ -117,20 +115,14 @@ class HERBuffer(Buffer):
             case HERStrategy.FINAL:
                 transition_indices_in_episode = ep_length - 1
             case HERStrategy.FUTURE:
-                current_indices_in_episode = (
-                    step_indices - ep_start
-                ) % self.max_columns
-                transition_indices_in_episode = np.random.randint(
-                    current_indices_in_episode, ep_length
-                )
+                current_indices_in_episode = (step_indices - ep_start) % self.max_columns
+                transition_indices_in_episode = np.random.randint(current_indices_in_episode, ep_length)
             case HERStrategy.EPISODE:
                 transition_indices_in_episode = np.random.randint(0, ep_length)
             case _:
                 raise ValueError(f"Invalid HER strategy: {self.her_strategy}")
 
-        transition_indices = (
-            ep_start + transition_indices_in_episode
-        ) % self.max_columns
+        transition_indices = (ep_start + transition_indices_in_episode) % self.max_columns
         new_goal = self._buffer[env_indices, transition_indices]
         if self.goal_type in ("argmax_full", "log_prob"):
             new_goal = new_goal["logit"]

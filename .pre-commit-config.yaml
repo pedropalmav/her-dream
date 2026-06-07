@@ -12,7 +12,7 @@ repos:
       - id: check-symlinks
       - id: destroyed-symlinks
       - id: check-added-large-files
-        args: ["--maxkb=2000"]  # restrict files more than 2 MB. Should use git-lfs instead.
+        args: ["--maxkb=2000"] # restrict files more than 2 MB. Should use git-lfs instead.
       - id: check-yaml
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -22,14 +22,6 @@ repos:
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
       - id: debug-statements
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.2.6
-    hooks:
-      - id: codespell
-        args: ["--ignore-words-list", "reacher,interm"]
-        additional_dependencies:
-        - tomli
-        exclude: "CONTRIBUTORS.md"
   - repo: https://github.com/pre-commit/pygrep-hooks
     rev: v1.10.0
     hooks:

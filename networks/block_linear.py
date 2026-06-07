@@ -18,11 +18,7 @@ class BlockLinear(nn.Module):
 
         # Store weight in a layout that works with torch's fan calculation.
         # (O/G, I/G, G)
-        self.weight = nn.Parameter(
-            torch.empty(
-                self.out_ch // self.blocks, self.in_ch // self.blocks, self.blocks
-            )
-        )
+        self.weight = nn.Parameter(torch.empty(self.out_ch // self.blocks, self.in_ch // self.blocks, self.blocks))
         self.bias = nn.Parameter(torch.empty(self.out_ch))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

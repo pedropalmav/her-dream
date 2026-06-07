@@ -26,22 +26,17 @@ def goal_from_random_mission(text_encoder, env_size, device, B, deterministic=Fa
         goal: (B, K) float32 one-hot tensor.
     """
     # (B, L) int8 token ids
-    missions = np.stack([
-        encode_mission(RandomGoal.random_mission(env_size, rng)) for _ in range(B)
-    ])
+    missions = np.stack([encode_mission(RandomGoal.random_mission(env_size, rng)) for _ in range(B)])
     mission_t = torch.as_tensor(missions, device=device)
-    mission_t = mission_t.unsqueeze(1)              # (B, 1, L)
+    mission_t = mission_t.unsqueeze(1)  # (B, 1, L)
 
-    logits = text_encoder(mission_t)                # (B, 1, S, K)
-    first_group = logits[:, 0, 0, :]               # (B, K)
+    logits = text_encoder(mission_t)  # (B, 1, S, K)
+    first_group = logits[:, 0, 0, :]  # (B, K)
     K = first_group.shape[-1]
 
-    if deterministic:
-        idx = first_group.argmax(-1)
-    else:
-        idx = torch.distributions.Categorical(logits=first_group).sample()
+    idx = first_group.argmax(-1) if deterministic else torch.distributions.Categorical(logits=first_group).sample()
 
-    return F.one_hot(idx, K).float()               # (B, K)
+    return F.one_hot(idx, K).float()  # (B, K)
 
 
 def run_eval(agent, eval_envs, device, K, env_size, deterministic):
@@ -68,14 +63,10 @@ def run_eval(agent, eval_envs, device, K, env_size, deterministic):
         done = done_cpu.to(device)
 
         # At episode start, compute goal from a freshly sampled random mission
-        is_first = trans["is_first"][:, 0].bool()   # (B,)
+        is_first = trans["is_first"][:, 0].bool()  # (B,)
         if is_first.any():
-            new_goals = goal_from_random_mission(
-                agent.text_encoder, env_size, device, B, deterministic, rng
-            )
-            current_goals = torch.where(
-                is_first.unsqueeze(-1), new_goals, current_goals
-            )
+            new_goals = goal_from_random_mission(agent.text_encoder, env_size, device, B, deterministic, rng)
+            current_goals = torch.where(is_first.unsqueeze(-1), new_goals, current_goals)
 
         # Override the environment's random goal with the text-encoder goal
         trans["goal"] = current_goals
@@ -95,13 +86,16 @@ def run_eval(agent, eval_envs, device, K, env_size, deterministic):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--logdir", type=str, required=True,
+        "--logdir",
+        type=str,
+        required=True,
         help="Checkpoint directory (must contain latest.pt and .hydra/config.yaml)",
     )
     parser.add_argument("--device", type=str, default=None, help="Override device (e.g. cpu, cuda:0)")
     parser.add_argument("--episodes", type=int, default=10, help="Number of eval episodes")
     parser.add_argument(
-        "--deterministic", action="store_true",
+        "--deterministic",
+        action="store_true",
         help="Use argmax instead of sampling from the text encoder distribution",
     )
     args = parser.parse_args()
@@ -144,5 +138,5 @@ def main():
 
 if __name__ == "__main__":
     # python3 eval_text_goal.py --logdir logdir/goal_dreamer_with_text/04 --episodes 10 --device cpu
-    # python3 eval_text_goal.py --logdir logdir/goal_dreamer_with_text/04 --episodes 10 --device cpu --deterministic 
+    # python3 eval_text_goal.py --logdir logdir/goal_dreamer_with_text/04 --episodes 10 --device cpu --deterministic
     main()

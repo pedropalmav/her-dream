@@ -12,8 +12,8 @@ import io
 import pathlib
 
 import numpy as np
-import torch
 import plotly.graph_objects as go
+import torch
 from dash import html
 from gymnasium.utils import seeding
 from omegaconf import OmegaConf
@@ -22,12 +22,11 @@ from dreamer import Dreamer
 from envs import make_env, make_envs
 from rewards import make_reward
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Acción constants
 # ─────────────────────────────────────────────────────────────────────────────
-ACT_LEFT    = 0
-ACT_RIGHT   = 1
+ACT_LEFT = 0
+ACT_RIGHT = 1
 ACT_FORWARD = 2
 
 ACT_NAMES = {
@@ -66,6 +65,7 @@ ACT_COLORS = {
 # Helpers obs / imagen
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _preprocess_obs(obs: dict, device: str) -> dict:
     out = {}
     for k, v in obs.items():
@@ -89,13 +89,16 @@ def _arr_to_b64(arr: np.ndarray) -> str:
     """numpy uint8 H×W×3 → data URI PNG (PIL si disponible, si no matplotlib)."""
     try:
         from PIL import Image
+
         img = Image.fromarray(arr.astype(np.uint8))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
     except ImportError:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots(figsize=(2, 2), dpi=64)
         ax.imshow(arr.astype(np.uint8))
         ax.axis("off")
@@ -109,6 +112,7 @@ def _arr_to_b64(arr: np.ndarray) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Correr trayectoria y guardar todos los pasos
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def run_trajectory(
@@ -145,12 +149,12 @@ def run_trajectory(
 
     n_act = env.action_space.shape[0]
     stoch, deter = agent.rssm.initial(1)
-    prev_action  = torch.zeros(1, n_act, device=device)
+    prev_action = torch.zeros(1, n_act, device=device)
 
     probs_all: list = []
-    zs_all:     list = []
-    imgs_all:   list = []
-    act_all:    list = []
+    zs_all: list = []
+    imgs_all: list = []
+    act_all: list = []
     ended = False
 
     def _record(s, probs, img_arr, action):
@@ -163,7 +167,10 @@ def run_trajectory(
     obs_t = _preprocess_obs(obs, device)
     embed = agent.encoder(obs_t)
     stoch, deter, logit = agent.rssm.obs_step(
-        stoch, deter, prev_action, embed,
+        stoch,
+        deter,
+        prev_action,
+        embed,
         torch.tensor([True], dtype=torch.bool, device=device),
     )
     probs = agent.rssm.get_dist(logit).base_dist.probs
@@ -177,7 +184,10 @@ def run_trajectory(
         obs_t = _preprocess_obs(obs, device)
         embed = agent.encoder(obs_t)
         stoch, deter, logit = agent.rssm.obs_step(
-            stoch, deter, prev_action, embed,
+            stoch,
+            deter,
+            prev_action,
+            embed,
             torch.tensor([False], dtype=torch.bool, device=device),
         )
         probs = agent.rssm.get_dist(logit).base_dist.probs
@@ -189,12 +199,12 @@ def run_trajectory(
             break
 
     return {
-        "probs":   probs_all,
-        "zs":      zs_all,
-        "images":  imgs_all,
+        "probs": probs_all,
+        "zs": zs_all,
+        "images": imgs_all,
         "actions": act_all,
-        "done":    ended,
-        "T":       len(act_all) - 1,
+        "done": ended,
+        "T": len(act_all) - 1,
     }
 
 
@@ -216,30 +226,37 @@ def _empty_fig(msg: str = "Run a trajectory first") -> go.Figure:
         **_PLOTLY_LAYOUT,
         xaxis_visible=False,
         yaxis_visible=False,
-        annotations=[{
-            "text": msg, "showarrow": False,
-            "font": {"size": 13, "color": "#888"},
-            "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5,
-        }],
+        annotations=[
+            {
+                "text": msg,
+                "showarrow": False,
+                "font": {"size": 13, "color": "#888"},
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0.5,
+                "y": 0.5,
+            }
+        ],
     )
     return fig
 
 
 def _probs_fig(probs_sk: np.ndarray) -> go.Figure:
     """probs_sk: (S, K) → heatmap de probabilidades."""
-    fig = go.Figure(go.Heatmap(
-        z=probs_sk,
-        colorscale="Blues",
-        zmin=0, zmax=1,
-        colorbar=dict(title="p(k|s)", thickness=14, len=0.85,
-                      tickfont=dict(size=10)),
-    ))
+    fig = go.Figure(
+        go.Heatmap(
+            z=probs_sk,
+            colorscale="Blues",
+            zmin=0,
+            zmax=1,
+            colorbar=dict(title="p(k|s)", thickness=14, len=0.85, tickfont=dict(size=10)),
+        )
+    )
     fig.update_layout(
         **_PLOTLY_LAYOUT,
         title=dict(text="Posterior  p(k | slot s)", font=dict(size=12)),
         xaxis=dict(title="Clase k", tickfont=dict(size=9)),
-        yaxis=dict(title="Slot s", autorange="reversed",
-                   tickfont=dict(size=9)),
+        yaxis=dict(title="Slot s", autorange="reversed", tickfont=dict(size=9)),
     )
     return fig
 
@@ -247,19 +264,20 @@ def _probs_fig(probs_sk: np.ndarray) -> go.Figure:
 def _z_fig(zs_sk: np.ndarray) -> go.Figure:
     """zs_sk: (S, K) aprox one-hot → heatmap de valores reales del stoch."""
     S, K = zs_sk.shape
-    fig = go.Figure(go.Heatmap(
-        z=zs_sk,
-        colorscale="Viridis",
-        zmin=0, zmax=1,
-        colorbar=dict(title="z value", thickness=14, len=0.85,
-                      tickfont=dict(size=10)),
-    ))
+    fig = go.Figure(
+        go.Heatmap(
+            z=zs_sk,
+            colorscale="Viridis",
+            zmin=0,
+            zmax=1,
+            colorbar=dict(title="z value", thickness=14, len=0.85, tickfont=dict(size=10)),
+        )
+    )
     fig.update_layout(
         **_PLOTLY_LAYOUT,
         title=dict(text="Stoch z  (aprox one-hot)", font=dict(size=12)),
         xaxis=dict(title="Clase k", tickfont=dict(size=9)),
-        yaxis=dict(title="Slot s", autorange="reversed",
-                   tickfont=dict(size=9)),
+        yaxis=dict(title="Slot s", autorange="reversed", tickfont=dict(size=9)),
     )
     return fig
 
@@ -274,27 +292,27 @@ def _action_strip(actions: list, current_t: int, clickable: bool = False) -> lis
     """
     items = []
     for i, act in enumerate(actions):
-        sym   = ACT_SYMBOLS.get(act, "?")
+        sym = ACT_SYMBOLS.get(act, "?")
         color = ACT_COLORS.get(act, "#888")
-        is_cur = (i == current_t)
+        is_cur = i == current_t
         cell_kwargs = dict(
             title=f"t={i}  {ACT_NAMES.get(act, '')}",
             style={
-                "display":        "flex",
-                "flexDirection":  "column",
-                "alignItems":     "center",
+                "display": "flex",
+                "flexDirection": "column",
+                "alignItems": "center",
                 "justifyContent": "center",
-                "width":          "38px",
-                "height":         "52px",
-                "background":     color        if is_cur else "#f5f5f5",
-                "color":          "white"      if is_cur else "#333",
-                "border":         f"2px solid {color}",
-                "borderRadius":   "6px",
-                "flexShrink":     "0",
-                "fontWeight":     "bold"       if is_cur else "normal",
-                "boxShadow":      "0 2px 6px rgba(0,0,0,.25)" if is_cur else "none",
-                "transition":     "all .15s",
-                "cursor":         "pointer"    if clickable else "default",
+                "width": "38px",
+                "height": "52px",
+                "background": color if is_cur else "#f5f5f5",
+                "color": "white" if is_cur else "#333",
+                "border": f"2px solid {color}",
+                "borderRadius": "6px",
+                "flexShrink": "0",
+                "fontWeight": "bold" if is_cur else "normal",
+                "boxShadow": "0 2px 6px rgba(0,0,0,.25)" if is_cur else "none",
+                "transition": "all .15s",
+                "cursor": "pointer" if clickable else "default",
             },
         )
         if clickable:
@@ -303,9 +321,8 @@ def _action_strip(actions: list, current_t: int, clickable: bool = False) -> lis
         items.append(
             html.Div(
                 [
-                    html.Div(sym,   style={"fontSize": "18px", "lineHeight": "1"}),
-                    html.Div(str(i), style={"fontSize": "9px", "color": "#bbb"
-                                            if is_cur else "#888"}),
+                    html.Div(sym, style={"fontSize": "18px", "lineHeight": "1"}),
+                    html.Div(str(i), style={"fontSize": "9px", "color": "#bbb" if is_cur else "#888"}),
                 ],
                 **cell_kwargs,
             )
@@ -316,6 +333,7 @@ def _action_strip(actions: list, current_t: int, clickable: bool = False) -> lis
 # ─────────────────────────────────────────────────────────────────────────────
 # Carga de checkpoint
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def load_agent(logdir, device: str | None = None):
     """
@@ -337,7 +355,9 @@ def load_agent(logdir, device: str | None = None):
     _, _, obs_space, act_space = make_envs(config.env)
 
     agent = Dreamer(
-        config.model, obs_space, act_space,
+        config.model,
+        obs_space,
+        act_space,
         reward_function=reward_fn,
     ).to(device)
 
@@ -346,5 +366,7 @@ def load_agent(logdir, device: str | None = None):
     agent.eval()
     print(f"Checkpoint cargado → {logdir / 'latest.pt'}")
 
-    env_factory = lambda: make_env(config.env, 0)
+    def env_factory():
+        return make_env(config.env, 0)
+
     return agent, env_factory, device

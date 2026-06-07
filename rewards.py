@@ -46,9 +46,7 @@ def first_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         matches = torch.all(first_rows == goal_expanded, dim=-1, keepdim=True)
 
     else:
-        raise ValueError(
-            f"Estado con número de dimensiones no soportado: {state.dim()}"
-        )
+        raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")
 
     return torch.where(matches, torch.tensor(0), torch.tensor(-1))
 
@@ -80,9 +78,7 @@ def row_by_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         num_matching_rows = matches.sum(dim=2, keepdim=True)
 
     else:
-        raise ValueError(
-            f"Estado con número de dimensiones no soportado: {state.dim()}"
-        )
+        raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")
 
     return num_matching_rows / S - 1
 
@@ -110,9 +106,7 @@ def full_goal_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         matches = torch.all(state == goal_expanded, dim=(2, 3)).unsqueeze(-1)
 
     else:
-        raise ValueError(
-            f"Estado con número de dimensiones no soportado: {state.dim()}"
-        )
+        raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")
 
     return torch.where(matches, torch.tensor(0), torch.tensor(-1))
 
@@ -129,9 +123,7 @@ def log_prob_reward(dist, goal: torch.Tensor, log_threshold: float) -> torch.Ten
     if dist.base_dist.logits.dim() == 4:  # (B, T, S, K) case
         goal = goal.unsqueeze(1).expand_as(dist.base_dist.logits)
     total_log_prob = dist.log_prob(goal).unsqueeze(-1)
-    return torch.where(
-        total_log_prob >= log_threshold, torch.tensor(0), torch.tensor(-1)
-    )
+    return torch.where(total_log_prob >= log_threshold, torch.tensor(0), torch.tensor(-1))
 
 
 def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:

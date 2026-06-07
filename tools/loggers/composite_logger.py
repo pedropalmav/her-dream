@@ -38,8 +38,12 @@ class CompositeLogger(BaseLogger):
             lg.write(step, fps=False)
 
     def log_hydra_config(
-        self, config, name: str = "config", step: int = 0,
-        log_hparams: bool = False, hparams_run_name: str = ".",
+        self,
+        config,
+        name: str = "config",
+        step: int = 0,
+        log_hparams: bool = False,
+        hparams_run_name: str = ".",
     ) -> None:
         for lg in self._loggers:
             lg.log_hydra_config(config, name, step, log_hparams, hparams_run_name)

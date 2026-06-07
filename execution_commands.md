@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_rando
 ```
 
 2. Traerse el tensorboard
-```bash 
+```bash
 scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/post_train_her_from_wm_only_sample_buffer/01 ./logdir/post_train_her_from_wm_only_sample_buffer/
 ```
 

@@ -1,20 +1,18 @@
-from typing import Tuple
 import numpy as np
-from minigrid.minigrid_env import MiniGridEnv
-from minigrid.core.mission import MissionSpace
 from minigrid.core.grid import Grid
+from minigrid.core.mission import MissionSpace
 from minigrid.core.world_object import Goal
+from minigrid.minigrid_env import MiniGridEnv
 from minigrid.wrappers import RGBImgObsWrapper
 
 DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
 
 
 class RandomGoal(MiniGridEnv):
-
     def __init__(
         self,
         size: int = 10,
-        agent_start_pos: Tuple[int, int] = (1, 1),
+        agent_start_pos: tuple[int, int] = (1, 1),
         agent_start_dir: int = 0,
         max_steps: int = 100,
         render_mode: str = "rgb_array",
@@ -94,7 +92,7 @@ class RandomGoal(MiniGridEnv):
 
 def make_random_goal_env(
     size: int = 10,
-    agent_start_pos: Tuple[int, int] = (1, 1),
+    agent_start_pos: tuple[int, int] = (1, 1),
     agent_start_dir: int = 0,
     max_steps: int = 100,
     **kwargs,
@@ -106,8 +104,7 @@ def make_random_goal_env(
         max_steps=max_steps,
         **kwargs,
     )
-    env = RGBImgObsWrapper(env)
-    return env
+    return RGBImgObsWrapper(env)
 
 
 if __name__ == "__main__":

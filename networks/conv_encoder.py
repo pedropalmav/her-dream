@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+
 from .rmsnorm_2d import RMSNorm2D
 
 
@@ -8,9 +9,7 @@ class ConvEncoder(nn.Module):
         super().__init__()
         act = getattr(torch.nn, config.act)
         h, w, input_ch = input_shape
-        self.depths = tuple(
-            int(config.depth) * int(mult) for mult in list(config.mults)
-        )
+        self.depths = tuple(int(config.depth) * int(mult) for mult in list(config.mults))
         self.kernel_size = int(config.kernel_size)
         in_dim = input_ch
         layers = []

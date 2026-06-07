@@ -12,10 +12,10 @@ from dreamer import Dreamer
 from envs import make_env
 from rewards import make_reward
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Recolección de estados finales de trayectorias
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def collect_final_states(
@@ -36,7 +36,7 @@ def collect_final_states(
     zs     : (N, S, K)   muestras one-hot correspondientes al último paso
     """
     last_logits = []
-    last_zs     = []
+    last_zs = []
 
     for n in range(n_trajectories):
         env = env_factory()
@@ -45,39 +45,43 @@ def collect_final_states(
         # Estado inicial del RSSM
         stoch, deter = agent.rssm.initial(1)
 
-        act_space  = env.action_space
-        n_actions  = act_space.shape[0]
-        action     = torch.zeros(1, n_actions, device=device)
+        act_space = env.action_space
+        n_actions = act_space.shape[0]
+        action = torch.zeros(1, n_actions, device=device)
 
         logit = None
         for t in range(traj_len):
-            obs_t    = _preprocess_obs(obs, device)
+            obs_t = _preprocess_obs(obs, device)
             is_first = torch.tensor([t == 0], dtype=torch.bool, device=device)
 
-            embed = agent.encoder(obs_t)                              # (1, E)
+            embed = agent.encoder(obs_t)  # (1, E)
             stoch, deter, logit = agent.rssm.obs_step(
-                stoch, deter, action, embed, is_first,
-            )                                                          # (1,S,K),(1,D),(1,S,K)
+                stoch,
+                deter,
+                action,
+                embed,
+                is_first,
+            )  # (1,S,K),(1,D),(1,S,K)
 
             # Acción aleatoria one-hot
             act_idx = np.random.randint(n_actions)
-            act_np  = np.zeros(n_actions, dtype=np.float32)
+            act_np = np.zeros(n_actions, dtype=np.float32)
             act_np[act_idx] = 1.0
-            action  = torch.as_tensor(act_np, device=device).unsqueeze(0)
+            action = torch.as_tensor(act_np, device=device).unsqueeze(0)
 
             obs, _, done, _ = env.step(act_np)
             if done:
                 break
 
         # Guardar solo el último estado
-        last_logits.append(logit.squeeze(0))   # (S, K)
-        last_zs.append(stoch.squeeze(0))       # (S, K)
+        last_logits.append(logit.squeeze(0))  # (S, K)
+        last_zs.append(stoch.squeeze(0))  # (S, K)
 
         if (n + 1) % 10 == 0:
-            print(f"  Trayectoria {n+1}/{n_trajectories}")
+            print(f"  Trayectoria {n + 1}/{n_trajectories}")
 
-    logits = torch.stack(last_logits, dim=0)   # (N, S, K)
-    zs     = torch.stack(last_zs,     dim=0)   # (N, S, K)
+    logits = torch.stack(last_logits, dim=0)  # (N, S, K)
+    zs = torch.stack(last_zs, dim=0)  # (N, S, K)
     return {"logits": logits, "zs": zs}
 
 
@@ -92,7 +96,7 @@ def _preprocess_obs(obs: dict, device: str) -> dict:
             t = torch.as_tensor(v, dtype=torch.float32, device=device)
             if v.dtype == np.uint8:
                 t = t / 255.0
-            out[k] = t.unsqueeze(0)    # (1, ...)
+            out[k] = t.unsqueeze(0)  # (1, ...)
         elif isinstance(v, (bool, np.bool_)):
             out[k] = torch.tensor([[float(v)]], dtype=torch.float32, device=device)
     return out
@@ -106,22 +110,23 @@ def _preprocess_obs(obs: dict, device: str) -> dict:
 # d(i,j)  = (1/S) * sum_s 1[ mode_i_s != mode_j_s ]
 # D_inter = 2/(N(N-1)) * sum_{i<j} d(i,j)
 
+
 def exp1_inter_traj_diversity(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
     N = logits.shape[0]
-    probs = agent.rssm.get_dist(logits).base_dist.probs    # (N, S, K)
-    modes = probs.argmax(-1)                               # (N, S)
+    probs = agent.rssm.get_dist(logits).base_dist.probs  # (N, S, K)
+    modes = probs.argmax(-1)  # (N, S)
 
     diff = (modes.unsqueeze(0) != modes.unsqueeze(1)).float()  # (N, N, S)
-    ham  = diff.mean(-1)                                       # (N, N)
+    ham = diff.mean(-1)  # (N, N)
     mask = torch.triu(torch.ones(N, N, device=logits.device), diagonal=1).bool()
     D_inter = ham[mask].mean().item()
 
     return {
-        "D_inter":    float(D_inter),
-        "ham_matrix": ham.cpu().numpy(),     # (N, N)
+        "D_inter": float(D_inter),
+        "ham_matrix": ham.cpu().numpy(),  # (N, N)
     }
 
 
@@ -129,6 +134,7 @@ def exp1_inter_traj_diversity(agent, logits: torch.Tensor) -> dict:
 # delta(m1,m2) = (1/S) * sum_s 1[ argmax z^m1_s != argmax z^m2_s ]
 # D_intra^n    = 2/(M(M-1)) * sum_{m1<m2} delta(m1,m2)
 # D_intra      = (1/N) * sum_n D_intra^n
+
 
 def exp2_intra_state_variance(
     agent,
@@ -146,62 +152,65 @@ def exp2_intra_state_variance(
     D_intra_per_state = np.zeros(N)
 
     for i in range(N):
-        l_i     = logits[i].unsqueeze(0).expand(M, -1, -1)   # (M, S, K)
-        samples = agent.rssm.get_dist(l_i).rsample()           # (M, S, K)
-        classes = samples.argmax(-1)                          # (M, S)
-        diff    = (classes.unsqueeze(0) != classes.unsqueeze(1)).float()
-        ham     = diff.mean(-1)                               # (M, M)
+        l_i = logits[i].unsqueeze(0).expand(M, -1, -1)  # (M, S, K)
+        samples = agent.rssm.get_dist(l_i).rsample()  # (M, S, K)
+        classes = samples.argmax(-1)  # (M, S)
+        diff = (classes.unsqueeze(0) != classes.unsqueeze(1)).float()
+        ham = diff.mean(-1)  # (M, M)
         D_intra_per_state[i] = ham[mask].mean().item()
 
     return {
-        "D_intra":           float(D_intra_per_state.mean()),
-        "D_intra_per_state": D_intra_per_state,   # (N,)
+        "D_intra": float(D_intra_per_state.mean()),
+        "D_intra_per_state": D_intra_per_state,  # (N,)
     }
 
 
 # ── Exp 3 — Entropía de los logits posteriores ───────────────────────────────
 # H^n_s = - sum_k p^n_sk * log p^n_sk
 
+
 def exp3_posterior_entropy(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
     probs = agent.rssm.get_dist(logits).base_dist.probs
-    H     = -(probs * (probs + 1e-8).log()).sum(-1)    # (N, S)
-    H_np  = H.cpu().numpy()
-    K     = logits.shape[-1]
+    H = -(probs * (probs + 1e-8).log()).sum(-1)  # (N, S)
+    H_np = H.cpu().numpy()
+    K = logits.shape[-1]
     H_max = float(np.log(K))
 
     return {
-        "H_global":    float(H_np.mean()),
-        "H_max":       H_max,
-        "H_per_slot":  H_np.mean(axis=0),              # (S,)
-        "H_per_traj":  H_np.mean(axis=1),              # (N,)
-        "H_all":       H_np,                           # (N, S)
+        "H_global": float(H_np.mean()),
+        "H_max": H_max,
+        "H_per_slot": H_np.mean(axis=0),  # (S,)
+        "H_per_traj": H_np.mean(axis=1),  # (N,)
+        "H_all": H_np,  # (N, S)
         "frac_peaked": float((H_np < 0.1 * H_max).mean()),
-        "frac_flat":   float((H_np > 0.9 * H_max).mean()),
+        "frac_flat": float((H_np > 0.9 * H_max).mean()),
     }
 
 
 # ── Exp 4 — Peak probability ──────────────────────────────────────────────────
 # pi^n_s = max_k p^n_sk
 
+
 def exp4_peak_probability(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
     probs = agent.rssm.get_dist(logits).base_dist.probs
-    pi    = probs.max(-1).values.cpu().numpy()         # (N, S)
-    K     = logits.shape[-1]
+    pi = probs.max(-1).values.cpu().numpy()  # (N, S)
+    K = logits.shape[-1]
 
     return {
-        "pi_bar":    float(pi.mean()),
+        "pi_bar": float(pi.mean()),
         "pi_chance": 1.0 / K,
-        "pi_all":    pi,                                # (N, S)
+        "pi_all": pi,  # (N, S)
     }
 
 
 # ── Exp 5 — Heatmaps de probabilidad por trayectoria ─────────────────────────
+
 
 def exp5_probability_heatmaps(agent, logits: torch.Tensor, n_show: int = 4) -> np.ndarray:
     """
@@ -216,24 +225,27 @@ def exp5_probability_heatmaps(agent, logits: torch.Tensor, n_show: int = 4) -> n
 # Función principal
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @torch.no_grad()
 def run_wm_stochasticity(
     agent,
     env_factory,
-    n_trajectories: int       = 200,
-    traj_len: int             = 50,
-    n_samples_per_state: int  = 50,
-    n_show_heatmaps: int      = 4,
-    outdir: Path              = Path("results/wm_stoch"),
+    n_trajectories: int = 200,
+    traj_len: int = 50,
+    n_samples_per_state: int = 50,
+    n_show_heatmaps: int = 4,
+    outdir: Path = Path("results/wm_stoch"),
 ):
     outdir.mkdir(parents=True, exist_ok=True)
     device = agent.device
 
     # ── Recolectar último estado de cada trayectoria ─────────────────────────
-    print(f"\nRecolectando {n_trajectories} trayectorias de longitud {traj_len} "
-          f"(quedándonos con el último estado de cada una) …")
-    data   = collect_final_states(agent, env_factory, n_trajectories, traj_len, device)
-    logits = data["logits"]    # (N, S, K)
+    print(
+        f"\nRecolectando {n_trajectories} trayectorias de longitud {traj_len} "
+        f"(quedándonos con el último estado de cada una) …"
+    )
+    data = collect_final_states(agent, env_factory, n_trajectories, traj_len, device)
+    logits = data["logits"]  # (N, S, K)
     N, S, K = logits.shape
     print(f"  Shape logits: {tuple(logits.shape)}  (N={N}, S={S}, K={K})")
 
@@ -260,8 +272,8 @@ def run_wm_stochasticity(
     print(f"  [Exp 1] D_inter  (Hamming inter-traj):  {r1['D_inter']:.4f}")
     print(f"  [Exp 2] D_intra  (Hamming intra-state): {r2['D_intra']:.4f}  (ideal ≪ D_inter)")
     print(f"  [Exp 3] H global (entropía posterior):  {r3['H_global']:.4f}  (H_max={r3['H_max']:.2f})")
-    print(f"  [Exp 3] Slots peaked (<10% H_max):      {r3['frac_peaked']*100:.1f}%")
-    print(f"  [Exp 3] Slots planos (>90% H_max):      {r3['frac_flat']*100:.1f}%")
+    print(f"  [Exp 3] Slots peaked (<10% H_max):      {r3['frac_peaked'] * 100:.1f}%")
+    print(f"  [Exp 3] Slots planos (>90% H_max):      {r3['frac_flat'] * 100:.1f}%")
     print(f"  [Exp 4] pi_bar   (peak prob):           {r4['pi_bar']:.4f}  (chance={r4['pi_chance']:.4f})")
     print("=" * 60)
 
@@ -270,24 +282,26 @@ def run_wm_stochasticity(
 
     # ── JSON ──────────────────────────────────────────────────────────────────
     results = {
-        "n_trajectories": N, "S": S, "K": K,
+        "n_trajectories": N,
+        "S": S,
+        "K": K,
         "exp1": {
             "D_inter": r1["D_inter"],
         },
         "exp2": {
-            "D_intra":           r2["D_intra"],
+            "D_intra": r2["D_intra"],
             "D_intra_per_state": r2["D_intra_per_state"].tolist(),
         },
         "exp3": {
-            "H_global":    r3["H_global"],
-            "H_max":       r3["H_max"],
-            "H_per_slot":  r3["H_per_slot"].tolist(),
-            "H_per_traj":  r3["H_per_traj"].tolist(),
+            "H_global": r3["H_global"],
+            "H_max": r3["H_max"],
+            "H_per_slot": r3["H_per_slot"].tolist(),
+            "H_per_traj": r3["H_per_traj"].tolist(),
             "frac_peaked": r3["frac_peaked"],
-            "frac_flat":   r3["frac_flat"],
+            "frac_flat": r3["frac_flat"],
         },
         "exp4": {
-            "pi_bar":    r4["pi_bar"],
+            "pi_bar": r4["pi_bar"],
             "pi_chance": r4["pi_chance"],
         },
     }
@@ -302,6 +316,7 @@ def run_wm_stochasticity(
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _save(fig, path):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -313,11 +328,10 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
 
     # ── Exp 1 — Histograma de d(i,j) ─────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-    mask  = np.triu(np.ones((N, N), dtype=bool), k=1)
+    mask = np.triu(np.ones((N, N), dtype=bool), k=1)
     pairs = r1["ham_matrix"][mask]
     ax.hist(pairs, bins=40, color="steelblue", edgecolor="white")
-    ax.axvline(r1["D_inter"], color="r", linestyle="--",
-               label=f"media={r1['D_inter']:.3f}")
+    ax.axvline(r1["D_inter"], color="r", linestyle="--", label=f"media={r1['D_inter']:.3f}")
     ax.set_title("Exp 1 — Distribución de d(i,j) (Hamming inter-trayectoria)")
     ax.set_xlabel("Hamming por par")
     ax.set_ylabel("Frecuencia")
@@ -327,12 +341,9 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     # ── Exp 2 — Distribución D_intra por trayectoria ─────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.hist(r2["D_intra_per_state"], bins=40, color="coral", edgecolor="white")
-    ax.axvline(r2["D_intra"],  color="darkred",   linestyle="--",
-               label=f"D_intra media={r2['D_intra']:.4f}")
-    ax.axvline(r1["D_inter"],  color="steelblue", linestyle="--",
-               label=f"D_inter={r1['D_inter']:.3f}")
-    ax.set_title("Exp 2 — Distribución de D_intra por trayectoria\n"
-                 "(varianza intra entre M muestras del mismo logit)")
+    ax.axvline(r2["D_intra"], color="darkred", linestyle="--", label=f"D_intra media={r2['D_intra']:.4f}")
+    ax.axvline(r1["D_inter"], color="steelblue", linestyle="--", label=f"D_inter={r1['D_inter']:.3f}")
+    ax.set_title("Exp 2 — Distribución de D_intra por trayectoria\n(varianza intra entre M muestras del mismo logit)")
     ax.set_xlabel("D_intra^n")
     ax.set_ylabel("Frecuencia")
     ax.legend()
@@ -341,9 +352,12 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     # ── Exp 3 — Boxplot H por slot ───────────────────────────────────────────
     box_w = max(14, S * 0.45)
     fig, ax = plt.subplots(figsize=(box_w, 6), constrained_layout=True)
-    ax.boxplot(r3["H_all"], patch_artist=True,
-               boxprops=dict(facecolor="lightblue", alpha=0.7),
-               medianprops=dict(color="steelblue", linewidth=2))
+    ax.boxplot(
+        r3["H_all"],
+        patch_artist=True,
+        boxprops=dict(facecolor="lightblue", alpha=0.7),
+        medianprops=dict(color="steelblue", linewidth=2),
+    )
     ax.axhline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
     ax.set_title("Exp 3 — Distribución H por slot")
     ax.set_xlabel("Slot s")
@@ -354,9 +368,8 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     # ── Exp 3 — H_s media por slot (barras) ──────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.bar(range(S), r3["H_per_slot"], color="steelblue", alpha=0.8)
-    ax.axhline(H_max,            color="r",      linestyle="--", label=f"H_max={H_max:.2f}")
-    ax.axhline(r3["H_global"],   color="orange", linestyle="--",
-               label=f"H̄={r3['H_global']:.3f}")
+    ax.axhline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
+    ax.axhline(r3["H_global"], color="orange", linestyle="--", label=f"H̄={r3['H_global']:.3f}")
     ax.set_title("Exp 3 — H_s media por slot")
     ax.set_xlabel("Slot s")
     ax.set_ylabel("H_s (nats)")
@@ -366,9 +379,8 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     # ── Exp 3 — Histograma global de H^n_s ───────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     ax.hist(r3["H_all"].flatten(), bins=50, color="steelblue", edgecolor="white")
-    ax.axvline(H_max,           color="r",      linestyle="--", label=f"H_max={H_max:.2f}")
-    ax.axvline(r3["H_global"],  color="orange", linestyle="--",
-               label=f"H̄={r3['H_global']:.3f}")
+    ax.axvline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
+    ax.axvline(r3["H_global"], color="orange", linestyle="--", label=f"H̄={r3['H_global']:.3f}")
     ax.set_title("Exp 3 — Histograma global de H^n_s")
     ax.set_xlabel("Entropía (nats)")
     ax.set_ylabel("Frecuencia")
@@ -379,8 +391,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     hm_w = max(12, S * 0.4)
     hm_h = min(20, max(8, N * 0.06))
     fig, ax = plt.subplots(figsize=(hm_w, hm_h), constrained_layout=True)
-    im = ax.imshow(r3["H_all"], aspect="auto", cmap="hot",
-                   vmin=0, vmax=H_max, interpolation="nearest")
+    im = ax.imshow(r3["H_all"], aspect="auto", cmap="hot", vmin=0, vmax=H_max, interpolation="nearest")
     ax.set_title("Exp 3 — Heatmap H^n_s (trayectorias × slots)")
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Trayectoria n")
@@ -390,10 +401,8 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     # ── Exp 4 — Distribución de π^n_s ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     ax.hist(r4["pi_all"].flatten(), bins=50, color="mediumseagreen", edgecolor="white")
-    ax.axvline(r4["pi_bar"],    color="darkgreen", linestyle="--",
-               label=f"π̄={r4['pi_bar']:.3f}")
-    ax.axvline(r4["pi_chance"], color="r",         linestyle="--",
-               label=f"1/K={r4['pi_chance']:.3f}")
+    ax.axvline(r4["pi_bar"], color="darkgreen", linestyle="--", label=f"π̄={r4['pi_bar']:.3f}")
+    ax.axvline(r4["pi_chance"], color="r", linestyle="--", label=f"1/K={r4['pi_chance']:.3f}")
     ax.set_title("Exp 4 — Distribución π^n_s (peak prob)")
     ax.set_xlabel("max_k p^n_sk")
     ax.set_ylabel("Frecuencia")
@@ -435,21 +444,20 @@ if __name__ == "__main__":
         --n_samples 50
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir",    required=True)
-    parser.add_argument("--device",    default=None)
-    parser.add_argument("--n_traj",    type=int, default=200,
-                        help="Número de trayectorias aleatorias")
-    parser.add_argument("--traj_len",  type=int, default=50,
-                        help="Pasos por trayectoria (solo se guarda el último estado)")
-    parser.add_argument("--n_samples", type=int, default=50,
-                        help="Muestras del posterior por estado (Exp 2)")
+    parser.add_argument("--logdir", required=True)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--n_traj", type=int, default=200, help="Número de trayectorias aleatorias")
+    parser.add_argument(
+        "--traj_len", type=int, default=50, help="Pasos por trayectoria (solo se guarda el último estado)"
+    )
+    parser.add_argument("--n_samples", type=int, default=50, help="Muestras del posterior por estado (Exp 2)")
     args = parser.parse_args()
 
     logdir = pathlib.Path(args.logdir)
 
     # ── Config ────────────────────────────────────────────────────────────────
-    config        = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device        = args.device or config.device
+    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
+    device = args.device or config.device
     config.device = device
 
     # Backfill defaults for keys added after this run was trained.
@@ -461,10 +469,13 @@ if __name__ == "__main__":
     reward_function = make_reward(config)
 
     from envs import make_envs
+
     _, eval_envs, obs_space, act_space = make_envs(config.env)
 
     agent = Dreamer(
-        config.model, obs_space, act_space,
+        config.model,
+        obs_space,
+        act_space,
         reward_function=reward_function,
     ).to(device)
 
@@ -474,14 +485,15 @@ if __name__ == "__main__":
     print(f"Checkpoint cargado: {logdir / 'latest.pt'}")
 
     # ── Factory de env individual ─────────────────────────────────────────────
-    env_factory = lambda: make_env(config.env, 0)
+    def env_factory():
+        return make_env(config.env, 0)
 
     # ── Correr ───────────────────────────────────────────────────────────────
     run_wm_stochasticity(
-        agent               = agent,
-        env_factory         = env_factory,
-        n_trajectories      = args.n_traj,
-        traj_len            = args.traj_len,
-        n_samples_per_state = args.n_samples,
-        outdir              = logdir / "experiments" / "wm_stoch",
+        agent=agent,
+        env_factory=env_factory,
+        n_trajectories=args.n_traj,
+        traj_len=args.traj_len,
+        n_samples_per_state=args.n_samples,
+        outdir=logdir / "experiments" / "wm_stoch",
     )

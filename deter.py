@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+
 from networks import BlockLinear
 
 """
@@ -31,12 +32,8 @@ class Deter(nn.Module):
         self._dyn_hid = nn.Sequential()
         in_ch = (3 * hidden + deter // self.blocks) * self.blocks
         for i in range(self.dynlayers):
-            self._dyn_hid.add_module(
-                f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks)
-            )
-            self._dyn_hid.add_module(
-                f"norm_{i}", nn.RMSNorm(deter, eps=1e-04, dtype=torch.float32)
-            )
+            self._dyn_hid.add_module(f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks))
+            self._dyn_hid.add_module(f"norm_{i}", nn.RMSNorm(deter, eps=1e-04, dtype=torch.float32))
             self._dyn_hid.add_module(f"act_{i}", act())
             in_ch = deter
         self._dyn_gru = BlockLinear(in_ch, 3 * deter, self.blocks)

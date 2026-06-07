@@ -6,10 +6,7 @@ class DeepMindControl(gym.Env):
     metadata = {}
 
     def __init__(self, name, action_repeat=1, size=(64, 64), camera=None, seed=0):
-        if name.endswith("_subtle"):
-            is_subtle = True
-        else:
-            is_subtle = False
+        is_subtle = name.endswith("_subtle")
 
         if "sparse" in name or "finger_turn" in name:
             _name, difficulty = name.rsplit("_", 1)
@@ -46,10 +43,7 @@ class DeepMindControl(gym.Env):
     def observation_space(self):
         spaces = {}
         for key, value in self._env.observation_spec().items():
-            if len(value.shape) == 0:
-                shape = (1,)
-            else:
-                shape = value.shape
+            shape = (1,) if len(value.shape) == 0 else value.shape
             spaces[key] = gym.spaces.Box(-np.inf, np.inf, shape, dtype=np.float32)
         spaces["image"] = gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8)
         return gym.spaces.Dict(spaces)

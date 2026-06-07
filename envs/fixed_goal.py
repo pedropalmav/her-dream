@@ -1,22 +1,22 @@
-from typing import Tuple
 import numpy as np
-from minigrid.minigrid_env import MiniGridEnv
-from minigrid.core.mission import MissionSpace
 from minigrid.core.grid import Grid
+from minigrid.core.mission import MissionSpace
 from minigrid.core.world_object import Goal
+from minigrid.minigrid_env import MiniGridEnv
 from minigrid.wrappers import RGBImgObsWrapper
 
 DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
-class FixedGoal(MiniGridEnv):
 
+
+class FixedGoal(MiniGridEnv):
     def __init__(
         self,
         size: int = 10,
-        agent_start_pos: Tuple[int, int] = (1, 8),
+        agent_start_pos: tuple[int, int] = (1, 8),
         agent_start_dir: int = 0,
         max_steps: int = 100,
         render_mode: str = "rgb_array",
-        goal_pos: Tuple[int, int] = (8, 1),
+        goal_pos: tuple[int, int] = (8, 1),
         **kwargs,
     ):
 
@@ -74,7 +74,6 @@ class FixedGoal(MiniGridEnv):
         direction = DIRECTIONS[rng.randint(0, 4)]
         return f"agent at ({ax},{ay}) facing {direction}. goal at ({gx},{gy})"
 
-
     def reset(self, **kwargs):
         obs, info = super().reset(**kwargs)
         obs["mission"] = self._build_mission()
@@ -95,10 +94,10 @@ class FixedGoal(MiniGridEnv):
 
 def make_fixed_goal_env(
     size: int = 10,
-    agent_start_pos: Tuple[int, int] = (1, 8),
+    agent_start_pos: tuple[int, int] = (1, 8),
     agent_start_dir: int = 0,
     max_steps: int = 100,
-    goal_pos: Tuple[int, int] = (8, 1),
+    goal_pos: tuple[int, int] = (8, 1),
     **kwargs,
 ):
     env = FixedGoal(
@@ -109,8 +108,7 @@ def make_fixed_goal_env(
         max_steps=max_steps,
         **kwargs,
     )
-    env = RGBImgObsWrapper(env)
-    return env
+    return RGBImgObsWrapper(env)
 
 
 if __name__ == "__main__":

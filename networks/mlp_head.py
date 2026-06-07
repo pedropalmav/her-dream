@@ -1,10 +1,12 @@
-import torch
-import torch.nn as nn
-import distributions as dists
 from functools import partial
 
-from .mlp import MLP
+import torch
+import torch.nn as nn
+
+import distributions as dists
 from tools import weight_init_
+
+from .mlp import MLP
 
 
 class MLPHead(nn.Module):

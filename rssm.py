@@ -3,9 +3,9 @@ from torch import distributions as torchd
 from torch import nn
 
 import distributions as dists
-from networks import BlockLinear, LambdaLayer
-from tools import rpad, weight_init_
 from deter import Deter
+from networks import LambdaLayer
+from tools import rpad, weight_init_
 
 
 class RSSM(nn.Module):

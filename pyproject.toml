@@ -37,7 +37,16 @@ dependencies = [
 dev = [
     "matplotlib>=3.10.8",
     "pre-commit>=4.6.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.16",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+filterwarnings = [
+    "ignore:torch.meshgrid.*indexing:UserWarning",
 ]
 
 [tool.ruff]

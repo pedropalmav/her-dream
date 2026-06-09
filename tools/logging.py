@@ -3,10 +3,11 @@ import contextlib
 import io
 import json
 import time
+
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import torch
 import torchvision.io
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Tee(io.TextIOBase):
@@ -35,9 +36,7 @@ class Tee(io.TextIOBase):
 
     def isatty(self):
         # Preserve tty detection for progress bars etc.
-        return any(
-            hasattr(stream, "isatty") and stream.isatty() for stream in self._streams
-        )
+        return any(hasattr(stream, "isatty") and stream.isatty() for stream in self._streams)
 
 
 class Logger:
@@ -92,9 +91,7 @@ class Logger:
             video_tensor = torch.from_numpy(video_to_save)
             safe_name = name.replace("/", "_")
             file_path = self._logdir / f"{safe_name}.mp4"
-            torchvision.io.write_video(
-                file_path, video_tensor, fps=10, video_codec="libx264"
-            )
+            torchvision.io.write_video(file_path, video_tensor, fps=10, video_codec="libx264")
 
             # Save to tensorboard
             B, T, H, W, C = value.shape
@@ -119,9 +116,7 @@ class Logger:
         self._last_step = step
         return steps / duration
 
-    def log_hydra_config(
-        self, config, name="config", step=0, log_hparams=False, hparams_run_name="."
-    ):
+    def log_hydra_config(self, config, name="config", step=0, log_hparams=False, hparams_run_name="."):
         """
         Log a Hydra/OmegaConf config to TensorBoard:
           - as YAML text under "{name}/yaml"
@@ -175,7 +170,7 @@ def make_logger(config, logdir):
 
     config.backends is a list of strings, e.g. ["file", "tensorboard", "wandb"].
     """
-    from .loggers import FileLogger, TensorboardLogger, WandbLogger, CompositeLogger
+    from .loggers import CompositeLogger, FileLogger, TensorboardLogger, WandbLogger
 
     loggers = []
     for backend in config.backends:

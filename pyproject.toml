@@ -22,7 +22,6 @@ dependencies = [
     "numpy==1.26.0",
     "opencv-python==4.7.0.72",
     "plotly>=6.7.0",
-    "pre-commit==4.3.0",
     "protobuf==3.20.0",
     "ruamel-yaml==0.17.4",
     "setuptools<70",
@@ -37,4 +36,17 @@ dependencies = [
 [dependency-groups]
 dev = [
     "matplotlib>=3.10.8",
+    "pre-commit>=4.6.0",
+    "ruff>=0.15.16",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "SIM", "RET", "I", "UP"]
+ignore = ["E203"]
+
+[tool.ruff.format]
+preview = true

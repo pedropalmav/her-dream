@@ -6,9 +6,7 @@ def make_envs(config):
         return lambda: make_env(config, idx)
 
     train_envs = parallel.ParallelEnv(env_constructor, config.env_num, config.device)
-    eval_envs = parallel.ParallelEnv(
-        env_constructor, config.eval_episode_num, config.device
-    )
+    eval_envs = parallel.ParallelEnv(env_constructor, config.eval_episode_num, config.device)
     obs_space = train_envs.observation_space
     act_space = train_envs.action_space
     return train_envs, eval_envs, obs_space, act_space
@@ -19,9 +17,7 @@ def make_env(config, id):
     if suite == "dmc":
         import envs.dmc as dmc
 
-        env = dmc.DeepMindControl(
-            task, config.action_repeat, config.size, seed=config.seed + id
-        )
+        env = dmc.DeepMindControl(task, config.action_repeat, config.size, seed=config.seed + id)
         env = wrappers.NormalizeActions(env)
     elif suite == "atari":
         import envs.atari as atari
@@ -75,11 +71,8 @@ def make_env(config, id):
             max_steps=config.time_limit,
             render_mode=config.render_mode,
         )
-        if config.mission_text:
-            env = wrappers.MissionGridWrapper(env)
-        else:
-            env = wrappers.MiniGridWrapper(env)
-        
+        env = wrappers.MissionGridWrapper(env) if config.mission_text else wrappers.MiniGridWrapper(env)
+
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
 
@@ -95,10 +88,7 @@ def make_env(config, id):
             goal_pos=goal_pos,
             max_steps=config.time_limit,
         )
-        if config.mission_text:
-            env = wrappers.MissionGridWrapper(env)
-        else:
-            env = wrappers.MiniGridWrapper(env)
+        env = wrappers.MissionGridWrapper(env) if config.mission_text else wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
     else:

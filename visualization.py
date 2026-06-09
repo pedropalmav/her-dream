@@ -1,8 +1,8 @@
 import json
-import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Union, List
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def load_run(run_dir: Path):
@@ -23,9 +23,9 @@ def moving_avg(x, w):
 
 
 def plot_runs(
-    exp_dirs: Union[Path, List[Path]],
+    exp_dirs: Path | list[Path],
     outdir: Path,
-    labels: Union[str, List[str]] = None,
+    labels: str | list[str] = None,
     title: str = "Goal conditioned Dreamer",
 ):
     if isinstance(exp_dirs, Path):
@@ -43,9 +43,7 @@ def plot_runs(
     for idx, (exp_dir, label) in enumerate(zip(exp_dirs, labels)):
         exp_dir = exp_dir.expanduser()
 
-        run_dirs = sorted(
-            [d for d in exp_dir.iterdir() if (d / "metrics.jsonl").exists()]
-        )
+        run_dirs = sorted([d for d in exp_dir.iterdir() if (d / "metrics.jsonl").exists()])
         if not run_dirs:
             if (exp_dir / "metrics.jsonl").exists():
                 run_dirs = [exp_dir]
@@ -53,9 +51,7 @@ def plot_runs(
                 print(f"No metrics found for {exp_dir}")
                 continue
 
-        print(
-            f"Encontradas {len(run_dirs)} run(s) para {label}: {[d.name for d in run_dirs]}"
-        )
+        print(f"Encontradas {len(run_dirs)} run(s) para {label}: {[d.name for d in run_dirs]}")
 
         all_steps, all_scores = [], []
         for run_dir in run_dirs:
@@ -68,17 +64,15 @@ def plot_runs(
             continue
 
         for i, s in enumerate(all_steps[1:], 1):
-            assert np.array_equal(
-                all_steps[0], s
-            ), f"Run {run_dirs[i].name} tiene steps distintos a run {run_dirs[0].name}"
+            assert np.array_equal(all_steps[0], s), (
+                f"Run {run_dirs[i].name} tiene steps distintos a run {run_dirs[0].name}"
+            )
 
         steps = all_steps[0]
 
         # Suavizado por run, luego agregación
         window = max(1, len(steps) // 30)
-        smoothed = np.stack(
-            [moving_avg(scores, window) for scores in all_scores]
-        )  # (n_runs, n_points_smooth)
+        smoothed = np.stack([moving_avg(scores, window) for scores in all_scores])  # (n_runs, n_points_smooth)
         steps_smooth = steps[window - 1 :]
         mean = smoothed.mean(axis=0)
         std = smoothed.std(axis=0)

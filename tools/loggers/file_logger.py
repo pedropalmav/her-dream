@@ -42,13 +42,19 @@ class FileLogger(BaseLogger):
             safe_name = name.replace("/", "_")
             torchvision.io.write_video(
                 self._logdir / f"{safe_name}.mp4",
-                video_tensor, fps=10, video_codec="libx264",
+                video_tensor,
+                fps=10,
+                video_codec="libx264",
             )
         self._scalars = {}
         self._videos = {}
 
     def log_hydra_config(
-        self, config, name: str = "config", step: int = 0,
-        log_hparams: bool = False, hparams_run_name: str = ".",
+        self,
+        config,
+        name: str = "config",
+        step: int = 0,
+        log_hparams: bool = False,
+        hparams_run_name: str = ".",
     ) -> None:
         pass  # Hydra already saves .hydra/config.yaml; nothing extra needed here

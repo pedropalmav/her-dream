@@ -36,7 +36,7 @@ class OnlineTrainer:
         # text-encoder distillation, so data is collected with random actions.
         self._random_actions = self._wm_only or self._train_text_only
 
-        self.her = True if isinstance(self.replay_buffer, HERBuffer) else False
+        self.her = isinstance(self.replay_buffer, HERBuffer)
 
     @torch.no_grad()
     def _text_goal(self, agent, envs, indices):
@@ -129,7 +129,7 @@ class OnlineTrainer:
             act, agent_state, _ = agent.act(trans, agent_state, eval=True, random=self._random_actions)
 
             trans["stoch"] = agent_state["stoch"]
-            if "logit" in agent_state.keys():
+            if "logit" in agent_state:
                 trans["logit"] = agent_state["logit"]
             self._apply_reward(trans, agent.rssm)
             returns += trans["reward"][:, 0] * ~once_done
@@ -179,9 +179,7 @@ class OnlineTrainer:
         done = torch.ones(envs.env_num, dtype=torch.bool, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
         lengths = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
-        envs_ids = torch.arange(
-            envs.env_num, dtype=torch.int32, device=agent.device
-        )
+        envs_ids = torch.arange(envs.env_num, dtype=torch.int32, device=agent.device)
         episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
 
         if self._goal_sample in ("buffer", "text"):
@@ -258,7 +256,7 @@ class OnlineTrainer:
             trans["deter"] = agent_state["deter"]
             trans["env"] = envs_ids
             trans["episode"] = episode_ids
-            if "logit" in agent_state.keys():
+            if "logit" in agent_state:
                 trans["logit"] = agent_state["logit"]
 
             self._apply_reward(trans, agent.rssm)
@@ -270,13 +268,10 @@ class OnlineTrainer:
             returns += trans["reward"][:, 0]
 
             episode_ids[done] += envs.env_num
-            
+
             # Update models after enough data has accumulated
             if self._should_update(step):
-                if self._should_pretrain():
-                    update_num = self.pretrain
-                else:
-                    update_num = self._updates_needed(step)
+                update_num = self.pretrain if self._should_pretrain() else self._updates_needed(step)
                 for _ in range(update_num):
                     _metrics = agent.update(self.replay_buffer)
                     train_metrics = _metrics
@@ -305,7 +300,7 @@ class OnlineTrainer:
 
     def _relabel_goal(self, envs, goals, trans):
         # Si es que hay algun valor diferente de 0 en el goals, entonces relabel.
-        # Esto siempre será True para mode="text" y para mode="buffer" será True si es que 
+        # Esto siempre será True para mode="text" y para mode="buffer" será True si es que
         # ya hay experiencias guardadas.
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()

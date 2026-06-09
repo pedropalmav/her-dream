@@ -11,9 +11,7 @@ class Buffer:
         self.batch_length = int(config.batch_length)
         self.num_eps = 0
         self._buffer = ReplayBuffer(
-            storage=LazyTensorStorage(
-                max_size=config.max_size, device=self.storage_device, ndim=2
-            ),
+            storage=LazyTensorStorage(max_size=config.max_size, device=self.storage_device, ndim=2),
             sampler=SliceSampler(
                 num_slices=self.batch_size,
                 end_key=None,

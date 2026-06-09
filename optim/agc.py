@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-from typing import Union
 
 import torch
 from torch import Tensor
@@ -9,15 +8,11 @@ from torch.utils._foreach_utils import (
     _has_foreach_support,
 )
 
-_tensor_or_tensors = Union[torch.Tensor, Iterable[torch.Tensor]]
+_tensor_or_tensors = torch.Tensor | Iterable[torch.Tensor]
 
 
 def clip_grad_agc_(parameters: _tensor_or_tensors, clip: float, pmin: float, foreach: bool | None = None):
-    if isinstance(parameters, torch.Tensor):
-        parameters = [parameters]
-    else:
-        # prevent generators from being exhausted
-        parameters = list(parameters)
+    parameters = [parameters] if isinstance(parameters, torch.Tensor) else list(parameters)
     params = []
     grads = []
     for p in parameters:
@@ -27,10 +22,8 @@ def clip_grad_agc_(parameters: _tensor_or_tensors, clip: float, pmin: float, for
 
     if len(grads) == 0:
         return
-    grouped: dict[
-        tuple[torch.device, torch.dtype], tuple[list[list[Tensor]], list[int]]
-    ] = _group_tensors_by_device_and_dtype(
-        [params, grads]
+    grouped: dict[tuple[torch.device, torch.dtype], tuple[list[list[Tensor]], list[int]]] = (
+        _group_tensors_by_device_and_dtype([params, grads])
     )  # type: ignore[assignment]
 
     for (device, _), ([device_params, device_grads], _) in grouped.items():

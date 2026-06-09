@@ -1,10 +1,12 @@
 import math
+
 import torch
 import torch.nn as nn
-from .block_linear import BlockLinear
-from .rmsnorm_2d import RMSNorm2D
 
 from tools import weight_init_
+
+from .block_linear import BlockLinear
+from .rmsnorm_2d import RMSNorm2D
 
 
 class ConvDecoder(nn.Module):
@@ -12,9 +14,7 @@ class ConvDecoder(nn.Module):
         super().__init__()
         act = getattr(torch.nn, config.act)
         self._shape = shape
-        self.depths = tuple(
-            int(config.depth) * int(mult) for mult in list(config.mults)
-        )
+        self.depths = tuple(int(config.depth) * int(mult) for mult in list(config.mults))
         factor = 2 ** (len(self.depths))
         minres = [int(x // factor) for x in shape[1:]]
         self.min_shape = (*minres, self.depths[-1])
@@ -29,18 +29,12 @@ class ConvDecoder(nn.Module):
             act(),
         )
         self.sp2 = nn.Linear(2 * self.units, math.prod(self.min_shape))
-        self.sp_norm = nn.Sequential(
-            nn.RMSNorm(self.depths[-1], eps=1e-04, dtype=torch.float32), act()
-        )
+        self.sp_norm = nn.Sequential(nn.RMSNorm(self.depths[-1], eps=1e-04, dtype=torch.float32), act())
         layers = []
         in_dim = self.depths[-1]
         for depth in reversed(self.depths[:-1]):
             layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
-            layers.append(
-                nn.Conv2d(
-                    in_dim, depth, self.kernel_size, stride=1, padding="same", bias=True
-                )
-            )
+            layers.append(nn.Conv2d(in_dim, depth, self.kernel_size, stride=1, padding="same", bias=True))
             layers.append(RMSNorm2D(depth, eps=1e-04, dtype=torch.float32))
             layers.append(act())
             in_dim = depth
@@ -71,9 +65,7 @@ class ConvDecoder(nn.Module):
         # (B, T, S, K), (B, T, D)
         B_T = deter.shape[:-1]
         # (B*T, D), (B*T, S*K)
-        x0, x1 = deter.reshape(B_T.numel(), deter.shape[-1]), stoch.reshape(
-            B_T.numel(), -1
-        )
+        x0, x1 = deter.reshape(B_T.numel(), deter.shape[-1]), stoch.reshape(B_T.numel(), -1)
 
         # Spatial features from deterministic state
         # (H_feat, W_feat, C_feat)

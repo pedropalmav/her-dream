@@ -35,13 +35,7 @@ def print_module_tree(info: dict, parent_path: str = "", indent: int = 0):
     """
     # Construct the current path
     name = info["name"]
-    if not parent_path:
-        full_path = name  # top level
-    else:
-        if name:  # submodule name is not empty
-            full_path = f"{parent_path}/{name}"
-        else:
-            full_path = parent_path
+    full_path = name if not parent_path else f"{parent_path}/{name}" if name else parent_path
 
     # Print total parameter count for the current module
     line = f"{info['total']:11,d} {full_path}"
@@ -50,14 +44,12 @@ def print_module_tree(info: dict, parent_path: str = "", indent: int = 0):
     # Create a combined list of param_nodes (parameters) and child_nodes (submodules)
     param_nodes = []
     for param_name, count in info["params"].items():
-        param_nodes.append(
-            {
-                "name": param_name,
-                "params": {},
-                "children": {},
-                "total": count,
-            }
-        )
+        param_nodes.append({
+            "name": param_name,
+            "params": {},
+            "children": {},
+            "total": count,
+        })
 
     child_nodes = list(info["children"].values())
 
@@ -103,7 +95,9 @@ def print_param_stats(model):
 
     # Column width settings (adjust if necessary)
     col_widths = [60, 15, 15, 15, 15]
-    header_format = f"{{:<{col_widths[0]}}}{{:>{col_widths[1]}}}{{:>{col_widths[2]}}}{{:>{col_widths[3]}}}{{:>{col_widths[4]}}}"
+    header_format = (
+        f"{{:<{col_widths[0]}}}{{:>{col_widths[1]}}}{{:>{col_widths[2]}}}{{:>{col_widths[3]}}}{{:>{col_widths[4]}}}"
+    )
     row_format = header_format
 
     # Print the header

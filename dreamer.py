@@ -8,8 +8,8 @@ from tensordict import TensorDict
 from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
-import distributions as dists
 
+import distributions as dists
 import networks
 import rssm
 import tools
@@ -79,10 +79,7 @@ class Dreamer(nn.Module):
 
         # Actor-critic components
         goal_shape = self.rssm._discrete if config.goal_type == "first_row" else self.rssm.flat_stoch
-        threshold_bins = (
-            int(round(1.0 / config.prob_threshold_step)) + 1
-            if config.goal_type == "log_prob" else 0
-        )
+        threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if config.goal_type == "log_prob" else 0
         self.threshold_bins = threshold_bins
         self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape + threshold_bins)
         self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape + threshold_bins)
@@ -171,7 +168,6 @@ class Dreamer(nn.Module):
             )
             if self.train_text_only or (not self.wm_only and not self.freeze_wm):
                 modules["text_encoder"] = self.text_encoder
-
 
         # count number of parameters in each module
         for key, module in modules.items():
@@ -366,10 +362,14 @@ class Dreamer(nn.Module):
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
         if self.goal_type in ("argmax_full", "log_prob"):
             state_dict["logit"] = logit
-        return action, TensorDict(
-            state_dict,
-            batch_size=state.batch_size,
-        ), {"obs_step_sample_log_prob": obs_step_sample_log_prob}
+        return (
+            action,
+            TensorDict(
+                state_dict,
+                batch_size=state.batch_size,
+            ),
+            {"obs_step_sample_log_prob": obs_step_sample_log_prob},
+        )
 
     @torch.no_grad()
     def _random_action(self, B):
@@ -497,9 +497,7 @@ class Dreamer(nn.Module):
             # or only the text encoder is trained (train_text_only).
             with torch.no_grad():
                 embed = self.encoder(data)
-                post_stoch, post_deter, post_logit = self.rssm.observe(
-                    embed, data["action"], initial, data["is_first"]
-                )
+                post_stoch, post_deter, post_logit = self.rssm.observe(embed, data["action"], initial, data["is_first"])
             if self.train_text_only:
                 # Distill the text encoder against the frozen WM posterior. The
                 # posterior is a fixed (no-grad) target; gradients flow only into
@@ -621,7 +619,7 @@ class Dreamer(nn.Module):
 
         # (B*T, T_imag, 1)
         S, K = self.rssm._stoch, self.rssm._discrete
-        get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)
+        get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)  # noqa: E731
         imag_stoch = get_stoch_from_feat(imag_feat)
         if self.goal_type == "log_prob":
             reward_input = self.rssm.get_dist(imag_logit)
@@ -633,9 +631,9 @@ class Dreamer(nn.Module):
 
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)
-        
+
         imag_reward = to_f32(imag_reward)
-        
+
         # (B*T, T_imag, ...)
         imag_goal = goal.unsqueeze(1).expand(
             -1,
@@ -700,7 +698,7 @@ class Dreamer(nn.Module):
             to_f32(data["is_terminal"]),
             to_f32(data["reward"]),
         )
-        feat = self.rssm.get_feat(post_stoch, post_deter) # (B, T, F)
+        feat = self.rssm.get_feat(post_stoch, post_deter)  # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
         goal = data["goal"].reshape(feat.shape[0], feat.shape[1], -1)
         value_input = torch.cat([feat, goal], dim=-1)

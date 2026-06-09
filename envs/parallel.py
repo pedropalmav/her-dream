@@ -31,8 +31,8 @@ class ParallelEnv:
     def env_num(self):
         return len(self.envs)
 
-    def lift_dim(self, td):
-        for key in td.keys():
+    def lift_dim(self, td: TensorDict):
+        for key in td.keys():  # noqa: SIM118 — td is not a plain dict
             if td[key].ndim == 1:
                 td[key] = td[key].unsqueeze(-1)
         return td
@@ -59,13 +59,10 @@ class ParallelEnv:
                 new_o.append(o)
                 new_r.append(r)
                 new_d.append(d)
-        obs_stacked = {k: np.stack([o[k] for o in new_o]) for k in new_o[0].keys()}
+        obs_stacked = {k: np.stack([o[k] for o in new_o]) for k in new_o[0]}
 
         # Build CPU tensors first to avoid implicit GPU syncs and enable async H2D in caller.
-        obs_tensors = {
-            k: torch.as_tensor(v, device="cpu")
-            for k, v in obs_stacked.items()
-        }
+        obs_tensors = {k: torch.as_tensor(v, device="cpu") for k, v in obs_stacked.items()}
         rew_stacked = torch.as_tensor(new_r, dtype=torch.float32, device="cpu")
 
         # Keep data on CPU; caller will .to(device, non_blocking=True) after pinning.
@@ -105,10 +102,7 @@ class Parallel:
         # method defined on an inner wrapper (e.g. MissionGridWrapper.encoded_random_mission)
         # via getattr on the outermost wrapper raises AttributeError. Use the
         # explicit get_wrapper_attr API which walks the wrapper chain.
-        if hasattr(state, "get_wrapper_attr"):
-            attr = state.get_wrapper_attr(name)
-        else:
-            attr = getattr(state, name)
+        attr = state.get_wrapper_attr(name) if hasattr(state, "get_wrapper_attr") else getattr(state, name)
         if message == PMessage.CALLABLE:
             assert not args and not kwargs, (args, kwargs)
             result = callable(attr)

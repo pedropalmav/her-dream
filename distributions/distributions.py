@@ -1,11 +1,13 @@
+from collections.abc import Callable
+
 import torch
 import torch.distributions as torchd
 from torch.nn import functional as F
 from torch.types import _size
-from typing import Callable
 
-from .functional import symlog, symexp
 from tools import to_f32, to_i32
+
+from .functional import symexp, symlog
 
 
 class OneHotDist(torchd.OneHotCategorical):
@@ -13,10 +15,7 @@ class OneHotDist(torchd.OneHotCategorical):
         # (..., K)
         probs = F.softmax(to_f32(logits), dim=-1)
         uniform = unimix_ratio / probs.shape[-1]
-        probs = (
-            probs * (1.0 - unimix_ratio)
-            + torch.ones_like(probs, dtype=torch.float32) * uniform
-        )
+        probs = probs * (1.0 - unimix_ratio) + torch.ones_like(probs, dtype=torch.float32) * uniform
         logits = torch.log(probs)
         super().__init__(logits=logits)
 
@@ -26,9 +25,7 @@ class OneHotDist(torchd.OneHotCategorical):
         _mode = F.one_hot(torch.argmax(self.logits, axis=-1), self.logits.shape[-1])
         return _mode.detach() + self.logits - self.logits.detach()
 
-    def rsample(
-        self, sample_shape: _size = (), temperature: float = 1.0
-    ) -> torch.Tensor:
+    def rsample(self, sample_shape: _size = (), temperature: float = 1.0) -> torch.Tensor:
         # (..., K)
         return F.gumbel_softmax(self.logits, tau=temperature, hard=True, dim=-1)
 
@@ -93,9 +90,9 @@ class TwoHot(torchd.Distribution):
             b1 = self.bins[..., :m]
             b2 = self.bins[..., m : m + 1]
             b3 = self.bins[..., m + 1 :]
-            wavg = (p2 * b2).sum(dim=-1, keepdim=True) + (
-                (p1 * b1).flip(dims=(-1,)) + (p3 * b3)
-            ).sum(dim=-1, keepdim=True)
+            wavg = (p2 * b2).sum(dim=-1, keepdim=True) + ((p1 * b1).flip(dims=(-1,)) + (p3 * b3)).sum(
+                dim=-1, keepdim=True
+            )
             return self.unsquash(wavg)
         p1 = self.probs[..., : n // 2]
         p2 = self.probs[..., n // 2 :]
@@ -111,9 +108,7 @@ class TwoHot(torchd.Distribution):
         target_squashed = self.squash(target).detach()  # (...,)
         # below/above: (...,)
         below = to_i32(self.bins <= target_squashed.unsqueeze(-1)).sum(dim=-1) - 1
-        above = len(self.bins) - to_i32(self.bins > target_squashed.unsqueeze(-1)).sum(
-            dim=-1
-        )
+        above = len(self.bins) - to_i32(self.bins > target_squashed.unsqueeze(-1)).sum(dim=-1)
         below = torch.clamp(below, 0, len(self.bins) - 1)
         above = torch.clamp(above, 0, len(self.bins) - 1)
         equal = below == above
@@ -133,12 +128,8 @@ class TwoHot(torchd.Distribution):
         oh_below = to_f32(F.one_hot(below, num_classes=len(self.bins)))
         oh_above = to_f32(F.one_hot(above, num_classes=len(self.bins)))
         # (..., N_bins)
-        mixed_target = oh_below * weight_below.unsqueeze(
-            -1
-        ) + oh_above * weight_above.unsqueeze(-1)
-        log_pred = self.logits - torch.logsumexp(
-            self.logits, dim=-1, keepdim=True
-        )  # (..., N_bins)
+        mixed_target = oh_below * weight_below.unsqueeze(-1) + oh_above * weight_above.unsqueeze(-1)
+        log_pred = self.logits - torch.logsumexp(self.logits, dim=-1, keepdim=True)  # (..., N_bins)
         return (mixed_target * log_pred).sum(dim=-1)  # (...)
 
 
@@ -171,9 +162,7 @@ class MSEDist(torchd.Distribution):
 
 
 class SymlogDist(torchd.Distribution):
-    def __init__(
-        self, mode: torch.Tensor, dist: str = "mse", agg: str = "sum", tol: float = 1e-8
-    ):
+    def __init__(self, mode: torch.Tensor, dist: str = "mse", agg: str = "sum", tol: float = 1e-8):
         # (..., D)
         self._mode = to_f32(mode)
         self._dist = dist

@@ -1,7 +1,7 @@
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import init as nn_init
-import numpy as np
 
 
 def weight_init_(m, fan_type="in"):

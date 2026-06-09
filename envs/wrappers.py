@@ -4,6 +4,7 @@ import torch
 
 import tools
 
+
 def get_wrapper(env, wrapper_type):
     current = env
     while hasattr(current, "env"):
@@ -40,9 +41,7 @@ class TimeLimit(gym.Wrapper):
 class NormalizeActions(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
-        self._mask = np.logical_and(
-            np.isfinite(env.action_space.low), np.isfinite(env.action_space.high)
-        )
+        self._mask = np.logical_and(np.isfinite(env.action_space.low), np.isfinite(env.action_space.high))
         self._low = np.where(self._mask, env.action_space.low, -1)
         self._high = np.where(self._mask, env.action_space.high, 1)
         low = np.where(self._mask, -np.ones_like(self._low), self._low)
@@ -72,7 +71,7 @@ class OneHotAction(gym.Wrapper):
         if not np.allclose(reference, action):
             raise ValueError(f"Invalid one-hot action:\n{action}")
         return self.env.step(index)
-    
+
     def reset(self):
         return self.env.reset()
 
@@ -89,9 +88,7 @@ class MultiOneHotAction(gym.Wrapper):
         assert isinstance(env.action_space, gym.spaces.MultiDiscrete)
         super().__init__(env)
         self.index_low = torch.tensor(self.action_space.low, device=device)
-        space = gym.spaces.Box(
-            low=0, high=1, shape=self.env.action_space.nvec, dtype=np.float32
-        )
+        space = gym.spaces.Box(low=0, high=1, shape=self.env.action_space.nvec, dtype=np.float32)
         space.multi_discrete = True
         self.action_space = space
 
@@ -115,9 +112,7 @@ class RewardObs(gym.Wrapper):
         super().__init__(env)
         spaces = self.env.observation_space.spaces
         if "obs_reward" not in spaces:
-            spaces["obs_reward"] = gym.spaces.Box(
-                -np.inf, np.inf, shape=(1,), dtype=np.float32
-            )
+            spaces["obs_reward"] = gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Dict(spaces)
 
     def step(self, action):
@@ -151,14 +146,13 @@ class GoalConditioned(gym.Wrapper):
         self.goal_type = config.goal_type
 
         if self.goal_type == "first_row":
-            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
-                self.stochastic_classes
-            )
+            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(self.stochastic_classes)
             self.goal_index = config.get("goal_index", None)
         else:
-            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(
-                (self.stochastic_rows, self.stochastic_classes)
-            )
+            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary((
+                self.stochastic_rows,
+                self.stochastic_classes,
+            ))
 
     def reset(self):
         obs = self.env.reset()
@@ -175,9 +169,7 @@ class GoalConditioned(gym.Wrapper):
             else:
                 goal = self._generate_row()
         else:
-            goal = np.zeros(
-                (self.stochastic_rows, self.stochastic_classes), dtype=np.float32
-            )
+            goal = np.zeros((self.stochastic_rows, self.stochastic_classes), dtype=np.float32)
             for i in range(self.stochastic_rows):
                 goal[i] = self._generate_row()
 
@@ -196,7 +188,6 @@ class GoalConditioned(gym.Wrapper):
 
 
 class NoMission(gym.ObservationWrapper):
-
     def __init__(self, env):
         super().__init__(env)
         self.observation_space.spaces.pop("mission", None)
@@ -210,9 +201,7 @@ class NoMission(gym.ObservationWrapper):
 class OneHotDirection(gym.ObservationWrapper):
     def __init__(self, env):
         super().__init__(env)
-        self.observation_space.spaces["direction"] = gym.spaces.Box(
-            0, 1, shape=(4,), dtype=np.float32
-        )
+        self.observation_space.spaces["direction"] = gym.spaces.Box(0, 1, shape=(4,), dtype=np.float32)
 
     def observation(self, obs):
         direction = obs.pop("direction")
@@ -228,14 +217,12 @@ class MiniGridWrapper(gym.Wrapper):
         env = OneHotDirection(env)
         super().__init__(env)
 
-        self.env.observation_space = gym.spaces.Dict(
-            {
-                **self.env.observation_space.spaces,
-                "is_first": gym.spaces.Box(0, 1, (), bool),
-                "is_last": gym.spaces.Box(0, 1, (), bool),
-                "is_terminal": gym.spaces.Box(0, 1, (), bool),
-            }
-        )
+        self.env.observation_space = gym.spaces.Dict({
+            **self.env.observation_space.spaces,
+            "is_first": gym.spaces.Box(0, 1, (), bool),
+            "is_last": gym.spaces.Box(0, 1, (), bool),
+            "is_terminal": gym.spaces.Box(0, 1, (), bool),
+        })
 
     def reset(self):
         obs, _ = self.env.reset()
@@ -259,9 +246,10 @@ class MiniGridWrapper(gym.Wrapper):
 
 
 MAX_LEN = 500  # largo máximo del string
-VOCAB = {c: i+1 for i, c in enumerate(" abcdefghijklmnopqrstuvwxyz0123456789.,!?-:()")}
+VOCAB = {c: i + 1 for i, c in enumerate(" abcdefghijklmnopqrstuvwxyz0123456789.,!?-:()")}
 VOCAB["<pad>"] = 0
 VOCAB_SIZE = len(VOCAB)  # 46 caracteres + padding
+
 
 def encode_mission(text: str, max_len: int = MAX_LEN) -> np.ndarray:
     # Stored as int8 token ids (0 = <pad>) to keep the replay buffer small.
@@ -278,15 +266,13 @@ class MissionGridWrapper(gym.Wrapper):
         env = OneHotDirection(env)
         super().__init__(env)
 
-        self.env.observation_space = gym.spaces.Dict(
-            {
-                **self.env.observation_space.spaces,
-                "mission": gym.spaces.Box(0, VOCAB_SIZE - 1, (MAX_LEN,), dtype=np.int8),
-                "is_first": gym.spaces.Box(0, 1, (), bool),
-                "is_last": gym.spaces.Box(0, 1, (), bool),
-                "is_terminal": gym.spaces.Box(0, 1, (), bool),
-            }
-        )
+        self.env.observation_space = gym.spaces.Dict({
+            **self.env.observation_space.spaces,
+            "mission": gym.spaces.Box(0, VOCAB_SIZE - 1, (MAX_LEN,), dtype=np.int8),
+            "is_first": gym.spaces.Box(0, 1, (), bool),
+            "is_last": gym.spaces.Box(0, 1, (), bool),
+            "is_terminal": gym.spaces.Box(0, 1, (), bool),
+        })
 
     def reset(self):
         obs, _ = self.env.reset()

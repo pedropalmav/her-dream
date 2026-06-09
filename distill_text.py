@@ -45,9 +45,8 @@ import tools
 from buffers import Buffer, HERBuffer
 from dreamer import Dreamer
 from envs import make_envs
-from trainer import OnlineTrainer
-
 from rewards import make_reward
+from trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
 sys.path.append(str(pathlib.Path(__file__).parent))

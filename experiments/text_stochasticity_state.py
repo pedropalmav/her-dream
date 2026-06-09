@@ -6,17 +6,16 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
 from omegaconf import OmegaConf
 
 from dreamer import Dreamer
-from envs import make_envs, make_env
+from envs import make_envs
 from rewards import make_reward
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades compartidas
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_logits_and_probs(agent, tokens: torch.Tensor):
     """
@@ -25,23 +24,22 @@ def get_logits_and_probs(agent, tokens: torch.Tensor):
       logits : (N, S, K)
       probs  : (N, S, K)   softmax de logits
     """
-    logits = agent.text_encoder(tokens)[:, 0]   # (N, S, K)
+    logits = agent.text_encoder(tokens)[:, 0]  # (N, S, K)
     probs = agent.rssm.get_dist(logits).base_dist.probs
     return logits, probs
 
 
 def encode_missions(env, n: int, device: str) -> torch.Tensor:
     """Devuelve tokens (N, 1, L) int8 listos para el encoder."""
-    raw = np.stack(
-        [env.encoded_random_mission()() for _ in range(n)]
-    )                                              # (N, L) int8
-    tokens = torch.as_tensor(raw, device=device)   # (N, L)
-    return tokens.unsqueeze(1)                     # (N, 1, L)
+    raw = np.stack([env.encoded_random_mission()() for _ in range(n)])  # (N, L) int8
+    tokens = torch.as_tensor(raw, device=device)  # (N, L)
+    return tokens.unsqueeze(1)  # (N, 1, L)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Experimento principal: corre los 5 sub-experimentos sobre el text encoder
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def exp_text_encoder_stochasticity(
@@ -70,8 +68,8 @@ def exp_text_encoder_stochasticity(
 
     # ── Preparar tokens ───────────────────────────────────────────────────────
     print(f"Generando {n_missions} misiones …")
-    tokens = encode_missions(env, n_missions, device)            # (N,1,L)
-    logits, probs = get_logits_and_probs(agent, tokens)          # (N,S,K)
+    tokens = encode_missions(env, n_missions, device)  # (N,1,L)
+    logits, probs = get_logits_and_probs(agent, tokens)  # (N,S,K)
 
     S, K = logits.shape[1], logits.shape[2]
     print(f"  Slots S={S}, Clases K={K}")
@@ -80,12 +78,10 @@ def exp_text_encoder_stochasticity(
     # d(i,j)  = (1/S) * sum_s 1[ mode_i_s != mode_j_s ]
     # D_inter = 2/(N(N-1)) * sum_{i<j} d(i,j)
     print("Exp 1: diversidad inter-misión …")
-    modes = probs.argmax(dim=-1)                                 # (N, S)
-    diff = (modes.unsqueeze(0) != modes.unsqueeze(1)).float()    # (N, N, S)
-    ham_inter = diff.mean(-1)                                    # (N, N)
-    mask_inter = torch.triu(
-        torch.ones(n_missions, n_missions, device=device), diagonal=1
-    ).bool()
+    modes = probs.argmax(dim=-1)  # (N, S)
+    diff = (modes.unsqueeze(0) != modes.unsqueeze(1)).float()  # (N, N, S)
+    ham_inter = diff.mean(-1)  # (N, N)
+    mask_inter = torch.triu(torch.ones(n_missions, n_missions, device=device), diagonal=1).bool()
     D_inter = ham_inter[mask_inter].mean().item()
     ham_matrix = ham_inter.cpu().numpy()
 
@@ -99,12 +95,12 @@ def exp_text_encoder_stochasticity(
     mask_intra = torch.triu(torch.ones(M, M, device=device), diagonal=1).bool()
 
     for i in range(n_missions):
-        t_i = tokens[i:i+1].expand(M, -1, -1, -1)                # (M, 1, L, V)
-        logits_i = agent.text_encoder(t_i)[:, 0]                 # (M, S, K)
-        samples = agent.rssm.get_dist(logits_i).rsample()                     # (M, S, K) one-hot
-        classes = samples.argmax(-1)                             # (M, S)
+        t_i = tokens[i : i + 1].expand(M, -1, -1, -1)  # (M, 1, L, V)
+        logits_i = agent.text_encoder(t_i)[:, 0]  # (M, S, K)
+        samples = agent.rssm.get_dist(logits_i).rsample()  # (M, S, K) one-hot
+        classes = samples.argmax(-1)  # (M, S)
         diff_i = (classes.unsqueeze(0) != classes.unsqueeze(1)).float()
-        ham_i = diff_i.mean(-1)                                  # (M, M)
+        ham_i = diff_i.mean(-1)  # (M, M)
         D_intra_per_mission[i] = ham_i[mask_intra].mean().item()
 
     D_intra = D_intra_per_mission.mean()
@@ -112,9 +108,9 @@ def exp_text_encoder_stochasticity(
     # ── Exp 3: entropía de los logits ────────────────────────────────────────
     # H^i_s = - sum_k p^i_sk * log(p^i_sk)
     print("Exp 3: entropía de logits …")
-    H_all_t = -(probs * (probs + 1e-8).log()).sum(-1)            # (N, S)
+    H_all_t = -(probs * (probs + 1e-8).log()).sum(-1)  # (N, S)
     H_all = H_all_t.cpu().numpy()
-    H_per_slot = H_all.mean(0)                                   # (S,)
+    H_per_slot = H_all.mean(0)  # (S,)
     H_global = float(H_all.mean())
     H_max = float(np.log(K))
     frac_peaked = float((H_all < 0.1 * H_max).mean())
@@ -123,13 +119,13 @@ def exp_text_encoder_stochasticity(
     # ── Exp 4: peak probability ──────────────────────────────────────────────
     # pi^i_s = max_k p^i_sk
     print("Exp 4: peak probability …")
-    pi_all = probs.max(-1).values.cpu().numpy()                  # (N, S)
+    pi_all = probs.max(-1).values.cpu().numpy()  # (N, S)
     pi_bar = float(pi_all.mean())
     pi_chance = 1.0 / K
 
     # ── Exp 5: heatmaps de probabilidad ──────────────────────────────────────
     print("Exp 5: heatmaps de probabilidad …")
-    prob_heatmaps = probs[:n_show_heatmaps].cpu().numpy()        # (n_show, S, K)
+    prob_heatmaps = probs[:n_show_heatmaps].cpu().numpy()  # (n_show, S, K)
 
     # ── Consola ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 55)
@@ -196,6 +192,7 @@ def exp_text_encoder_stochasticity(
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _save(fig, path):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -204,10 +201,21 @@ def _save(fig, path):
 
 def _plot_all(
     *,
-    ham_matrix, D_inter, D_intra, D_intra_per_mission,
-    H_all, H_per_slot, H_global, H_max,
-    pi_all, pi_bar, pi_chance,
-    prob_heatmaps, S, N, outdir,
+    ham_matrix,
+    D_inter,
+    D_intra,
+    D_intra_per_mission,
+    H_all,
+    H_per_slot,
+    H_global,
+    H_max,
+    pi_all,
+    pi_bar,
+    pi_chance,
+    prob_heatmaps,
+    S,
+    N,
+    outdir,
 ):
     """Genera un PNG independiente por cada gráfico."""
 
@@ -226,12 +234,9 @@ def _plot_all(
     # ── Exp 2 — Distribución de D_intra^i ────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.hist(D_intra_per_mission, bins=40, color="coral", edgecolor="white")
-    ax.axvline(D_intra, color="darkred", linestyle="--",
-               label=f"D_intra media={D_intra:.4f}")
-    ax.axvline(D_inter, color="steelblue", linestyle="--",
-               label=f"D_inter={D_inter:.3f}")
-    ax.set_title("Exp 2 — Distribución de D_intra por misión\n"
-                 "(varianza intra entre M muestras)")
+    ax.axvline(D_intra, color="darkred", linestyle="--", label=f"D_intra media={D_intra:.4f}")
+    ax.axvline(D_inter, color="steelblue", linestyle="--", label=f"D_inter={D_inter:.3f}")
+    ax.set_title("Exp 2 — Distribución de D_intra por misión\n(varianza intra entre M muestras)")
     ax.set_xlabel("D_intra^i  (Hamming entre muestras de la misma misión)")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
@@ -241,9 +246,12 @@ def _plot_all(
     # Ancho proporcional a S para que se vea cada slot
     box_w = max(14, S * 0.45)
     fig, ax = plt.subplots(figsize=(box_w, 7), constrained_layout=True)
-    ax.boxplot(H_all, patch_artist=True,
-               boxprops=dict(facecolor="lightblue", alpha=0.7),
-               medianprops=dict(color="steelblue", linewidth=2))
+    ax.boxplot(
+        H_all,
+        patch_artist=True,
+        boxprops=dict(facecolor="lightblue", alpha=0.7),
+        medianprops=dict(color="steelblue", linewidth=2),
+    )
     ax.axhline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
     ax.set_title("Exp 3 — Distribución H por slot")
     ax.set_xlabel("Slot s")
@@ -255,8 +263,7 @@ def _plot_all(
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax.bar(range(S), H_per_slot, color="steelblue", alpha=0.8)
     ax.axhline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
-    ax.axhline(H_global, color="orange", linestyle="--",
-               label=f"H={H_global:.3f}")
+    ax.axhline(H_global, color="orange", linestyle="--", label=f"H={H_global:.3f}")
     ax.set_title("Exp 3 — H_s media por slot")
     ax.set_xlabel("Slot s")
     ax.set_ylabel("H_s (nats)")
@@ -279,8 +286,7 @@ def _plot_all(
     hm_w = max(12, S * 0.4)
     hm_h = min(20, max(8, N * 0.06))
     fig, ax = plt.subplots(figsize=(hm_w, hm_h), constrained_layout=True)
-    im = ax.imshow(H_all, aspect="auto", cmap="hot", vmin=0, vmax=H_max,
-                   interpolation="nearest")
+    im = ax.imshow(H_all, aspect="auto", cmap="hot", vmin=0, vmax=H_max, interpolation="nearest")
     ax.set_title("Exp 3 — Heatmap H^i_s (misiones × slots)")
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Misión i")
@@ -290,10 +296,8 @@ def _plot_all(
     # ── Exp 4 — Distribución π^i_s ───────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     ax.hist(pi_all.flatten(), bins=50, color="mediumseagreen", edgecolor="white")
-    ax.axvline(pi_bar, color="darkgreen", linestyle="--",
-               label=f"pi_bar={pi_bar:.3f}")
-    ax.axvline(pi_chance, color="r", linestyle="--",
-               label=f"1/K={pi_chance:.3f}")
+    ax.axvline(pi_bar, color="darkgreen", linestyle="--", label=f"pi_bar={pi_bar:.3f}")
+    ax.axvline(pi_chance, color="r", linestyle="--", label=f"1/K={pi_chance:.3f}")
     ax.set_title("Exp 4 — Distribución π^i_s (peak prob)")
     ax.set_xlabel("max_k p^i_sk")
     ax.set_ylabel("Frecuencia")
@@ -313,8 +317,7 @@ def _plot_all(
     n_show = prob_heatmaps.shape[0]
     for idx in range(n_show):
         fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
-        im = ax.imshow(prob_heatmaps[idx], aspect="auto", cmap="Blues",
-                       vmin=0, vmax=1)
+        im = ax.imshow(prob_heatmaps[idx], aspect="auto", cmap="Blues", vmin=0, vmax=1)
         ax.set_title(f"Exp 5 — P^{idx} (S×K) — misión {idx}")
         ax.set_xlabel("Clase k")
         ax.set_ylabel("Slot s")
@@ -334,10 +337,8 @@ if __name__ == "__main__":
         --device cpu
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True,
-                        help="Directorio del run (contiene latest.pt y .hydra/config.yaml)")
-    parser.add_argument("--exp", default="text",
-                        choices=["text", "wm", "frozen", "alignment"])
+    parser.add_argument("--logdir", required=True, help="Directorio del run (contiene latest.pt y .hydra/config.yaml)")
+    parser.add_argument("--exp", default="text", choices=["text", "wm", "frozen", "alignment"])
     parser.add_argument("--device", default=None)
     parser.add_argument("--n_missions", type=int, default=200)
     parser.add_argument("--n_samples", type=int, default=50)

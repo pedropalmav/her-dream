@@ -2,11 +2,12 @@ import math
 import pathlib
 import sys
 import warnings
+from datetime import datetime
 
 import hydra
 import torch
-from datetime import datetime
 from tensordict import TensorDict
+
 import tools
 from dreamer import Dreamer
 from envs import make_env
@@ -24,9 +25,7 @@ def main(eval_cfg):
 
     experiment_dir = pathlib.Path(eval_cfg.experiment_dir)
     train_cfg = OmegaConf.load(experiment_dir / ".hydra/config.yaml")
-    config = OmegaConf.merge(
-        train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}}
-    )
+    config = OmegaConf.merge(train_cfg, {"env": {"time_limit": eval_cfg.eval_time_limit}})
 
     if "goal_index" in config.env and config.goal_type != "first_row":
         raise ValueError("goal_index is only supported for goal_type 'first_row'")
@@ -58,11 +57,7 @@ def main(eval_cfg):
         reward_function=reward_function,
     ).to(config.device)
 
-    agent.load_state_dict(
-        torch.load(experiment_dir / "latest.pt", map_location=config.device)[
-            "agent_state_dict"
-        ]
-    )
+    agent.load_state_dict(torch.load(experiment_dir / "latest.pt", map_location=config.device)["agent_state_dict"])
     agent.eval()
 
     manual_ctrl = ManualControl(act_space.shape[0]) if eval_cfg.manual_control else None
@@ -211,9 +206,8 @@ def make_video_grid(panels):
     for r in range(n_rows):
         row_panels = panels[r * n_cols : (r + 1) * n_cols]
         rows.append(torch.cat(row_panels, dim=3))  # concat horizontal (W)
-    grid = torch.cat(rows, dim=2)  # concat vertical (H)
 
-    return grid
+    return torch.cat(rows, dim=2)  # concat vertical (H)
 
 
 def interventions_video(agent, cache):
@@ -251,7 +245,6 @@ def interventions_video(agent, cache):
         n_cols = math.ceil(math.sqrt(N))
         n_rows = math.ceil(N / n_cols)
 
-        H, W, C = all_panels[0].shape[2], all_panels[0].shape[3], all_panels[0].shape[4]
         blank = torch.zeros_like(all_panels[0])
         while len(all_panels) < n_rows * n_cols:
             all_panels.append(blank)
@@ -260,9 +253,7 @@ def interventions_video(agent, cache):
         for r in range(n_rows):
             row_panels = all_panels[r * n_cols : (r + 1) * n_cols]
             rows.append(torch.cat(row_panels, dim=3))  # concat horizontal (W)
-        grid = torch.cat(rows, dim=2)  # concat vertical (H)
-
-        return grid
+        return torch.cat(rows, dim=2)  # concat vertical (H)
 
 
 if __name__ == "__main__":

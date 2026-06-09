@@ -31,7 +31,7 @@ class Crafter(gym.Env):
     def step(self, action):
         image, reward, done, info = self._env.step(action)
         reward = np.float32(reward)
-        logs = {f"log_{k}": float(info["achievements"][k]) if info else float(0.0) for k in self._achievements}
+        logs = {f"log_{k}": float(info["achievements"][k]) if info else 0.0 for k in self._achievements}
         obs = {
             "image": image,
             "is_first": False,
@@ -46,5 +46,5 @@ class Crafter(gym.Env):
 
     def reset(self):
         image = self._env.reset()
-        logs = {f"log_{k}": float(0.0) for k in self._achievements}
+        logs = {f"log_{k}": 0.0 for k in self._achievements}
         return {"image": image, "is_first": True, "is_last": False, "is_terminal": False, **logs}

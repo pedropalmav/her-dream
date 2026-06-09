@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+
 import distributions as dists
 
 
@@ -15,9 +16,7 @@ class MLP(nn.Module):
         self._device = torch.device(config.device)
         self.layers = nn.Sequential()
         for i in range(config.layers):
-            self.layers.add_module(
-                f"{config.name}_linear{i}", nn.Linear(inp_dim, config.units, bias=True)
-            )
+            self.layers.add_module(f"{config.name}_linear{i}", nn.Linear(inp_dim, config.units, bias=True))
             self.layers.add_module(
                 f"{config.name}_norm{i}",
                 nn.RMSNorm(config.units, eps=1e-04, dtype=torch.float32),

@@ -37,6 +37,7 @@ class WandbLogger(BaseLogger):
 
     def _flush_pending(self) -> None:
         import wandb
+
         if self._pending_payload and self._pending_step is not None:
             wandb.log(self._pending_payload, step=self._pending_step, commit=True)
         self._pending_payload = {}
@@ -73,11 +74,16 @@ class WandbLogger(BaseLogger):
         self._histograms = {}
 
     def log_hydra_config(
-        self, config, name: str = "config", step: int = 0,
-        log_hparams: bool = False, hparams_run_name: str = ".",
+        self,
+        config,
+        name: str = "config",
+        step: int = 0,
+        log_hparams: bool = False,
+        hparams_run_name: str = ".",
     ) -> None:
         try:
             from omegaconf import OmegaConf
+
             container = OmegaConf.to_container(config, resolve=True)
         except Exception:
             container = str(config)
@@ -86,4 +92,5 @@ class WandbLogger(BaseLogger):
     def close(self) -> None:
         self._flush_pending()
         import wandb
+
         wandb.finish()

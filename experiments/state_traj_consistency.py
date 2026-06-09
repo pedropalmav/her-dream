@@ -39,6 +39,7 @@ Salida
 ──────
 Plots y JSON en {logdir}/experiments/state_traj_consistency/.
 """
+
 import argparse
 import json
 import pathlib
@@ -51,15 +52,14 @@ from gymnasium.utils import seeding
 from omegaconf import OmegaConf
 
 from dreamer import Dreamer
-from envs import make_envs, make_env
+from envs import make_env, make_envs
 from rewards import make_reward
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Acciones MiniGrid (índices en el espacio Discrete(7))
 # ─────────────────────────────────────────────────────────────────────────────
-ACT_LEFT    = 0
-ACT_RIGHT   = 1
+ACT_LEFT = 0
+ACT_RIGHT = 1
 ACT_FORWARD = 2
 
 
@@ -84,7 +84,10 @@ _DIR_VEC = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}
 
 
 def _max_loop_side_from_pose(
-    start_pos: tuple[int, int], start_dir: int, size: int, turn: str = "right",
+    start_pos: tuple[int, int],
+    start_dir: int,
+    size: int,
+    turn: str = "right",
 ) -> int:
     """
     Mayor `n` tal que el loop (forward·n + turn)×4 cabe en el interior [1, size-2]².
@@ -95,10 +98,10 @@ def _max_loop_side_from_pose(
     """
     ax, ay = start_pos
     free = {
-        0: size - 2 - ax,   # east
-        1: size - 2 - ay,   # south
-        2: ax - 1,          # west
-        3: ay - 1,          # north
+        0: size - 2 - ax,  # east
+        1: size - 2 - ay,  # south
+        2: ax - 1,  # west
+        3: ay - 1,  # north
     }
     d1 = start_dir % 4
     step = 1 if turn == "right" else -1
@@ -118,13 +121,13 @@ def build_trajectories(
     (right / left) y se usan los que caben geométricamente en el grid.
     """
     geom_right = _max_loop_side_from_pose(start_pos, start_dir, size, "right")
-    geom_left  = _max_loop_side_from_pose(start_pos, start_dir, size, "left")
+    geom_left = _max_loop_side_from_pose(start_pos, start_dir, size, "left")
     if max_loop_side is not None:
         geom_right = min(geom_right, max_loop_side)
-        geom_left  = min(geom_left,  max_loop_side)
+        geom_left = min(geom_left, max_loop_side)
 
     trajs: dict[str, list[int]] = {}
-    trajs["reset_only"] = []                                # baseline (sin acciones)
+    trajs["reset_only"] = []  # baseline (sin acciones)
     for k in (4, 8, 12, 16, 20):
         trajs[f"spin_left_{k}"] = _spin(k, "left")
     for k in (4, 8, 12):
@@ -157,6 +160,7 @@ def _read_start_pose(env_factory) -> tuple[tuple[int, int], int, int]:
 # Preprocesado obs -> tensor batch=1
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _preprocess_obs(obs: dict, device: str) -> dict:
     """obs dict (numpy) -> tensores (1, ...) en device. uint8 imágenes se normalizan."""
     out = {}
@@ -180,6 +184,7 @@ def _onehot_action(idx: int, n_actions: int) -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────────────────
 # Ejecución de una trayectoria (acciones planificadas) en el WM
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def run_trajectory(
@@ -261,7 +266,7 @@ def run_trajectory(
         images.append(np.array(last_image))
 
         if done:
-            print(f"  [warn] episodio terminó tempranamente en paso {len(logits)-1}")
+            print(f"  [warn] episodio terminó tempranamente en paso {len(logits) - 1}")
             break
 
     base_env = env
@@ -272,19 +277,17 @@ def run_trajectory(
     if raw_goal is None:
         raw_goal = getattr(base_env, "goal_pos", None)
     if raw_goal is None:
-        raise AttributeError(
-            f"No encuentro goal_pos ni _goal_pos en {type(base_env).__name__}"
-        )
+        raise AttributeError(f"No encuentro goal_pos ni _goal_pos en {type(base_env).__name__}")
     goal_pos = np.array(raw_goal, dtype=np.int32)
 
     return {
-        "logits":    torch.stack(logits, dim=0),     # (T+1, S, K)
-        "zs":        torch.stack(zs, dim=0),         # (T+1, S, K)
-        "deter":     torch.stack(deters, dim=0),     # (T+1, D)
-        "pos":       np.array(poses, dtype=np.int32),
-        "dir":       np.array(dirs, dtype=np.int32),
-        "goal_pos":  goal_pos,
-        "images":    np.stack(images, axis=0),       # (T+1, H, W, 3)
+        "logits": torch.stack(logits, dim=0),  # (T+1, S, K)
+        "zs": torch.stack(zs, dim=0),  # (T+1, S, K)
+        "deter": torch.stack(deters, dim=0),  # (T+1, D)
+        "pos": np.array(poses, dtype=np.int32),
+        "dir": np.array(dirs, dtype=np.int32),
+        "goal_pos": goal_pos,
+        "images": np.stack(images, axis=0),  # (T+1, H, W, 3)
         "last_image": np.array(last_image),
     }
 
@@ -293,20 +296,22 @@ def run_trajectory(
 # Métricas entre logits/zs finales de N trayectorias
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _kl_pairwise(agent, logits: torch.Tensor) -> torch.Tensor:
     """
     logits: (N, S, K)
     Devuelve KL simétrica (N, N) promediada sobre slots S.
     """
     import distributions as dists
+
     N = logits.shape[0]
     out = torch.zeros(N, N)
     for i in range(N):
         for j in range(N):
             if i == j:
                 continue
-            kl_ij = dists.kl(logits[i:i+1], logits[j:j+1]).sum(-1).mean()
-            kl_ji = dists.kl(logits[j:j+1], logits[i:i+1]).sum(-1).mean()
+            kl_ij = dists.kl(logits[i : i + 1], logits[j : j + 1]).sum(-1).mean()
+            kl_ji = dists.kl(logits[j : j + 1], logits[i : i + 1]).sum(-1).mean()
             out[i, j] = 0.5 * (kl_ij + kl_ji)
     return out
 
@@ -325,8 +330,8 @@ def _cosine_pairwise(feat: torch.Tensor) -> torch.Tensor:
 
 def _intra_state_hamming(agent, logit: torch.Tensor, M: int) -> float:
     """Hamming intra-estado entre M muestras del mismo logit. logit: (S, K)."""
-    l = logit.unsqueeze(0).expand(M, -1, -1)
-    samples = agent.rssm.get_dist(l).rsample()        # (M, S, K)
+    expanded_logit = logit.unsqueeze(0).expand(M, -1, -1)
+    samples = agent.rssm.get_dist(expanded_logit).rsample()  # (M, S, K)
     classes = samples.argmax(-1)
     mask = torch.triu(torch.ones(M, M, device=logit.device), diagonal=1).bool()
     diff = (classes.unsqueeze(0) != classes.unsqueeze(1)).float().mean(-1)
@@ -336,6 +341,7 @@ def _intra_state_hamming(agent, logit: torch.Tensor, M: int) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 # Principal
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def run_state_traj_consistency(
@@ -361,13 +367,13 @@ def run_state_traj_consistency(
     N = len(names)
 
     # ── Verificar que los estados FÍSICOS finales coinciden ──────────────────
-    final_pos = np.stack([runs[n]["pos"][-1]  for n in names])   # (N, 2)
-    final_dir = np.stack([runs[n]["dir"][-1]  for n in names])   # (N,)
-    goal_pos  = np.stack([runs[n]["goal_pos"] for n in names])   # (N, 2)
+    final_pos = np.stack([runs[n]["pos"][-1] for n in names])  # (N, 2)
+    final_dir = np.stack([runs[n]["dir"][-1] for n in names])  # (N,)
+    goal_pos = np.stack([runs[n]["goal_pos"] for n in names])  # (N, 2)
 
-    same_pos  = np.all(final_pos == final_pos[0],   axis=1)
-    same_dir  = (final_dir == final_dir[0])
-    same_goal = np.all(goal_pos == goal_pos[0],     axis=1)
+    same_pos = np.all(final_pos == final_pos[0], axis=1)
+    same_dir = final_dir == final_dir[0]
+    same_goal = np.all(goal_pos == goal_pos[0], axis=1)
 
     print("\nEstado físico final por trayectoria:")
     for i, n in enumerate(names):
@@ -385,50 +391,45 @@ def run_state_traj_consistency(
 
     # ── Apilar último logit/z/feat de las trayectorias válidas ───────────────
     last_logits = torch.stack([runs[n]["logits"][-1] for n in names], dim=0).to(device)  # (N,S,K)
-    last_zs     = torch.stack([runs[n]["zs"][-1]     for n in names], dim=0).to(device)  # (N,S,K)
-    last_deter  = torch.stack([runs[n]["deter"][-1]  for n in names], dim=0).to(device)  # (N,D)
+    last_zs = torch.stack([runs[n]["zs"][-1] for n in names], dim=0).to(device)  # (N,S,K)
+    last_deter = torch.stack([runs[n]["deter"][-1] for n in names], dim=0).to(device)  # (N,D)
 
     S, K = last_logits.shape[1], last_logits.shape[2]
     print(f"\n  Logits finales: shape=({N}, {S}, {K})")
 
-    probs = agent.rssm.get_dist(last_logits).base_dist.probs   # (N, S, K)
-    modes = probs.argmax(-1)                                   # (N, S)
-    feat  = torch.cat([last_zs.reshape(N, -1), last_deter], dim=-1)  # (N, S*K + D)
+    probs = agent.rssm.get_dist(last_logits).base_dist.probs  # (N, S, K)
+    modes = probs.argmax(-1)  # (N, S)
+    feat = torch.cat([last_zs.reshape(N, -1), last_deter], dim=-1)  # (N, S*K + D)
 
     # ── Métricas inter-trayectoria ───────────────────────────────────────────
-    ham_modes  = _hamming_pairwise(modes)                      # (N, N)  sobre modes
-    ham_zs     = _hamming_pairwise(last_zs.argmax(-1))         # (N, N)  sobre z muestreado
-    kl_logits  = _kl_pairwise(agent, last_logits)              # (N, N)
-    cos_feat   = _cosine_pairwise(feat)                        # (N, N)
+    ham_modes = _hamming_pairwise(modes)  # (N, N)  sobre modes
+    ham_zs = _hamming_pairwise(last_zs.argmax(-1))  # (N, N)  sobre z muestreado
+    kl_logits = _kl_pairwise(agent, last_logits)  # (N, N)
+    cos_feat = _cosine_pairwise(feat)  # (N, N)
 
     mask = torch.triu(torch.ones(N, N), diagonal=1).bool()
-    H_per_traj  = -(probs * (probs + 1e-8).log()).sum(-1).mean(-1).cpu().numpy()  # (N,)
-    pi_per_traj = probs.max(-1).values.mean(-1).cpu().numpy()                      # (N,)
+    H_per_traj = -(probs * (probs + 1e-8).log()).sum(-1).mean(-1).cpu().numpy()  # (N,)
+    pi_per_traj = probs.max(-1).values.mean(-1).cpu().numpy()  # (N,)
     H_max = float(np.log(K))
 
     # ── Baseline: variabilidad intra-estado por muestreo ─────────────────────
-    intra_hamming = np.array([
-        _intra_state_hamming(agent, last_logits[i], n_samples_intra)
-        for i in range(N)
-    ])
+    intra_hamming = np.array([_intra_state_hamming(agent, last_logits[i], n_samples_intra) for i in range(N)])
     inter_hamming_modes = ham_modes[mask].cpu().numpy()
-    inter_hamming_zs    = ham_zs[mask].cpu().numpy()
+    inter_hamming_zs = ham_zs[mask].cpu().numpy()
 
     print("\n" + "=" * 64)
     print("  Resultados — Consistencia del z para el mismo estado")
     print("=" * 64)
     print(f"  Trayectorias válidas:                  N = {N}")
-    print(f"  Inter-traj  Hamming (sobre modes):     {inter_hamming_modes.mean():.4f}  "
-          f"max={inter_hamming_modes.max():.4f}")
-    print(f"  Inter-traj  Hamming (sobre z sample):  {inter_hamming_zs.mean():.4f}  "
-          f"max={inter_hamming_zs.max():.4f}")
-    print(f"  Intra-state Hamming (M={n_samples_intra}):           "
-          f"{intra_hamming.mean():.4f}")
+    print(
+        f"  Inter-traj  Hamming (sobre modes):     {inter_hamming_modes.mean():.4f}  "
+        f"max={inter_hamming_modes.max():.4f}"
+    )
+    print(f"  Inter-traj  Hamming (sobre z sample):  {inter_hamming_zs.mean():.4f}  max={inter_hamming_zs.max():.4f}")
+    print(f"  Intra-state Hamming (M={n_samples_intra}):           {intra_hamming.mean():.4f}")
     print(f"  Inter-traj  KL simétrica media:        {kl_logits[mask].mean().item():.4f}")
-    print(f"  Inter-traj  cos(feat) media:           {cos_feat[mask].mean().item():.4f}  "
-          f"(1.0 = idéntico)")
-    print(f"  H̄ logit final por traj:               {H_per_traj.mean():.4f}  "
-          f"(H_max={H_max:.2f})")
+    print(f"  Inter-traj  cos(feat) media:           {cos_feat[mask].mean().item():.4f}  (1.0 = idéntico)")
+    print(f"  H̄ logit final por traj:               {H_per_traj.mean():.4f}  (H_max={H_max:.2f})")
     print(f"  π̄ peak prob por traj:                  {pi_per_traj.mean():.4f}")
     print("=" * 64)
 
@@ -458,21 +459,23 @@ def run_state_traj_consistency(
     results = {
         "seed": seed,
         "names": names,
-        "N": N, "S": S, "K": K,
+        "N": N,
+        "S": S,
+        "K": K,
         "n_samples_intra": n_samples_intra,
         "final_pos": final_pos.tolist(),
         "final_dir": final_dir.tolist(),
-        "goal_pos":  goal_pos[0].tolist(),
+        "goal_pos": goal_pos[0].tolist(),
         "ham_modes_mean": float(inter_hamming_modes.mean()),
-        "ham_modes_max":  float(inter_hamming_modes.max()),
-        "ham_zs_mean":    float(inter_hamming_zs.mean()),
+        "ham_modes_max": float(inter_hamming_modes.max()),
+        "ham_zs_mean": float(inter_hamming_zs.mean()),
         "intra_hamming_mean": float(intra_hamming.mean()),
-        "kl_sym_mean":    float(kl_logits[mask].mean().item()),
-        "cos_feat_mean":  float(cos_feat[mask].mean().item()),
-        "H_per_traj":     H_per_traj.tolist(),
-        "H_max":          H_max,
-        "pi_per_traj":    pi_per_traj.tolist(),
-        "traj_lengths":   {n: len(trajectories[n]) for n in names},
+        "kl_sym_mean": float(kl_logits[mask].mean().item()),
+        "cos_feat_mean": float(cos_feat[mask].mean().item()),
+        "H_per_traj": H_per_traj.tolist(),
+        "H_max": H_max,
+        "pi_per_traj": pi_per_traj.tolist(),
+        "traj_lengths": {n: len(trajectories[n]) for n in names},
     }
     with open(outdir / "state_traj_consistency.json", "w") as f:
         json.dump(results, f, indent=2)
@@ -484,6 +487,7 @@ def run_state_traj_consistency(
 # ─────────────────────────────────────────────────────────────────────────────
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _save(fig, path):
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -503,20 +507,19 @@ def _render_gif_frame(image, probs_sk, z_sk, *, step, n_steps, name, dir_, pos):
     fig, axes = plt.subplots(1, 3, figsize=(13, 5.2), constrained_layout=True)
 
     axes[0].imshow(image)
-    axes[0].set_title(f"observación   t={step}/{n_steps}\n"
-                      f"pos={tuple(int(p) for p in pos)}  dir={_DIR_NAME[int(dir_)]}")
+    axes[0].set_title(f"observación   t={step}/{n_steps}\npos={tuple(int(p) for p in pos)}  dir={_DIR_NAME[int(dir_)]}")
     axes[0].axis("off")
 
-    im1 = axes[1].imshow(probs_sk, aspect="auto", cmap="Blues", vmin=0, vmax=1,
-                         interpolation="nearest")
+    im1 = axes[1].imshow(probs_sk, aspect="auto", cmap="Blues", vmin=0, vmax=1, interpolation="nearest")
     axes[1].set_title("probs posterior  p(z|·)")
-    axes[1].set_xlabel("clase k"); axes[1].set_ylabel("slot s")
+    axes[1].set_xlabel("clase k")
+    axes[1].set_ylabel("slot s")
     fig.colorbar(im1, ax=axes[1], fraction=0.046, label="p_sk")
 
-    im2 = axes[2].imshow(z_sk, aspect="auto", cmap="Greys", vmin=0, vmax=1,
-                         interpolation="nearest")
+    im2 = axes[2].imshow(z_sk, aspect="auto", cmap="Greys", vmin=0, vmax=1, interpolation="nearest")
     axes[2].set_title("z muestreado  (one-hot)")
-    axes[2].set_xlabel("clase k"); axes[2].set_ylabel("slot s")
+    axes[2].set_xlabel("clase k")
+    axes[2].set_ylabel("slot s")
     fig.colorbar(im2, ax=axes[2], fraction=0.046, label="z_sk")
 
     fig.suptitle(name, fontsize=13, fontweight="bold")
@@ -530,18 +533,22 @@ def _make_trajectory_gif(agent, name, run, outdir, fps=2):
     """Crea {outdir}/gif_{name}.gif con un frame por paso de la trayectoria."""
     import imageio.v2 as imageio
 
-    logits_t = run["logits"]                       # (T+1, S, K)
-    probs_t  = agent.rssm.get_dist(
-        logits_t.to(agent.device)).base_dist.probs.cpu().numpy()  # (T+1, S, K)
-    z_t      = run["zs"].cpu().numpy()             # (T+1, S, K)  one-hot
-    images   = run["images"]                       # (T+1, H, W, 3)
-    n_steps  = len(images) - 1
+    logits_t = run["logits"]  # (T+1, S, K)
+    probs_t = agent.rssm.get_dist(logits_t.to(agent.device)).base_dist.probs.cpu().numpy()  # (T+1, S, K)
+    z_t = run["zs"].cpu().numpy()  # (T+1, S, K)  one-hot
+    images = run["images"]  # (T+1, H, W, 3)
+    n_steps = len(images) - 1
 
     frames = [
         _render_gif_frame(
-            images[t], probs_t[t], z_t[t],
-            step=t, n_steps=n_steps, name=name,
-            dir_=run["dir"][t], pos=run["pos"][t],
+            images[t],
+            probs_t[t],
+            z_t[t],
+            step=t,
+            n_steps=n_steps,
+            name=name,
+            dir_=run["dir"][t],
+            pos=run["pos"][t],
         )
         for t in range(len(images))
     ]
@@ -561,48 +568,69 @@ def make_loop_spin_gifs(agent, runs, outdir, fps=2):
 
 
 def _plot_all(
-    *, names, last_logits, probs, modes, last_zs, ham_modes, ham_zs, kl_logits,
-    cos_feat, H_per_traj, intra_hamming, inter_hamming_modes, runs, outdir, H_max,
+    *,
+    names,
+    last_logits,
+    probs,
+    modes,
+    last_zs,
+    ham_modes,
+    ham_zs,
+    kl_logits,
+    cos_feat,
+    H_per_traj,
+    intra_hamming,
+    inter_hamming_modes,
+    runs,
+    outdir,
+    H_max,
 ):
     N, S, K = probs.shape
     short = [n.replace("_", "\n", 1) for n in names]
 
     # ── Heatmap pairwise: Hamming sobre modes ────────────────────────────────
-    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3),
-                           constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3), constrained_layout=True)
     im = ax.imshow(ham_modes, cmap="Reds", vmin=0, vmax=1)
-    ax.set_xticks(range(N)); ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(N)); ax.set_yticklabels(names, fontsize=8)
+    ax.set_xticks(range(N))
+    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(N))
+    ax.set_yticklabels(names, fontsize=8)
     ax.set_title("Hamming inter-trayectoria (sobre argmax_k logit)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="Hamming")
     _save(fig, outdir / "pairwise_hamming_modes.png")
 
     # ── Heatmap pairwise: KL simétrica ───────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3),
-                           constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3), constrained_layout=True)
     im = ax.imshow(kl_logits, cmap="viridis")
-    ax.set_xticks(range(N)); ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(N)); ax.set_yticklabels(names, fontsize=8)
+    ax.set_xticks(range(N))
+    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(N))
+    ax.set_yticklabels(names, fontsize=8)
     ax.set_title("KL simétrica inter-trayectoria (logits posteriores)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="KL (nats)")
     _save(fig, outdir / "pairwise_kl.png")
 
     # ── Heatmap pairwise: cos(feat) ──────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3),
-                           constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3), constrained_layout=True)
     im = ax.imshow(cos_feat, cmap="coolwarm", vmin=-1, vmax=1)
-    ax.set_xticks(range(N)); ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(N)); ax.set_yticklabels(names, fontsize=8)
+    ax.set_xticks(range(N))
+    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(N))
+    ax.set_yticklabels(names, fontsize=8)
     ax.set_title("Cos(feat) inter-trayectoria  (z ‖ deter)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="cos")
     _save(fig, outdir / "pairwise_cosine_feat.png")
 
     # ── Comparativa inter vs intra Hamming ───────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-    ax.hist(inter_hamming_modes, bins=20, alpha=0.7, color="steelblue",
-            label=f"inter-traj media={inter_hamming_modes.mean():.3f}")
-    ax.hist(intra_hamming, bins=20, alpha=0.7, color="coral",
-            label=f"intra-state media={intra_hamming.mean():.3f}")
+    ax.hist(
+        inter_hamming_modes,
+        bins=20,
+        alpha=0.7,
+        color="steelblue",
+        label=f"inter-traj media={inter_hamming_modes.mean():.3f}",
+    )
+    ax.hist(intra_hamming, bins=20, alpha=0.7, color="coral", label=f"intra-state media={intra_hamming.mean():.3f}")
     ax.set_xlabel("Hamming normalizada")
     ax.set_ylabel("Frecuencia")
     ax.set_title("Variabilidad inter-trayectoria vs intra-estado")
@@ -610,11 +638,11 @@ def _plot_all(
     _save(fig, outdir / "inter_vs_intra_hamming.png")
 
     # ── Entropía media por trayectoria ───────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(max(8, 0.5 * N + 2), 5),
-                           constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * N + 2), 5), constrained_layout=True)
     ax.bar(range(N), H_per_traj, color="steelblue", alpha=0.8)
     ax.axhline(H_max, color="r", linestyle="--", label=f"H_max={H_max:.2f}")
-    ax.set_xticks(range(N)); ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
+    ax.set_xticks(range(N))
+    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
     ax.set_ylabel("H media (nats)")
     ax.set_title("Entropía media del logit final por trayectoria")
     ax.legend()
@@ -634,7 +662,7 @@ def _plot_all(
     # ── Evolución de entropía durante cada trayectoria ───────────────────────
     fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
     for name in names:
-        logits_t = runs[name]["logits"]                  # (T+1, S, K)
+        logits_t = runs[name]["logits"]  # (T+1, S, K)
         p = torch.softmax(logits_t, dim=-1)
         H_t = -(p * (p + 1e-8).log()).sum(-1).mean(-1).numpy()
         ax.plot(H_t, label=name, alpha=0.85)
@@ -646,25 +674,23 @@ def _plot_all(
     _save(fig, outdir / "entropy_over_time.png")
 
     # ── Mapa de modos: para cada slot s, qué clase k es la moda en cada traj ─
-    modes_np = modes.cpu().numpy()                        # (N, S)
+    modes_np = modes.cpu().numpy()  # (N, S)
     fig_h = max(4, 0.35 * N)
-    fig, ax = plt.subplots(figsize=(min(20, 0.25 * S + 2), fig_h),
-                           constrained_layout=True)
-    im = ax.imshow(modes_np, aspect="auto", cmap="tab20",
-                   interpolation="nearest", vmin=0, vmax=K - 1)
-    ax.set_yticks(range(N)); ax.set_yticklabels(names, fontsize=8)
+    fig, ax = plt.subplots(figsize=(min(20, 0.25 * S + 2), fig_h), constrained_layout=True)
+    im = ax.imshow(modes_np, aspect="auto", cmap="tab20", interpolation="nearest", vmin=0, vmax=K - 1)
+    ax.set_yticks(range(N))
+    ax.set_yticklabels(names, fontsize=8)
     ax.set_xlabel("Slot s")
     ax.set_title("Clase modal por slot (filas = trayectorias)")
     plt.colorbar(im, ax=ax, fraction=0.025, label="argmax_k")
     _save(fig, outdir / "modes_per_trajectory.png")
 
     # ── Mapa del z muestreado: clase one-hot del stoch real en cada slot ─────
-    zs_np = last_zs.argmax(-1).cpu().numpy()              # (N, S)
-    fig, ax = plt.subplots(figsize=(min(20, 0.25 * S + 2), fig_h),
-                           constrained_layout=True)
-    im = ax.imshow(zs_np, aspect="auto", cmap="tab20",
-                   interpolation="nearest", vmin=0, vmax=K - 1)
-    ax.set_yticks(range(N)); ax.set_yticklabels(names, fontsize=8)
+    zs_np = last_zs.argmax(-1).cpu().numpy()  # (N, S)
+    fig, ax = plt.subplots(figsize=(min(20, 0.25 * S + 2), fig_h), constrained_layout=True)
+    im = ax.imshow(zs_np, aspect="auto", cmap="tab20", interpolation="nearest", vmin=0, vmax=K - 1)
+    ax.set_yticks(range(N))
+    ax.set_yticklabels(names, fontsize=8)
     ax.set_xlabel("Slot s")
     ax.set_title("z muestreado por slot (filas = trayectorias)")
     plt.colorbar(im, ax=ax, fraction=0.025, label="argmax_k z")
@@ -684,23 +710,25 @@ if __name__ == "__main__":
         --n_samples 50
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir",    required=True)
-    parser.add_argument("--device",    default=None)
-    parser.add_argument("--seed",      type=int, default=0,
-                        help="Seed para el reset del env (fija la posición del goal)")
-    parser.add_argument("--n_samples", type=int, default=50,
-                        help="Muestras por estado para la variabilidad intra-state")
-    parser.add_argument("--max_loop",  type=int, default=None,
-                        help="Lado máximo del loop. Si se omite, se usa el máximo "
-                             "geométrico que cabe dado el agent_start_pos del env.")
-    parser.add_argument("--gif_fps",   type=int, default=2,
-                        help="FPS de los gifs por trayectoria (loops y spin).")
+    parser.add_argument("--logdir", required=True)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--seed", type=int, default=0, help="Seed para el reset del env (fija la posición del goal)")
+    parser.add_argument(
+        "--n_samples", type=int, default=50, help="Muestras por estado para la variabilidad intra-state"
+    )
+    parser.add_argument(
+        "--max_loop",
+        type=int,
+        default=None,
+        help="Lado máximo del loop. Si se omite, se usa el máximo geométrico que cabe dado el agent_start_pos del env.",
+    )
+    parser.add_argument("--gif_fps", type=int, default=2, help="FPS de los gifs por trayectoria (loops y spin).")
     args = parser.parse_args()
 
     logdir = pathlib.Path(args.logdir)
 
-    config        = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device        = args.device or config.device
+    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
+    device = args.device or config.device
     config.device = device
 
     # Backfill defaults for keys added after this run was trained.
@@ -712,7 +740,9 @@ if __name__ == "__main__":
     _, eval_envs, obs_space, act_space = make_envs(config.env)
 
     agent = Dreamer(
-        config.model, obs_space, act_space,
+        config.model,
+        obs_space,
+        act_space,
         reward_function=reward_function,
     ).to(device)
 
@@ -723,26 +753,26 @@ if __name__ == "__main__":
 
     # El env_factory de cada trayectoria crea un env independiente para que
     # cada trayectoria empiece desde un reset limpio.
-    env_factory = lambda: make_env(config.env, 0)
+    def env_factory():
+        return make_env(config.env, 0)
 
     start_pos, start_dir, size = _read_start_pose(env_factory)
     dir_name = {0: "east", 1: "south", 2: "west", 3: "north"}[start_dir]
-    print(f"Pose inicial del env: pos={start_pos}, dir={start_dir} ({dir_name}), "
-          f"interior={size - 2}x{size - 2}")
+    print(f"Pose inicial del env: pos={start_pos}, dir={start_dir} ({dir_name}), interior={size - 2}x{size - 2}")
 
     trajectories = build_trajectories(
-        start_pos     = start_pos,
-        start_dir     = start_dir,
-        size          = size,
-        max_loop_side = args.max_loop,
+        start_pos=start_pos,
+        start_dir=start_dir,
+        size=size,
+        max_loop_side=args.max_loop,
     )
 
     run_state_traj_consistency(
-        agent          = agent,
-        env_factory    = env_factory,
-        trajectories   = trajectories,
-        n_samples_intra= args.n_samples,
-        seed           = args.seed,
-        outdir         = logdir / "experiments" / "state_traj_consistency",
-        gif_fps        = args.gif_fps,
+        agent=agent,
+        env_factory=env_factory,
+        trajectories=trajectories,
+        n_samples_intra=args.n_samples,
+        seed=args.seed,
+        outdir=logdir / "experiments" / "state_traj_consistency",
+        gif_fps=args.gif_fps,
     )

@@ -1,16 +1,17 @@
 import torch
 import torch.distributions as torchd
 
+from tools import to_f32
+
 from .distributions import (
     Bound,
-    OneHotDist,
-    MultiOneHotDist,
-    TwoHot,
-    SymlogDist,
     MSEDist,
+    MultiOneHotDist,
+    OneHotDist,
+    SymlogDist,
+    TwoHot,
 )
 from .functional import symexp
-from tools import to_f32
 
 
 def bounded_normal(x: torch.Tensor, min_std: float, max_std: float, **kwargs):
@@ -35,22 +36,16 @@ def multi_onehot(mean: torch.Tensor, unimix_ratio: float, shape: tuple, **kwargs
 
 
 def binary(logits: torch.Tensor, **kwargs):
-    return torchd.independent.Independent(
-        torchd.bernoulli.Bernoulli(logits=to_f32(logits)), 1
-    )
+    return torchd.independent.Independent(torchd.bernoulli.Bernoulli(logits=to_f32(logits)), 1)
 
 
 def symexp_twohot(logits: torch.Tensor, bin_num: int, **kwargs):
     if bin_num % 2 == 1:
-        half = torch.linspace(
-            -20, 0, (bin_num - 1) // 2 + 1, dtype=torch.float32, device=logits.device
-        )
+        half = torch.linspace(-20, 0, (bin_num - 1) // 2 + 1, dtype=torch.float32, device=logits.device)
         half = symexp(half)
         bins = torch.concatenate([half, -half[:-1].flip(dims=(0,))], 0)
     else:
-        half = torch.linspace(
-            -20, 0, bin_num // 2, dtype=torch.float32, device=logits.device
-        )
+        half = torch.linspace(-20, 0, bin_num // 2, dtype=torch.float32, device=logits.device)
         half = symexp(half)
         bins = torch.concatenate([half, -half.flip(dims=(0,))], 0)
     return TwoHot(to_f32(logits), bins)

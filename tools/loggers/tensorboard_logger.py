@@ -52,12 +52,17 @@ class TensorboardLogger(BaseLogger):
         self._histograms = {}
 
     def log_hydra_config(
-        self, config, name: str = "config", step: int = 0,
-        log_hparams: bool = False, hparams_run_name: str = ".",
+        self,
+        config,
+        name: str = "config",
+        step: int = 0,
+        log_hparams: bool = False,
+        hparams_run_name: str = ".",
     ) -> None:
         yaml_str = None
         try:
             from omegaconf import OmegaConf
+
             yaml_str = OmegaConf.to_yaml(config, resolve=True)
         except ImportError:
             yaml_str = str(config)
@@ -67,6 +72,7 @@ class TensorboardLogger(BaseLogger):
             container = None
             try:
                 from omegaconf import OmegaConf
+
                 container = OmegaConf.to_container(config, resolve=True)
             except Exception:
                 pass

@@ -2,7 +2,6 @@ import abc
 
 
 class BaseLogger(abc.ABC):
-
     @abc.abstractmethod
     def scalar(self, name: str, value: float) -> None: ...
 
@@ -23,6 +22,10 @@ class BaseLogger(abc.ABC):
 
     @abc.abstractmethod
     def log_hydra_config(
-        self, config, name: str = "config", step: int = 0,
-        log_hparams: bool = False, hparams_run_name: str = ".",
+        self,
+        config,
+        name: str = "config",
+        step: int = 0,
+        log_hparams: bool = False,
+        hparams_run_name: str = ".",
     ) -> None: ...

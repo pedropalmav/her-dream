@@ -10,12 +10,12 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_rando
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/post_train_her_from_wm_only_sample_buffer/01 ./logdir/post_train_her_from_wm_only_sample_buffer/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/observed-z-goals/01 ./logdir/random_goal_herbuf_goalbuf/
 ```
 
 3. Correr el tensorboard
 ```bash
-tensorboard --logdir ./logdir/post_train_her_from_wm_only_sample_buffer/01
+tensorboard --logdir ./logdir/random_goal_herbuf_goalbuf
 ```
 
 4. Correr evaluación con el text_encoder al azar:
@@ -135,4 +135,35 @@ ts -k {process_id}
       env=fixed_goal env.goal_sample=buffer \
       buffer=her goal_type=argmax_full seed=1 \
       trainer.steps=500000 trainer.update_log_every=1000
+```
+
+17. **random_goal — Fase 1: WM only.** Pre-entrena solo el world model en el ambiente `random_goal` (cuadrado verde se mueve al terminar el episodio), sin texto. Base para los post-trains de los items 18-19, para poder comparar de forma justa contra el run joint-from-scratch (`random_goal_herbuf_goalbuf`). `env.steps` se usa porque `trainer.steps` lo hereda (`trainer.steps: ${env.steps}`):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/random_goal.sh \
+    logdir=./logdir/random_goal/wm_only_randomgoal/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=random buffer=normal wm_only=True \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+18. **random_goal — Fase 2a: Post-train con WM congelado, HER + goals del buffer.** Réplica del run fallido pero partiendo del WM pre-entrenado/congelado del item 17 (esperar a que termine). Solo entrena actor/critic:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_herbuf_goalbuf/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=buffer buffer=her \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+19. **random_goal — Fase 2b: Post-train con WM congelado, buffer normal + goals del buffer (sin HER).** Baseline para aislar el efecto de HER frente al item 18:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=buffer buffer=normal \
+    env.steps=500000 trainer.update_log_every=1000
 ```

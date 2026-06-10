@@ -47,6 +47,7 @@ testpaths = ["tests"]
 addopts = "-v"
 filterwarnings = [
     "ignore:torch.meshgrid.*indexing:UserWarning",
+    "ignore:This overload of addcmul_ is deprecated:UserWarning",
 ]
 
 [tool.ruff]

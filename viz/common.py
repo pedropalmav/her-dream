@@ -8,6 +8,7 @@ tanto `traj_viz_dash.py` (replay con slider) como `interactive_dash.py`
 """
 
 import base64
+import copy
 import io
 import pathlib
 
@@ -246,6 +247,162 @@ def run_trajectory(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Builder incremental con estado vivo
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TrajectoryBuilder:
+    """
+    Constructor incremental y con estado de una trayectoria.
+
+    A diferencia de `collect_trajectory` (que re-ejecuta todo el camino desde
+    t=0 en cada llamada), este builder mantiene **un único env vivo** y el estado
+    del RSSM, y avanza **exactamente un paso por acción**. Nunca reproduce el
+    historial, así que:
+
+    - La estocasticidad del entorno (zombies, etc.) se realiza una sola vez.
+    - El `stoch z` se muestrea una sola vez por paso y queda congelado, de modo
+      que el posterior/prior y la trayectoria latente del pasado no cambian al
+      añadir acciones nuevas.
+
+    El `undo` restaura un snapshot (`deepcopy` del env + estado latente), que es
+    barato y tampoco reproduce acciones. La navegación (ver pasos pasados) solo
+    lee de los registros acumulados.
+    """
+
+    def __init__(self, agent, env_factory, device, seed: int = 0):
+        self.agent = agent
+        self.env_factory = env_factory
+        self.device = device
+        self.seed = seed
+        self.reset()
+
+    # ── operaciones ─────────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def reset(self) -> None:
+        """Crea un env fresco y registra el paso inicial (t=0)."""
+        env = self.env_factory()
+        base = env
+        while hasattr(base, "env"):
+            base = base.env
+        base._np_random, _ = seeding.np_random(self.seed)
+        obs = env.reset()
+
+        self._env = env
+        self._n_act = env.action_space.shape[0]
+        self._stoch, self._deter = self.agent.rssm.initial(1)
+        self._done = False
+
+        self._raw = {
+            "images": [],
+            "post_probs": [],
+            "post_z": [],
+            "prior_probs": [],
+            "prior_z": [],
+            "actions": [],
+        }
+        self._b64: list[str] = []
+        self._actions: list[int] = []  # camino (sin el reset)
+        self._undo: list = []  # snapshots (env, stoch, deter) por paso
+
+        prev_action = torch.zeros(1, self._n_act, device=self.device)
+        self._ingest(obs, prev_action, action=None, reset=True)
+
+    @torch.no_grad()
+    def step(self, action_idx: int) -> None:
+        """Avanza un único paso con la acción dada (no-op si el episodio terminó)."""
+        if self._done:
+            return
+        act_np = _onehot(int(action_idx), self._n_act)
+        obs, _, done, _ = self._env.step(act_np)
+        prev_action = torch.as_tensor(act_np, device=self.device).unsqueeze(0)
+        self._actions.append(int(action_idx))
+        self._ingest(obs, prev_action, action=int(action_idx), reset=False)
+        if done:
+            self._done = True
+            print(f"  [warn] episodio terminó en paso {self.T}")
+
+    def undo(self) -> None:
+        """Deshace el último paso restaurando el snapshot previo (sin re-ejecutar)."""
+        if len(self._undo) <= 1:  # no se puede deshacer el reset (t=0)
+            return
+        self._undo.pop()
+        for v in self._raw.values():
+            v.pop()
+        self._b64.pop()
+        if self._actions:
+            self._actions.pop()
+        env_snap, stoch, deter = self._undo[-1]
+        self._env = copy.deepcopy(env_snap)
+        self._stoch, self._deter = stoch.clone(), deter.clone()
+        self._done = False
+
+    # ── interno ──────────────────────────────────────────────────────────────
+
+    def _ingest(self, obs, prev_action, action, reset: bool) -> None:
+        obs_t = _preprocess_obs(obs, self.device)
+        embed = self.agent.encoder(obs_t)
+        stoch, deter, post_logit = self.agent.rssm.obs_step(
+            self._stoch,
+            self._deter,
+            prev_action,
+            embed,
+            torch.tensor([reset], dtype=torch.bool, device=self.device),
+        )
+        prior_z, prior_logit = self.agent.rssm.prior(deter)
+        post_probs = self.agent.rssm.get_dist(post_logit).base_dist.probs
+        prior_probs = self.agent.rssm.get_dist(prior_logit).base_dist.probs
+
+        img = np.array(obs["image"], dtype=np.uint8)
+        self._raw["images"].append(img)
+        self._raw["post_probs"].append(post_probs.squeeze(0).cpu().numpy())
+        self._raw["post_z"].append(stoch.squeeze(0).cpu().numpy())
+        self._raw["prior_probs"].append(prior_probs.squeeze(0).cpu().numpy())
+        self._raw["prior_z"].append(prior_z.squeeze(0).cpu().numpy())
+        self._raw["actions"].append(action)
+        self._b64.append(_arr_to_b64(img))
+
+        # Avanza el estado vivo y guarda el snapshot de ESTE paso para el undo.
+        self._stoch, self._deter = stoch, deter
+        self._undo.append((copy.deepcopy(self._env), stoch.clone(), deter.clone()))
+
+    # ── accesores ──────────────────────────────────────────────────────────
+
+    @property
+    def T(self) -> int:
+        return len(self._raw["actions"]) - 1
+
+    @property
+    def actions(self) -> list[int]:
+        return list(self._actions)
+
+    @property
+    def raw(self) -> dict:
+        """Datos crudos acumulados (numpy), aptos para `save_trajectory`."""
+        return {**self._raw, "done": self._done, "T": self.T}
+
+    def data(self) -> dict:
+        """Snapshot serializable para los `dcc.Store` de Dash (mismo formato que `run_trajectory`)."""
+        return {
+            "probs": [p.tolist() for p in self._raw["post_probs"]],
+            "zs": [z.tolist() for z in self._raw["post_z"]],
+            "prior_probs": [p.tolist() for p in self._raw["prior_probs"]],
+            "prior_zs": [z.tolist() for z in self._raw["prior_z"]],
+            "images": list(self._b64),
+            "actions": list(self._raw["actions"]),
+            "done": self._done,
+            "T": self.T,
+        }
+
+    def save(self, out_root, name: str | None = None, names: dict | None = None, fps: float = 2.0):
+        """Guarda la trayectoria acumulada (sin re-ejecutar nada)."""
+        return save_trajectory(
+            self.raw, self.actions, out_root, seed=self.seed, name=name, names=names, fps=fps
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Guardar trayectoria (acciones, estados, frames, gif)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -261,7 +418,8 @@ def _safe_name(name: str | None) -> str:
 def _write_gif(path, raw: dict, names: dict | None = None, fps: float = 2.0) -> None:
     """
     Escribe un GIF con, por cada paso: la imagen (con la acción justo debajo),
-    el heatmap del `z prior` y el del `z posterior`.
+    el heatmap del `z prior`, el del `z posterior` y el `z` real que se muestreó
+    (el stoch one-hot que el world model efectivamente propaga).
     """
     import matplotlib
 
@@ -278,11 +436,12 @@ def _write_gif(path, raw: dict, names: dict | None = None, fps: float = 2.0) -> 
         act = raw["actions"][t]
         prior = raw["prior_probs"][t]  # (S, K)
         post = raw["post_probs"][t]  # (S, K)
+        z = raw["post_z"][t]  # (S, K) — stoch muestreado (aprox one-hot)
 
         fig, axes = plt.subplots(
-            1, 3, figsize=(9.0, 4.0), dpi=100, gridspec_kw={"width_ratios": [1.15, 1.0, 1.0]}
+            1, 4, figsize=(12.0, 4.0), dpi=100, gridspec_kw={"width_ratios": [1.15, 1.0, 1.0, 1.0]}
         )
-        ax_img, ax_pr, ax_po = axes
+        ax_img, ax_pr, ax_po, ax_z = axes
 
         ax_img.imshow(img)
         ax_img.set_xticks([])
@@ -291,12 +450,23 @@ def _write_gif(path, raw: dict, names: dict | None = None, fps: float = 2.0) -> 
         # La acción, justo debajo de la imagen.
         ax_img.set_xlabel(names.get(act, "?"), fontsize=13, fontweight="bold", color="#222", labelpad=8)
 
-        for ax, mat, ttl in ((ax_pr, prior, "z prior  p(k|s)"), (ax_po, post, "z posterior  p(k|s)")):
-            im = ax.imshow(mat, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
+        # Distribuciones prior/posterior (probs en azul).
+        for ax, mat, ttl in (
+            (ax_pr, prior, "z prior  p(z | h_t)"),
+            (ax_po, post, "z posterior  p(z | x_t, h_t)"),
+        ):
+            im_p = ax.imshow(mat, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
             ax.set_title(ttl, fontsize=10)
             ax.set_xlabel("clase k", fontsize=9)
             ax.set_ylabel("slot s", fontsize=9)
-        fig.colorbar(im, ax=axes.tolist(), fraction=0.03, pad=0.02)
+        fig.colorbar(im_p, ax=[ax_pr, ax_po], fraction=0.03, pad=0.02)
+
+        # z real muestreado (one-hot) en verde, para distinguirlo de las probs.
+        im_z = ax_z.imshow(z, cmap="Greens", vmin=0.0, vmax=1.0, aspect="auto")
+        ax_z.set_title("z muestreado  (one-hot)", fontsize=10)
+        ax_z.set_xlabel("clase k", fontsize=9)
+        ax_z.set_ylabel("slot s", fontsize=9)
+        fig.colorbar(im_z, ax=ax_z, fraction=0.045, pad=0.02)
 
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
@@ -315,11 +485,49 @@ def _write_gif(path, raw: dict, names: dict | None = None, fps: float = 2.0) -> 
     )
 
 
+def regenerate_gif(traj_dir, fps: float | None = None):
+    """
+    Regenera el `trajectory.gif` de una trayectoria ya guardada, leyendo
+    `arrays.npz` (+ `metadata.json` para los nombres de acción y el fps). Útil
+    para re-renderizar con el layout actual del gif (p.ej. tras añadir el panel
+    del `z` muestreado) sin re-ejecutar el world model.
+    """
+    import json
+
+    traj_dir = pathlib.Path(traj_dir)
+    arr = np.load(traj_dir / "arrays.npz")
+    meta_path = traj_dir / "metadata.json"
+    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+
+    # Nombres de acción: claves a int cuando se pueda; -1 marca el reset (t=0).
+    names: dict = {}
+    for k, v in (meta.get("action_names") or {}).items():
+        try:
+            names[int(k)] = v
+        except (TypeError, ValueError):
+            names[k] = v
+    names.setdefault(-1, names.get("None", "reset"))
+    if fps is None:
+        fps = float(meta.get("fps", 2.0))
+
+    T = int(arr["actions"].shape[0]) - 1
+    raw = {
+        "images": list(arr["images"]),
+        "prior_probs": list(arr["prior_probs"]),
+        "post_probs": list(arr["post_probs"]),
+        "post_z": list(arr["post_z"]),
+        "prior_z": list(arr["prior_z"]),
+        "actions": [int(a) for a in arr["actions"]],
+        "T": T,
+    }
+    _write_gif(traj_dir / "trajectory.gif", raw, names=names, fps=fps)
+    print(f"GIF regenerado → {traj_dir / 'trajectory.gif'}  ({T + 1} frames)")
+    return traj_dir / "trajectory.gif"
+
+
 def save_trajectory(
-    agent,
-    env_factory,
+    raw: dict,
     actions: list[int],
-    device: str,
     out_root,
     seed: int = 0,
     name: str | None = None,
@@ -327,17 +535,18 @@ def save_trajectory(
     fps: float = 2.0,
 ) -> pathlib.Path:
     """
-    Re-ejecuta la trayectoria y la guarda en `<out_root>/trajectories/<name>/`.
+    Guarda una trayectoria ya colectada en `<out_root>/trajectories/<name>/`.
 
-    Genera, de forma que sea reconstruible y analizable:
+    No re-ejecuta nada: recibe `raw` (los arrays crudos acumulados, p.ej. de
+    `TrajectoryBuilder.raw` o de `collect_trajectory`) y `actions` (el camino sin
+    el reset). Genera, de forma reconstruible y analizable:
       - `actions.json`     — secuencia de acciones (índices + nombres) y metadatos.
       - `metadata.json`    — name, seed, logdir, T, done, timestamp, action map.
       - `arrays.npz`       — prior/posterior probs y z, acciones (-1 = reset).
       - `frames/step_*.png`— cada observación cruda.
       - `trajectory.gif`   — imagen + acción + z prior + z posterior por paso.
 
-    `actions` es la lista de índices del camino (sin el reset). `names` es el
-    diccionario de nombres de acción del entorno (Crafter, MiniGrid, …).
+    `names` es el diccionario de nombres de acción del entorno (Crafter, …).
 
     Retorna el `Path` de la carpeta creada.
     """
@@ -347,7 +556,6 @@ def save_trajectory(
     from PIL import Image
 
     names = names or ACT_NAMES
-    raw = collect_trajectory(agent, env_factory, actions, device, seed)
 
     name = _safe_name(name) or f"traj_{datetime.datetime.now():%Y%m%d_%H%M%S}"
     out_dir = pathlib.Path(out_root) / "trajectories" / name

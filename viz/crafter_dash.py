@@ -33,17 +33,16 @@ import argparse
 import json
 
 import numpy as np
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
 from dash.exceptions import PreventUpdate
 
 from viz.common import (
+    TrajectoryBuilder,
     _action_strip,
     _empty_fig,
     _probs_fig,
     _z_fig,
     load_agent,
-    run_trajectory,
-    save_trajectory,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,16 +258,20 @@ def create_app(agent, env_factory, device: str, seed: int, logdir: str = ".") ->
     app = Dash(__name__, title="Crafter Trajectory Builder")
     app.index_string = _INDEX_STRING.replace("__KEYMAP__", json.dumps(_KEYMAP))
 
-    app.layout = html.Div(
-        style={
-            "fontFamily": "Arial, sans-serif",
-            "background": "#FAFAFA",
-            "minHeight": "100vh",
-        },
-        children=[
-            dcc.Store(id="actions-store", data=[]),
-            dcc.Store(id="traj-store"),
-            dcc.Store(id="view-store", data=0),
+    # Builder incremental con estado vivo (un único env que avanza un paso por
+    # acción; nunca re-ejecuta el historial).
+    builder = TrajectoryBuilder(agent, env_factory, device, seed=seed)
+
+    def serve_layout():
+        return html.Div(
+            style={
+                "fontFamily": "Arial, sans-serif",
+                "background": "#FAFAFA",
+                "minHeight": "100vh",
+            },
+            children=[
+            dcc.Store(id="traj-store", data=builder.data()),
+            dcc.Store(id="view-store", data=builder.T),
             html.Div(
                 "🌲  Crafter Trajectory Builder",
                 style={
@@ -560,65 +563,46 @@ def create_app(agent, env_factory, device: str, seed: int, logdir: str = ".") ->
         ],
     )
 
+    app.layout = serve_layout
+
     # ── Callback 1: modificar el camino (añadir / undo / reset) ─────────────
+    # Avanza el builder UN paso (o deshace / reinicia) y publica el snapshot.
+    # Nunca re-ejecuta el historial: el pasado (env y latente) queda congelado.
     @app.callback(
-        Output("actions-store", "data"),
+        Output("traj-store", "data"),
+        Output("view-store", "data"),
         [Input(f"btn-act-{a}", "n_clicks") for a in _BUTTON_ACTS]
         + [Input("btn-undo", "n_clicks"), Input("btn-reset", "n_clicks")],
-        State("actions-store", "data"),
         prevent_initial_call=True,
     )
-    def _modify(*args):
-        actions = list(args[-1] or [])
+    def _modify(*_clicks):
         trig = ctx.triggered_id
-        if trig is None:
-            raise PreventUpdate
         if trig == "btn-reset":
-            return []
-        if trig == "btn-undo":
-            return actions[:-1] if actions else no_update
-        if isinstance(trig, str) and trig.startswith("btn-act-"):
-            act = int(trig.rsplit("-", 1)[1])
-            return actions + [act]
-        raise PreventUpdate
+            builder.reset()
+        elif trig == "btn-undo":
+            builder.undo()
+        elif isinstance(trig, str) and trig.startswith("btn-act-"):
+            builder.step(int(trig.rsplit("-", 1)[1]))
+        else:
+            raise PreventUpdate
+        return builder.data(), builder.T
 
     # ── Callback de guardado ────────────────────────────────────────────────
     @app.callback(
         Output("save-msg", "children"),
         Input("btn-save", "n_clicks"),
         State("traj-name", "value"),
-        State("actions-store", "data"),
         prevent_initial_call=True,
     )
-    def _save(n_clicks, name, actions):
-        actions = list(actions or [])
+    def _save(n_clicks, name):
+        actions = builder.actions
         if not actions:
             return "⚠ Camino vacío: añade alguna acción antes de guardar."
         try:
-            out_dir = save_trajectory(
-                agent,
-                env_factory,
-                actions,
-                device,
-                out_root=logdir,
-                seed=seed,
-                name=name,
-                names=CRAFTER_NAMES,
-            )
+            out_dir = builder.save(logdir, name=name, names=CRAFTER_NAMES)
         except Exception as exc:  # noqa: BLE001 — mostrar el error en la UI
             return f"❌ Error al guardar: {exc}"
         return f"✓ Guardado en\n{out_dir}\n({len(actions)} acciones · gif + npz + frames)"
-
-    # ── Callback 2: re-ejecutar la trayectoria cuando cambia el camino ──────
-    @app.callback(
-        Output("traj-store", "data"),
-        Output("view-store", "data"),
-        Input("actions-store", "data"),
-    )
-    def _replay(actions):
-        actions = list(actions or [])
-        data = run_trajectory(agent, env_factory, actions, device, seed=seed)
-        return data, data["T"]
 
     # ── Callback 3: navegar el historial (clic en strip / teclas [ ]) ───────
     @app.callback(

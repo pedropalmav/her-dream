@@ -10,12 +10,12 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_rando
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/observed-z-goals/01 ./logdir/random_goal_herbuf_goalbuf/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/ ./logdir/random_goal/
 ```
 
 3. Correr el tensorboard
 ```bash
-tensorboard --logdir ./logdir/random_goal_herbuf_goalbuf
+tensorboard --logdir ./logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01
 ```
 
 4. Correr evaluación con el text_encoder al azar:

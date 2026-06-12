@@ -37,8 +37,9 @@ class RSSM(nn.Module):
             act=config.act,
         )
 
+        self._post_use_deter = bool(config.post_use_deter)
         self._obs_net = nn.Sequential()
-        inp_dim = self._deter + embed_size
+        inp_dim = (self._deter if self._post_use_deter else 0) + embed_size
         for i in range(self._obs_layers):
             self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
             self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -101,8 +102,8 @@ class RSSM(nn.Module):
         # Deterministic transition then posterior logits conditioned on embed.
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action)
-        # (B, D + E)
-        x = torch.cat([deter, embed], dim=-1)
+        # (B, D + E) if post_use_deter else (B, E)
+        x = torch.cat([deter, embed], dim=-1) if self._post_use_deter else embed
         # (B, S, K)
         logit = self._obs_net(x)
 

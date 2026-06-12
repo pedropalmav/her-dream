@@ -64,6 +64,9 @@ rssm:
   norm: ${model.norm}
   unimix_ratio: 0.01
   initial: 'learned'
+  # If False, the posterior conditions only on the observation embedding (no deter/h),
+  # turning it into a per-frame encoder instead of a Bayes filter.
+  post_use_deter: True
   device: ${device}
 
 encoder:

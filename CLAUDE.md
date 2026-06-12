@@ -87,7 +87,7 @@ bash run_crafter.sh logdir=./logdir/original_wm_crafter/01 env=crafter seed=1
 # With task spooler on a chosen GPU:
 CUDA_VISIBLE_DEVICES=1 ts -G 1 bash run_crafter.sh \
   logdir=./logdir/original_wm_crafter/02 env=crafter seed=2 \
-  trainer.steps=1010000 trainer.update_log_every=1000
+  trainer.steps=1010000 trainer.update_log_every=1000 model.rssm.post_use_deter=false
 
 # Direct invocation
 python3 train.py logdir=./logdir/test env=crafter
@@ -98,12 +98,38 @@ python3 train.py env=crafter model.compile=false
 # Representation loss variant (r2dreamer | dreamer | infonce | dreamerpro)
 python3 train.py env=crafter model.rep_loss=dreamer
 
+# Ablation: posterior conditioned only on the embedding (no h), default is true
+python3 train.py env=crafter model.rssm.post_use_deter=false
+
 # Monitor training
 tensorboard --logdir ./logdir
 ```
 
+### Task spooler (ts) — managing queued runs on the server
+
+```bash
+ts                  # list all own jobs
+ts -t {process_id}  # tail the current output of a job
+ts -c {process_id}  # cat the full output of a job
+ts -k {process_id}  # kill a job
+```
+
+### Pulling tensorboard logs from the server
+
+```bash
+# Copy a run's logdir from barto to the local machine, then view it
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/original_wm_crafter/01 \
+  ./logdir/original_wm_crafter/
+tensorboard --logdir ./logdir/original_wm_crafter/01
+```
+
 `run_crafter.sh` uses `uv run`. Crafter renders to numpy, so no `xvfb` / `MUJOCO_GL` is
 needed (those are only for MuJoCo envs).
+
+Note: `main` keeps its run recipes in `execution_commands.md`, but those are for the
+goal-conditioned system (`random_goal.sh`, `post_train.sh`, `mission_text`, text-encoder
+distillation, etc.) and do **not** apply here — this branch only has `run_crafter.sh`.
+Only the operational commands above (ts / scp / tensorboard) carry over.
 
 ## Architecture overview
 

@@ -378,9 +378,8 @@ class Dreamer(nn.Module):
         Used by goal_sample="imagination": at episode start, the world model is
         rolled out from the first observation and the z sampled after
         `imag_horizon` steps becomes the episode goal, so the goal is reachable
-        from the current episode by construction. During the rollout the actor
-        is conditioned on the env-generated random goal already present in
-        `obs["goal"]`.
+        from the current episode by construction. The rollout uses uniformly
+        random actions, so the goal distribution does not depend on the actor.
 
         Args:
             obs: dict of (N, 1, *) first transitions (is_first=True) of the
@@ -401,17 +400,9 @@ class Dreamer(nn.Module):
         # (N, S, K), (N, D)
         stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
 
-        # (N, G)
-        goal = obs["goal"].reshape(N, -1)
         for _ in range(self.imag_horizon):
-            # (N, F)
-            feat = self._frozen_rssm.get_feat(stoch, deter)
-            policy_input = torch.cat([feat, goal], dim=-1)
-            if self.threshold_bins > 0:
-                t = self.threshold_onehot.expand(N, -1)
-                policy_input = torch.cat([policy_input, t], dim=-1)
             # (N, A)
-            action = self._frozen_actor(policy_input).rsample()
+            action = self._random_action(N)
             stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
 
         if self.goal_type == "argmax_full":

@@ -5,6 +5,8 @@ from minigrid.core.world_object import Goal
 from minigrid.minigrid_env import MiniGridEnv
 from minigrid.wrappers import RGBImgObsWrapper
 
+from envs.fixed_goal import GoalImageGenerator
+
 DIRECTIONS = {0: "east", 1: "south", 2: "west", 3: "north"}
 
 
@@ -22,6 +24,7 @@ class RandomGoal(MiniGridEnv):
         self.agent_start_pos = agent_start_pos
         self.agent_start_dir = agent_start_dir
         self.size = size
+        self._goal_image_generator = None
 
         mission_space = MissionSpace(mission_func=self._gen_mission)
 
@@ -88,6 +91,17 @@ class RandomGoal(MiniGridEnv):
     def _reward(self):
         agent_cell = self.grid.get(*self.agent_pos)
         return 0 if agent_cell is not None and agent_cell.type == "goal" else -1
+
+    def goal_observation(self):
+        """Observation of a synthetic goal state for goal_sample="image".
+
+        Green square at this episode's goal position, agent at a random cell.
+        Unlike buffer-sampled goals, the rendered state is consistent with the
+        current episode's goal position by construction.
+        """
+        if self._goal_image_generator is None:
+            self._goal_image_generator = GoalImageGenerator(self.size)
+        return self._goal_image_generator.observation(self._goal_pos)
 
 
 def make_random_goal_env(

@@ -422,6 +422,39 @@ class Dreamer(nn.Module):
         return stoch
 
     @torch.no_grad()
+    def observe_goal(self, obs):
+        """Encode a goal observation into a z with the frozen world model.
+
+        Used by goal_sample="image": the env renders the observation of the
+        desired state (see envs.fixed_goal.GoalImageGenerator) and a single
+        posterior step from the initial latent state maps it to z — the same
+        first step as `imagine_goal`, without the policy rollout.
+
+        Args:
+            obs: dict with "image" (N, H, W, C) uint8 plus any mlp keys the
+                encoder uses (e.g. "direction" (N, 4) one-hot).
+
+        Returns:
+            (N, S, K) float32 one-hot goal on self.device.
+        """
+        torch.compiler.cudagraph_mark_step_begin()
+        p_obs = self.preprocess(obs)
+        # (N, E)
+        embed = self._frozen_encoder(p_obs)
+        N = embed.shape[0]
+        stoch, deter = self._frozen_rssm.initial(N)
+        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        is_first = torch.ones(N, dtype=torch.bool, device=self.device)
+        # (N, S, K), (N, D), (N, S, K)
+        stoch, _, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, is_first)
+        if self.goal_type == "argmax_full":
+            # Mode of the posterior, to match the argmax'd imag_logit used
+            # on the state side of argmax_full_reward.
+            K = logit.shape[-1]
+            return F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
+        return stoch
+
+    @torch.no_grad()
     def _random_action(self, B):
         """Sample uniform actions in the format the env expects.
 

@@ -372,6 +372,56 @@ class Dreamer(nn.Module):
         )
 
     @torch.no_grad()
+    def imagine_goal(self, obs):
+        """Sample goals by imagining `imag_horizon` policy steps from the given observations.
+
+        Used by goal_sample="imagination": at episode start, the world model is
+        rolled out from the first observation and the z sampled after
+        `imag_horizon` steps becomes the episode goal, so the goal is reachable
+        from the current episode by construction. During the rollout the actor
+        is conditioned on the env-generated random goal already present in
+        `obs["goal"]`.
+
+        Args:
+            obs: dict of (N, 1, *) first transitions (is_first=True) of the
+                envs that need a fresh goal. Must be a copy: preprocess
+                modifies it in place.
+
+        Returns:
+            (N, S, K) float32 one-hot goal on self.device.
+        """
+        torch.compiler.cudagraph_mark_step_begin()
+        p_obs = self.preprocess(obs)
+        # (N, E)
+        embed = self._frozen_encoder(p_obs)
+        N = obs["is_first"].shape[0]
+        # is_first=True makes obs_step zero out the initial state and action.
+        stoch, deter = self._frozen_rssm.initial(N)
+        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        # (N, S, K), (N, D)
+        stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+
+        # (N, G)
+        goal = obs["goal"].reshape(N, -1)
+        for _ in range(self.imag_horizon):
+            # (N, F)
+            feat = self._frozen_rssm.get_feat(stoch, deter)
+            policy_input = torch.cat([feat, goal], dim=-1)
+            if self.threshold_bins > 0:
+                t = self.threshold_onehot.expand(N, -1)
+                policy_input = torch.cat([policy_input, t], dim=-1)
+            # (N, A)
+            action = self._frozen_actor(policy_input).rsample()
+            stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
+
+        if self.goal_type == "argmax_full":
+            # Mode of the final prior, to match the argmax'd imag_logit used
+            # on the state side of argmax_full_reward.
+            K = logit.shape[-1]
+            return F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
+        return stoch
+
+    @torch.no_grad()
     def _random_action(self, B):
         """Sample uniform actions in the format the env expects.
 

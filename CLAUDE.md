@@ -118,8 +118,8 @@ ts -k {process_id}  # kill a job
 
 ```bash
 # Copy a run's logdir from barto to the local machine, then view it
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/original_wm_crafter/01 \
-  ./logdir/original_wm_crafter/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/z_without_history_wm_crafter/ \
+  ./logdir/z_without_history_wm_crafter/
 tensorboard --logdir ./logdir/original_wm_crafter/01
 ```
 

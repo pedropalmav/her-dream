@@ -124,7 +124,7 @@ class HERBuffer(Buffer):
 
         transition_indices = (ep_start + transition_indices_in_episode) % self.max_columns
         new_goal = self._buffer[env_indices, transition_indices]
-        if self.goal_type in ("argmax_full", "log_prob"):
+        if self.goal_type == "argmax_full":
             new_goal = new_goal["logit"]
             K = new_goal.shape[-1]
             new_goal = torch.argmax(new_goal, dim=-1)

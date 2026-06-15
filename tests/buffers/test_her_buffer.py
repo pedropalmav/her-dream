@@ -212,7 +212,7 @@ class TestSampleGoal:
         assert goal.dtype == torch.float32
         assert goal.sum(dim=-1).eq(1.0).all()
 
-    def test_log_prob_goal_type_returns_one_hot(self):
+    def test_log_prob_goal_type_returns_full_stoch(self):
         buf = make_her_buffer(goal_type="log_prob", her_strategy="final")
         self._setup_episode(buf)
         buf._buffer = make_mock_buffer_for_goal(self.T)
@@ -220,7 +220,7 @@ class TestSampleGoal:
         step_indices = np.zeros(self.T, dtype=np.int64)
         goal = buf._sample_goal(env_indices, step_indices)
         assert goal.dtype == torch.float32
-        assert goal.sum(dim=-1).eq(1.0).all()
+        assert goal.shape == (self.T, S, K)
 
 
 class TestHERBufferAddTransition:

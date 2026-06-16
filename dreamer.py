@@ -25,6 +25,7 @@ class Dreamer(nn.Module):
         self.act_entropy = float(config.act_entropy)
         self.kl_free = float(config.kl_free)
         self.imag_horizon = int(config.imag_horizon)
+        self.goal_imag_horizon = int(config.goal_imag_horizon)
         self.horizon = int(config.horizon)
         self.lamb = float(config.lamb)
         self.return_ema = networks.ReturnEMA(device=self.device)
@@ -373,11 +374,11 @@ class Dreamer(nn.Module):
 
     @torch.no_grad()
     def imagine_goal(self, obs):
-        """Sample goals by imagining `imag_horizon` random-action steps from the given observations.
+        """Sample goals by imagining `goal_imag_horizon` random-action steps from the given observations.
 
         Used by goal_sample="imagination": at episode start, the world model is
         rolled out from the first observation and the z sampled after
-        `imag_horizon` steps becomes the episode goal, so the goal is reachable
+        `goal_imag_horizon` steps becomes the episode goal, so the goal is reachable
         from the current episode by construction. The rollout uses uniformly
         random actions, so the goal distribution does not depend on the actor.
 
@@ -400,7 +401,7 @@ class Dreamer(nn.Module):
         # (N, S, K), (N, D)
         stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
 
-        for _ in range(self.imag_horizon):
+        for _ in range(self.goal_imag_horizon):
             # (N, A)
             action = self._random_action(N)
             stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)

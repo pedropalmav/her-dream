@@ -372,6 +372,47 @@ class Dreamer(nn.Module):
         )
 
     @torch.no_grad()
+    def imagine_goal(self, obs):
+        """Sample goals by imagining `imag_horizon` random-action steps from the given observations.
+
+        Used by goal_sample="imagination": at episode start, the world model is
+        rolled out from the first observation and the z sampled after
+        `imag_horizon` steps becomes the episode goal, so the goal is reachable
+        from the current episode by construction. The rollout uses uniformly
+        random actions, so the goal distribution does not depend on the actor.
+
+        Args:
+            obs: dict of (N, 1, *) first transitions (is_first=True) of the
+                envs that need a fresh goal. Must be a copy: preprocess
+                modifies it in place.
+
+        Returns:
+            (N, S, K) float32 one-hot goal on self.device.
+        """
+        torch.compiler.cudagraph_mark_step_begin()
+        p_obs = self.preprocess(obs)
+        # (N, E)
+        embed = self._frozen_encoder(p_obs)
+        N = obs["is_first"].shape[0]
+        # is_first=True makes obs_step zero out the initial state and action.
+        stoch, deter = self._frozen_rssm.initial(N)
+        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        # (N, S, K), (N, D)
+        stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+
+        for _ in range(self.imag_horizon):
+            # (N, A)
+            action = self._random_action(N)
+            stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
+
+        if self.goal_type == "argmax_full":
+            # Mode of the final prior, to match the argmax'd imag_logit used
+            # on the state side of argmax_full_reward.
+            K = logit.shape[-1]
+            return F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
+        return stoch
+
+    @torch.no_grad()
     def _random_action(self, B):
         """Sample uniform actions in the format the env expects.
 

@@ -86,7 +86,7 @@ class OnlineTrainer:
         steps = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
 
-        if self._goal_sample in ("buffer", "text"):
+        if self._goal_sample in ("buffer", "text", "imagination"):
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -113,10 +113,10 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
-            if self._goal_sample in ("buffer", "text"):
+            if self._goal_sample in ("buffer", "text", "imagination"):
                 is_first = trans["is_first"][:, 0].bool()
                 if is_first.any():
-                    self._sample_goals(agent, envs, is_first, goals)
+                    self._sample_goals(agent, envs, is_first, goals, trans)
                 self._relabel_goal(envs, goals, trans)
 
             # Store transition.
@@ -182,7 +182,7 @@ class OnlineTrainer:
         envs_ids = torch.arange(envs.env_num, dtype=torch.int32, device=agent.device)
         episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
 
-        if self._goal_sample in ("buffer", "text"):
+        if self._goal_sample in ("buffer", "text", "imagination"):
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -227,10 +227,10 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
-            if self._goal_sample in ("buffer", "text"):
+            if self._goal_sample in ("buffer", "text", "imagination"):
                 is_first = trans["is_first"][:, 0].bool()
                 if is_first.any():
-                    self._sample_goals(agent, envs, is_first, goals)
+                    self._sample_goals(agent, envs, is_first, goals, trans)
                 self._relabel_goal(envs, goals, trans)
 
             # Policy inference on GPU.
@@ -305,14 +305,19 @@ class OnlineTrainer:
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
-    def _sample_goals(self, agent, envs, mask, goals):
+    def _sample_goals(self, agent, envs, mask, goals, trans):
         """Populate goals[i] for envs where mask[i] is True (typically is_first).
 
         Source is selected by self._goal_sample:
-            - "buffer": sample a past stoch uniformly from the replay buffer.
-                        Skipped silently when the buffer is empty.
-            - "text":   sample a fresh goal from the live text encoder applied
-                        to a random mission produced by each env.
+            - "buffer":      sample a past stoch uniformly from the replay buffer.
+                             Skipped silently when the buffer is empty.
+            - "text":        sample a fresh goal from the live text encoder applied
+                             to a random mission produced by each env.
+            - "imagination": imagine `imag_horizon` steps with random actions in
+                             the world model from the episode's first observation
+                             (in `trans`) and take the z reached at the last step,
+                             so the goal is reachable from the current episode
+                             by construction.
         """
         if self._goal_sample == "buffer":
             if self.replay_buffer.count() == 0:
@@ -335,6 +340,15 @@ class OnlineTrainer:
             new_goals = self._text_goal(agent, envs, indices)
             if new_goals is not None:
                 goals[indices] = new_goals
+        elif self._goal_sample == "imagination":
+            indices = mask.nonzero(as_tuple=True)[0]
+            # trans[indices] copies, so imagine_goal's in-place preprocess
+            # does not touch the trans consumed later by agent.act.
+            new_goals = agent.imagine_goal(trans[indices])  # (N, S, K)
+            goal_shape = envs.observation_space["goal"].shape
+            if len(goal_shape) == 1:
+                new_goals = new_goals[:, 0, :]
+            goals[indices] = new_goals
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

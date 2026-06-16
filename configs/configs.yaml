@@ -31,7 +31,7 @@ env:
   goal_type: ${goal_type}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
-  goal_sample: buffer # buffer|text|random
+  goal_sample: buffer # buffer|text|random|imagination
   mission_text: ${mission_text}
 
 model:

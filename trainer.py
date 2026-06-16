@@ -292,7 +292,7 @@ class OnlineTrainer:
 
     def _apply_reward(self, trans, rssm=None):
         if self.reward_function:
-            if self._goal_type == "log_prob" and rssm is not None:
+            if self._goal_type in ("log_prob", "prob") and rssm is not None:
                 state = rssm.get_dist(trans["logit"])
             else:
                 state = trans["logit"] if "logit" in trans else trans["stoch"]

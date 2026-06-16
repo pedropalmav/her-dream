@@ -11,6 +11,7 @@ from rewards import (
     full_goal_reward,
     log_prob_reward,
     make_reward,
+    prob_reward,
     row_by_row_reward,
 )
 
@@ -45,6 +46,10 @@ class TestMakeReward:
         goal = torch.zeros(S, K)
         result = fn(dist, goal)
         assert torch.all(result == 0)
+
+    def test_prob_type(self):
+        config = SimpleNamespace(goal_type="prob")
+        assert make_reward(config) is prob_reward
 
     def test_invalid_type_raises(self):
         config = SimpleNamespace(goal_type="unknown")
@@ -215,6 +220,55 @@ class TestLogProbReward:
         logits = torch.randn(B, T, S, K)
         dist = make_dist_mock(logits, torch.ones(B, T))
         assert log_prob_reward(dist, torch.zeros(B, S, K), log_threshold=0.0).shape == (B, T, 1)
+
+
+class TestProbReward:
+    def test_3d_returns_exp_of_log_prob(self):
+        logits = torch.randn(B, S, K)
+        log_prob_val = torch.full((B,), -1.0)
+        dist = make_dist_mock(logits, log_prob_val)
+        result = prob_reward(dist, torch.zeros(S, K))
+        expected = log_prob_val.exp().unsqueeze(-1)
+        assert torch.allclose(result, expected)
+
+    def test_4d_returns_exp_of_log_prob(self):
+        logits = torch.randn(B, T, S, K)
+        log_prob_val = torch.full((B, T), -2.0)
+        dist = make_dist_mock(logits, log_prob_val)
+        result = prob_reward(dist, torch.zeros(B, S, K))
+        expected = log_prob_val.exp().unsqueeze(-1)
+        assert torch.allclose(result, expected)
+
+    def test_4d_logits_expands_goal(self):
+        logits = torch.randn(B, T, S, K)
+        dist = make_dist_mock(logits, torch.ones(B, T))
+        goal = torch.zeros(B, S, K)
+        prob_reward(dist, goal)
+        called_goal = dist.log_prob.call_args[0][0]
+        assert called_goal.shape == (B, T, S, K)
+
+    def test_output_shape_3d(self):
+        logits = torch.randn(B, S, K)
+        dist = make_dist_mock(logits, torch.ones(B))
+        assert prob_reward(dist, torch.zeros(S, K)).shape == (B, 1)
+
+    def test_output_shape_4d(self):
+        logits = torch.randn(B, T, S, K)
+        dist = make_dist_mock(logits, torch.ones(B, T))
+        assert prob_reward(dist, torch.zeros(B, S, K)).shape == (B, T, 1)
+
+    def test_range_zero_to_one(self):
+        logits = torch.randn(B, S, K)
+        log_prob_val = torch.tensor([-5.0, -0.1])
+        dist = make_dist_mock(logits, log_prob_val)
+        result = prob_reward(dist, torch.zeros(S, K))
+        assert torch.all(result >= 0) and torch.all(result <= 1)
+
+    def test_log_prob_zero_gives_reward_one(self):
+        logits = torch.randn(B, S, K)
+        dist = make_dist_mock(logits, torch.zeros(B))
+        result = prob_reward(dist, torch.zeros(S, K))
+        assert torch.allclose(result, torch.ones(B, 1))
 
 
 class TestArgmaxFullReward:

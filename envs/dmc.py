@@ -28,7 +28,7 @@ class DeepMindControl(gym.Env):
                 task,
                 task_kwargs={"random": seed},
             )
-        else:
+        else:  # pragma: no cover
             assert task is None
             self._env = domain()
 

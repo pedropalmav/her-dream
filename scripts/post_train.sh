@@ -17,4 +17,4 @@ export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 
 xvfb-run -a -s '-screen 0 1024x768x24 -ac +extension GLX +render -noreset' \
-  $HOME/.local/bin/uv run "$PROJECT_ROOT/post_train.py" "$@"
+  $HOME/.local/bin/uv run "$PROJECT_ROOT/post_train.py" model.compile=True "$@"

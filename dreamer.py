@@ -373,7 +373,7 @@ class Dreamer(nn.Module):
 
     @torch.no_grad()
     def imagine_goal(self, obs):
-        """Sample goals by imagining `imag_horizon` policy steps from the given observations.
+        """Sample goals by imagining `imag_horizon` random-action steps from the given observations.
 
         Used by goal_sample="imagination": at episode start, the world model is
         rolled out from the first observation and the z sampled after

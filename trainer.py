@@ -347,9 +347,9 @@ class OnlineTrainer:
                              Skipped silently when the buffer is empty.
             - "text":        sample a fresh goal from the live text encoder applied
                              to a random mission produced by each env.
-            - "imagination": imagine `imag_horizon` policy steps with the world
-                             model from the episode's first observation (in
-                             `trans`) and take the z reached at the last step,
+            - "imagination": imagine `imag_horizon` steps with random actions in
+                             the world model from the episode's first observation
+                             (in `trans`) and take the z reached at the last step,
                              so the goal is reachable from the current episode
                              by construction.
             - "image":       render a synthetic goal observation in each env

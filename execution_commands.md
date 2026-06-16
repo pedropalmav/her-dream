@@ -167,3 +167,14 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
     env.goal_sample=buffer buffer=normal \
     env.steps=500000 trainer.update_log_every=1000
 ```
+
+20. **random_goal — Fase 2c: Post-train con WM congelado y `goal_sample=imagination`.** Igual base que los items 18-19 (WM pre-entrenado/congelado del item 17), pero el goal de cada episodio se genera imaginando `imag_horizon` pasos con acciones aleatorias desde la primera observación (`Dreamer.imagine_goal`), así es alcanzable por construcción dentro del mismo episodio — la hipótesis para destrabar `random_goal` frente a los goals del buffer. `buffer=normal` (sin HER, ya que el goal imaginado no se re-etiqueta):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=normal \
+    env.steps=500000 trainer.update_log_every=1000
+```

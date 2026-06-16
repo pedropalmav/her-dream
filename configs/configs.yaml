@@ -18,7 +18,7 @@ hydra:
 
 batch_size: 16
 batch_length: 64
-goal_type: full # first_row|row_by_row|full|argmax_full|log_prob
+goal_type: full # first_row|row_by_row|full|argmax_full|log_prob|prob
 prob_threshold: 0.5 # probability in [0,1]; compared in log-space
 prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)
 mission_text: False

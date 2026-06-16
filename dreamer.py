@@ -662,7 +662,7 @@ class Dreamer(nn.Module):
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)  # noqa: E731
         imag_stoch = get_stoch_from_feat(imag_feat)
-        if self.goal_type == "log_prob":
+        if self.goal_type in ("log_prob", "prob"):
             reward_input = self.rssm.get_dist(imag_logit)
         elif self.goal_type == "argmax_full":
             reward_input = imag_logit

@@ -178,3 +178,14 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
     env.goal_sample=imagination buffer=normal \
     env.steps=500000 trainer.update_log_every=1000
 ```
+
+ 21. **random_goal — Fase 2c con horizonte de goal imaginado configurable.** Igual que el item 20, pero usando `model.goal_imag_horizon` para controlar cuántos pasos se imaginan al generar el goal (antes era fijo en `imag_horizon=15`). Un horizonte más corto da goals más cercanos/alcanzables; uno más largo, goals más lejanos. Default = `imag_horizon` si se omite. El `logdir` incluye el horizonte para no pisar otras corridas:                                                
+```bash                                                                         
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_h30/01 \
+    freeze_wm=True wm_only=False \ 
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=normal model.goal_imag_horizon=30 \
+    env.steps=500000 trainer.update_log_every=1000
+``` 

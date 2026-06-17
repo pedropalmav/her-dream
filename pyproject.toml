@@ -48,6 +48,21 @@ addopts = "-v"
 filterwarnings = [
     "ignore:torch.meshgrid.*indexing:UserWarning",
     "ignore:This overload of addcmul_ is deprecated:UserWarning",
+    "ignore::PendingDeprecationWarning:ruamel",
+    "ignore::DeprecationWarning:pkg_resources",
+    "ignore::DeprecationWarning:crafter",
+    "ignore::PendingDeprecationWarning:crafter",
+    "ignore::DeprecationWarning:pygame",
+    "ignore:.*precision lowered.*:UserWarning:gymnasium",
+]
+
+[tool.coverage.run]
+source = ["envs"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.ruff]

@@ -326,7 +326,7 @@ class OnlineTrainer:
 
     def _apply_reward(self, trans, rssm=None):
         if self.reward_function:
-            if self._goal_type == "log_prob" and rssm is not None:
+            if self._goal_type in ("log_prob", "prob") and rssm is not None:
                 state = rssm.get_dist(trans["logit"])
             else:
                 state = trans["logit"] if "logit" in trans else trans["stoch"]
@@ -347,7 +347,7 @@ class OnlineTrainer:
                              Skipped silently when the buffer is empty.
             - "text":        sample a fresh goal from the live text encoder applied
                              to a random mission produced by each env.
-            - "imagination": imagine `imag_horizon` steps with random actions in
+            - "imagination": imagine `goal_imag_horizon` steps with random actions in
                              the world model from the episode's first observation
                              (in `trans`) and take the z reached at the last step,
                              so the goal is reachable from the current episode

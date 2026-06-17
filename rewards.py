@@ -17,6 +17,8 @@ def make_reward(config):
         case "log_prob":
             log_threshold = math.log(config.prob_threshold)
             return lambda dist, goal: log_prob_reward(dist, goal, log_threshold)
+        case "prob":
+            return prob_reward
         case _:
             raise ValueError(f"Tipo de objetivo no soportado: {config.goal_type}")
 
@@ -124,6 +126,19 @@ def log_prob_reward(dist, goal: torch.Tensor, log_threshold: float) -> torch.Ten
         goal = goal.unsqueeze(1).expand_as(dist.base_dist.logits)
     total_log_prob = dist.log_prob(goal).unsqueeze(-1)
     return torch.where(total_log_prob >= log_threshold, torch.tensor(0), torch.tensor(-1))
+
+
+def prob_reward(dist, goal: torch.Tensor) -> torch.Tensor:
+    """
+    Args:
+        dist: Independent(OneHotCategorical(...), 1) built from RSSM logits
+        goal: (S, K) or (B, S, K) — one-hot goal
+    Returns:
+        Reward tensor (B, 1) or (B, T, 1): probability in [0, 1].
+    """
+    if dist.base_dist.logits.dim() == 4:  # (B, T, S, K) case
+        goal = goal.unsqueeze(1).expand_as(dist.base_dist.logits)
+    return dist.log_prob(goal).exp().unsqueeze(-1)
 
 
 def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:

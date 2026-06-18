@@ -12,7 +12,8 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from envs.fixed_goal import GoalImageGenerator
+from envs.fixed_goal import make_fixed_goal_env
+from envs.goal_image import GoalImageGenerator
 
 SIZE = 10  # grid size; interior cells are 1..SIZE-2
 
@@ -22,7 +23,7 @@ N_ROWS = 2
 
 @pytest.fixture
 def generator():
-    return GoalImageGenerator(size=SIZE)
+    return GoalImageGenerator(lambda: make_fixed_goal_env(size=SIZE))
 
 
 class DictNamespace(SimpleNamespace):

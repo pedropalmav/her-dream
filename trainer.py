@@ -79,10 +79,10 @@ class OnlineTrainer:
         """Sample one-hot goals by encoding env-rendered goal images with the WM.
 
         Each env renders (with an auxiliary FixedGoal generator, see
-        envs.fixed_goal.GoalImageGenerator) the observation of a synthetic
+        envs.goal_image.GoalImageGenerator) the observation of a synthetic
         state inside the current episode: the green square at the episode's
         goal position and the agent at a random cell. The frozen world model
-        maps it to a goal z with a single posterior step (Dreamer.observe_goal),
+        maps it to a goal z with a single posterior step (Dreamer.encode_observation),
         so the goal's z is consistent with the current episode's goal position
         by construction.
 
@@ -98,7 +98,7 @@ class OnlineTrainer:
         promises = [envs.envs[i].goal_observation() for i in indices]
         obs_list = [p() for p in promises]
         obs = {k: torch.as_tensor(np.stack([o[k] for o in obs_list]), device=agent.device) for k in obs_list[0]}
-        goal = agent.observe_goal(obs)  # (N, S, K)
+        goal = agent.encode_observation(obs)  # (N, S, K)
         goal_shape = envs.observation_space["goal"].shape
         if len(goal_shape) == 1:
             return goal[:, 0, :]

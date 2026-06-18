@@ -414,11 +414,11 @@ class Dreamer(nn.Module):
         return stoch
 
     @torch.no_grad()
-    def observe_goal(self, obs):
-        """Encode a goal observation into a z with the frozen world model.
+    def encode_observation(self, obs):
+        """Encode an observation into a z with the frozen world model.
 
         Used by goal_sample="image": the env renders the observation of the
-        desired state (see envs.fixed_goal.GoalImageGenerator) and a single
+        desired state (see envs.goal_image.GoalImageGenerator) and a single
         posterior step from the initial latent state maps it to z — the same
         first step as `imagine_goal`, without the policy rollout.
 

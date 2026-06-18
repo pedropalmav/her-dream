@@ -2,16 +2,17 @@
 
 Renders, via an auxiliary `FixedGoal` env, the observation of a synthetic goal
 state — green square at the episode's goal position, agent at a random interior
-cell — that the frozen WM later encodes into the goal z (`Dreamer.observe_goal`).
-Covers the observation contract (keys, shapes, dtypes), one-hot direction,
-reproducibility under a seeded RNG, sensitivity to the goal position, agent
-placement, and lazy reuse of the auxiliary env.
+cell — that the frozen WM later encodes into the goal z
+(`Dreamer.encode_observation`). Covers the observation contract (keys, shapes,
+dtypes), one-hot direction, reproducibility under a seeded RNG, sensitivity to
+the goal position, agent placement, and lazy reuse of the auxiliary env.
 """
 
 import numpy as np
 import pytest
 
-from envs.fixed_goal import FixedGoal, GoalImageGenerator
+from envs.fixed_goal import FixedGoal, make_fixed_goal_env
+from envs.wrappers import GoalImageObservation
 from tests.envs.conftest import SIZE
 
 
@@ -77,10 +78,11 @@ class TestLazyEnvReuse:
         assert generator._env is first
 
 
-class TestEnvIntegration:
-    def test_fixed_goal_goal_observation(self):
-        # FixedGoal.goal_observation renders the goal at the env's own goal_pos.
+class TestWrapperIntegration:
+    def test_goal_observation_renders_at_env_goal_position(self):
+        # GoalImageObservation renders the goal at the wrapped env's goal_position.
         env = FixedGoal(size=SIZE, goal_pos=(8, 1))
-        obs = env.goal_observation()
+        wrapped = GoalImageObservation(env, lambda: make_fixed_goal_env(size=SIZE))
+        obs = wrapped.goal_observation()
         assert set(obs) == {"image", "direction"}
-        assert env._goal_image_generator.size == SIZE
+        assert wrapped._generator._env.unwrapped.goal_pos == (8, 1)

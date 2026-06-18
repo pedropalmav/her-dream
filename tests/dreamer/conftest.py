@@ -1,7 +1,7 @@
 """Fixtures for exercising the goal-sampling slices of `Dreamer`.
 
 Both `Dreamer.imagine_goal` (goal_sample="imagination") and
-`Dreamer.observe_goal` (goal_sample="image") only touch a small slice of
+`Dreamer.encode_observation` (goal_sample="image") only touch a small slice of
 `Dreamer`: the frozen RSSM, the frozen encoder, `preprocess`, the
 `goal_imag_horizon` / `goal_type` attributes (and `_random_action` for the
 imagination rollout). Building a full `Dreamer` (encoders, decoder, optimizer,
@@ -48,13 +48,14 @@ def make_rssm_config(**overrides):
 class StubDreamer:
     """Minimal object exposing only what the goal methods touch.
 
-    The real `imagine_goal`, `observe_goal` and `_random_action` are borrowed
-    verbatim so the tests run the actual implementation, not a reimplementation.
+    The real `imagine_goal`, `encode_observation` and `_random_action` are
+    borrowed verbatim so the tests run the actual implementation, not a
+    reimplementation.
     """
 
     # Real implementations under test.
     imagine_goal = Dreamer.imagine_goal
-    observe_goal = Dreamer.observe_goal
+    encode_observation = Dreamer.encode_observation
     _random_action = Dreamer._random_action
 
     def __init__(self, rssm, *, goal_imag_horizon, goal_type, act_dim=A, embed_size=E, device="cpu"):
@@ -94,7 +95,7 @@ def obs():
 
 
 def make_goal_image_obs(n=N):
-    """A rendered-goal obs as observe_goal expects: image + one-hot direction."""
+    """A rendered-goal obs as encode_observation expects: image + one-hot direction."""
     direction = torch.zeros(n, 4, dtype=torch.float32)
     direction[:, 0] = 1.0
     return {

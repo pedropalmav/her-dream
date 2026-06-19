@@ -361,7 +361,7 @@ class Dreamer(nn.Module):
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
-        if self.goal_type in ("argmax_full", "log_prob"):
+        if self.goal_type in ("argmax_full", "log_prob", "prob"):
             state_dict["logit"] = logit
         return (
             action,

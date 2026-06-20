@@ -95,6 +95,9 @@ def main(config):
         act_space,
         reward_function=reward_function,
     ).to(config.device)
+    # Share the RSSM with the buffer so HER relabeling can build the goal
+    # distribution for goal_type in {log_prob, prob} (mirrors train.py).
+    replay_buffer.rssm = agent.rssm
 
     # Load WM (and actor/critic init) from the source logdir, then re-establish
     # the storage sharing between `self.*` and `self._frozen_*` clones.

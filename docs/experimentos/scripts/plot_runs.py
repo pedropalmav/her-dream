@@ -42,12 +42,18 @@ GROUPS = [
     ("post_train_from_wm_only/her_buffer_goals", ("F3 · fixed · WM cong · HER · buffer", "Fase 3: aislar WM vs politica")),
     ("post_train_from_wm_only/herbuf_textgoal", ("F3 · fixed · WM cong · HER · texto", "Fase 3: aislar WM vs politica")),
     ("post_train_from_wm_only/normalbuf_randomgoal", ("F3 · fixed · WM cong · normal · random", "Fase 3: aislar WM vs politica")),
-    ("post_train_from_wm_only/04_imag_prob", ("F3 · fixed · imagination · prob", "Fase 3: aislar WM vs politica")),
     ("post_train_from_distill", ("F3 · post-train desde destilado", "Fase 3: aislar WM vs politica")),
     ("random_goal/posttrain_frozenwm_normalbuf_goalbuf", ("RG · WM cong · normal · buffer", "random_goal vs fixed_goal")),
     ("random_goal/posttrain_frozenwm_herbuf_goalbuf", ("RG · WM cong · HER · buffer", "random_goal vs fixed_goal")),
-    ("random_goal/posttrain_frozenwm_normalbuf_goalimag_prob", ("RG · imagination · prob", "random_goal vs fixed_goal")),
     ("random_goal/posttrain_frozenwm_normalbuf_goalimag", ("RG · imagination · full", "random_goal vs fixed_goal")),
+]
+
+# Corridas con goal_type=prob: el score logueado es la SUMA de la recompensa de
+# probabilidad in [0,1] -> piso 0, mas alto es mejor (escala distinta a las de
+# arriba, cuyo piso es -1001). Van en su propia figura para no mezclar escalas.
+PROB_GROUPS = [
+    ("post_train_from_wm_only/04_imag_prob", "fixed_goal · imagination · prob"),
+    ("random_goal/posttrain_frozenwm_normalbuf_goalimag_prob", "random_goal · imagination · prob"),
 ]
 
 
@@ -155,10 +161,32 @@ def main():
     ax.set_xlim(FLOOR - 60, max(vals) + 120)
     ax.invert_yaxis()
     ax.set_xlabel("score final (media ultimos 10 episodios)")
-    ax.set_title("Que sirve y que no: score final por corrida")
+    ax.set_title("Que sirve y que no — reward {-1,0}, piso -1001 (excluye runs 'prob')")
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(ASSETS, "score_final_barras.png"), dpi=110)
+    plt.close(fig)
+
+    # --- figura 3: runs con goal_type=prob (escala propia, piso 0) ---
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for sub, label in PROB_GROUPS:
+        run = next((r for r in runs if sub in r), None)
+        if run is None:
+            continue
+        s = np.concatenate(runs[run])
+        s = s[np.argsort(s[:, 0])]
+        ys = smooth(s[:, 1])
+        xs = s[:, 0][len(s) - len(ys):]
+        last10 = s[-10:, 1].mean()
+        ax.plot(xs, ys, lw=1.8, label=f"{label}  (last10={last10:.0f})")
+    ax.axhline(0, ls="--", c="grey", lw=1, label="piso 0 = no aprende (min de prob)")
+    ax.set_xlabel("step")
+    ax.set_ylabel("score = suma reward prob ∈ [0,1] · step")
+    ax.set_title("goal_type=prob + imagination: fixed aprende, random no (piso 0)")
+    ax.legend(fontsize=8, loc="upper left")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(ASSETS, "prob_runs.png"), dpi=110)
     plt.close(fig)
 
     print(f"Figuras y CSV escritos en {ASSETS}")

@@ -10,9 +10,13 @@ el goal dependa del **texto de la misión**. Se introduce `env.goal_sample=text`
 en cada episodio el goal se **muestrea del `TextEncoderGRU`** dada la misión, en
 vez de venir del posterior del WM. ¿Sigue aprendiendo?
 
-## Setup
+## Setup (verificado contra `.hydra/config.yaml`)
 
-- `env=fixed_goal`, `env.mission_text=True`, **`env.goal_sample=text`**.
+> ⚠️ **Corrección importante.** Las cuatro corridas se lanzaron en
+> **`random_goal`** (`task: random-goal_`), **no** en `fixed_goal`. Esto es un
+> confound central para interpretar el resultado (ver abajo).
+
+- **`env=random_goal`**, `env.mission_text=True`, **`env.goal_sample=text`**.
 - `goal_type=full`, 500k steps.
 - Se barre la grilla **buffer (HER vs normal) × tamaño de RSSM (32×16 vs 8×8)**
   para descartar que sea un problema de capacidad o de re-etiquetado.
@@ -29,16 +33,41 @@ vez de venir del posterior del WM. ¿Sigue aprendiendo?
 Las cuatro combinaciones quedan pegadas al piso. El 8×8 con HER logra **picos
 aislados** (-121) pero la mayoría de los episodios siguen en -1001.
 
-## Lecturas
+## ¿Encoder malo o entorno random_goal? — el confound
 
-1. **Reemplazar la fuente del goal (WM → text encoder) rompe el aprendizaje.**
-   Esto pone toda la atención en la *consistencia* entre el text encoder y el
-   posterior del RSSM.
-2. **El tamaño del RSSM no fue lo que rompió la cosa.** Reducir el espacio
-   discreto (8×8) ayuda algo (picos) pero no resuelve.
-3. **HER por sí solo tampoco salva el setup.** En 32×16, HER y normal dan el
+La lectura "natural" (en su momento) fue: *el text encoder produce un `z`
+demasiado ruidoso y por eso el reward nunca se dispara*. Pero al verificar que
+estas corridas eran **random_goal** + **`goal_type=full`**, el fallo queda
+**sobre-determinado** y ya **no** se puede atribuir limpiamente al encoder:
+
+- **El entorno random_goal con `full` falla por sí solo**, aun con un goal del
+  **buffer** (no de texto): `random_goal/...frozenwm_normalbuf_goalbuf` y
+  `...herbuf_goalbuf` se quedan en -1001
+  ([random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md)). La posición del
+  verde se filtra a `z`, así que un goal de otra posición es inalcanzable con
+  `full`. Esto pasa **independientemente de la calidad del text encoder**.
+- De hecho, random_goal + `full` falla incluso con goal de **imaginación**
+  (alcanzable por construcción) y reward denso `prob`
+  ([recompensa_prob](recompensa_prob_funciona.md)). El entorno es el factor duro.
+- Como contraste, random_goal **sí aprende** con reward de **primera fila**
+  (Fase 1, `goal_dreamer_with_text` → -357/-417). O sea, random_goal no está
+  condenado; lo que lo rompe es `full`.
+
+**Conclusión:** estas cuatro corridas mezclan dos causas conocidas de -1001
+(entorno random_goal + reward `full`) con la hipótesis del encoder, así que **no
+aíslan** si el text encoder es el problema. El encoder *sí* es difuso (residual
+de KL ≈ 11.5, colapsa 94 misiones en 7/16 clases del slot 0; ver
+[hallazgo_goal_type_full](hallazgo_goal_type_full.md)), pero eso es un factor
+adicional, no la causa demostrada aquí. **Para aislar el encoder haría falta
+re-correr en `fixed_goal` con un reward alcanzable (`first_row`/`prob`).**
+
+## Otras lecturas
+
+1. **El tamaño del RSSM no fue lo que rompió la cosa.** Reducir el espacio
+   discreto (8×8) ayuda algo (picos -121) pero no resuelve.
+2. **HER por sí solo tampoco salva el setup.** En 32×16, HER y normal dan el
    mismo -1001.
-4. **Lección de ingeniería** (`e818b7e`, 21 may): la misión se pasa por dentro
+3. **Lección de ingeniería** (`e818b7e`, 21 may): la misión se pasa por dentro
    como **int** y se one-hottea recién en el forward del encoder. Pasar el
    one-hot completo del vocabulario por todo el grafo era prohibitivo en memoria.
    El one-hot vive *adentro* del encoder, no en la observación.
@@ -59,6 +88,6 @@ post-training con WM congelado → [Fase 3](fase3_aislar_wm_vs_politica.md).
 
 ```bash
 python3 train.py logdir=./logdir/text_goal_sample_her_buffer/01 \
-    env=fixed_goal env.mission_text=True env.goal_sample=text \
+    env=random_goal env.mission_text=True env.goal_sample=text \
     buffer=her goal_type=full trainer.steps=500000
 ```

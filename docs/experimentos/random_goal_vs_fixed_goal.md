@@ -112,6 +112,18 @@ completo → el ruido de Gumbel cambia ~6 grupos. Así que `goal_type=full`
 muro** del [hallazgo central](hallazgo_goal_type_full.md), ahora por la varianza
 de muestreo en vez de por la divergencia text↔WM.
 
-La salida: comparar **modas** (`argmax_full`, hasta ~36% alcanzable) o usar una
-recompensa **densa por probabilidad** (`prob`) → y eso es lo que finalmente
-funciona, ver [recompensa_prob_funciona](recompensa_prob_funciona.md).
+La salida intentada: comparar **modas** (`argmax_full`, hasta ~36% alcanzable) o
+usar una recompensa **densa por probabilidad** (`prob`). La recompensa `prob` +
+goal de imaginación **sí desbloquea fixed_goal** (+331), pero en **random_goal
+sigue sin aprender** (se clava en el piso 0). Es decir: ni siquiera con goal
+alcanzable por construcción y reward denso se cierra el gap en random_goal. Ver
+[recompensa_prob_funciona](recompensa_prob_funciona.md).
+
+## El gap fixed_goal ↔ random_goal sigue abierto
+
+Dos recetas, mismo patrón: `full`+buffer y `prob`+imagination **ambas aprenden en
+fixed_goal y fallan en random_goal**. La fuga de la posición del verde a `z`
+explica el caso `full`+buffer (goal de otra posición), pero **no** el caso
+`prob`+imagination (donde el goal es alcanzable por construcción desde el episodio
+actual). Queda una diferencia de fondo entre los dos entornos —más allá de la
+posición— **todavía no entendida**, y es la pregunta abierta principal.

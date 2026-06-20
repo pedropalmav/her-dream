@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_rando
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/post_train_from_wm_only/04_imag_prob/ ./logdir/post_train_from_wm_only/04_imag_prob
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_h10/ ./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_h10/
 ```
 
 3. Correr el tensorboard
@@ -210,4 +210,26 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
     env=random_goal seed=1 mission_text=False \
     env.goal_sample=imagination buffer=normal goal_type=prob \
     env.steps=500000 trainer.update_log_every=1000
-``` 
+```
+
+24. **fixed_goal — igual que item 22 pero con HER (`buffer=her`).** Versión con re-etiquetado de goals del item 22 (`goal_sample=imagination` + `goal_type=prob`, WM congelado de `wm_only_random_mission/01`). Aísla si HER ayuda a la recompensa densa `prob` sobre el goal imaginado:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/wm_only_random_mission/01 \
+    logdir=./logdir/post_train_from_wm_only/05_imag_prob_her/01 \
+    freeze_wm=True wm_only=False mission_text=True \
+    env=fixed_goal env.goal_sample=imagination \
+    buffer=her goal_type=prob seed=1 \
+    trainer.steps=500000 trainer.update_log_every=1000
+```
+
+25. **random_goal — igual que item 23 pero con HER (`buffer=her`).** Versión con HER del item 23, partiendo del WM congelado de `wm_only_randomgoal/01` (item 17), sin texto. Es la prueba directa de si el re-etiquetado HER rescata el caso `random_goal` (que con `buffer=normal` se queda en el piso 0 de la recompensa `prob`, sin aprender):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_herbuf_goalimag_prob/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=her goal_type=prob \
+    env.steps=500000 trainer.update_log_every=1000
+```

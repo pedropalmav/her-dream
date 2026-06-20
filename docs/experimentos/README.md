@@ -20,18 +20,20 @@ lo reproducible y presentable.
 | [`fase3_aislar_wm_vs_politica.md`](fase3_aislar_wm_vs_politica.md) | WM congelado + post-train: el WM no era el cuello de botella. |
 | [`hallazgo_goal_type_full.md`](hallazgo_goal_type_full.md) | **El bloqueante central:** `goal_type=full` (sample==sample sobre 32 grupos) es inalcanzable por construcción (P≈4e-13). |
 | [`random_goal_vs_fixed_goal.md`](random_goal_vs_fixed_goal.md) | Por qué post-train funciona en fixed_goal y falla en random_goal: la posición del verde vive en `z`/`deter`. Incluye `goal_sample=imagination`. |
-| [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | **El desenlace positivo:** recompensa densa `prob` + goal de imaginación → aprende en fixed_goal (+331) y en random_goal (0). |
+| [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | Recompensa densa `prob` + goal de imaginación → aprende en **fixed_goal** (+331), pero **no** en random_goal (se clava en el piso 0). El gap fixed↔random sigue abierto. |
 | [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md) | Las herramientas de `experiments/` (estocasticidad del WM/text, consistencia del posterior). |
 
 ## La historia en una línea
 
-El reward `z(estado) == z(goal)` **es entrenable** (Fase 1), pero exigir match
-**exacto de muestra-vs-muestra sobre los 32 grupos** (`goal_type=full`) lo vuelve
-inalcanzable por el ruido de Gumbel del muestreo. Todas las fallas posteriores
-(goal de texto, goal de buffer en random_goal, goal de imaginación) son síntomas
-del mismo muro. La salida que **sí funciona** es cambiar la *forma* de la
-recompensa: una densa por **probabilidad de sampleo** (`goal_type=prob`) sobre un
-goal **alcanzable por construcción** (`goal_sample=imagination`).
+El reward `z(estado) == z(goal)` **es entrenable** (Fase 1; y `goal_type=full`
+con goal del buffer aprende en fixed_goal → el match exacto **no** es imposible).
+Lo que lo rompe es exigir match **exacto sobre los 32 grupos** cuando el goal
+viene de una fuente que produce goals inalcanzables (texto, random,
+cross-posición). Una recompensa **densa** (`goal_type=prob`) sobre un goal
+**alcanzable por construcción** (`goal_sample=imagination`) **sí** desbloquea el
+aprendizaje en **fixed_goal** (+331), pero **no** en **random_goal** (se clava en
+el piso 0). Persiste un **gap grande entre fixed_goal y random_goal** que es la
+pregunta abierta central: la misma receta funciona en uno y falla en el otro.
 
 ## Tabla maestra de corridas
 
@@ -43,10 +45,10 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 | `goal_dreamer_with_text/03` (seed 3) | random | buffer (1ª fila) | first_row† | normal | 499k | **-357** | -7 | 🟢 |
 | `goal_dreamer_with_text/04` (seed 4) | random | buffer (1ª fila) | first_row† | normal | 499k | **-417** | -9 | 🟢 |
 | `goal_dreamer_with_text/01` (seed 0) | random | buffer (1ª fila) | first_row† | normal | 9k | -952 | -691 | ⏸ corta |
-| `text_goal_sample_her_buffer/01` | fixed | text | full | HER | 499k | -1001 | -1001 | 🔴 |
-| `text_goal_sample_normal_buffer/01` | fixed | text | full | normal | 499k | -1001 | -1001 | 🔴 |
-| `text_goal_sample_8x8_goal_her_buffer/01` (RSSM 8×8) | fixed | text | full | HER | 499k | -998 | -121 | 🔴 |
-| `text_goal_sample_8x8_normal_buffer/01` (RSSM 8×8) | fixed | text | full | normal | 499k | -1000 | -811 | 🔴 |
+| `text_goal_sample_her_buffer/01` | random§ | text | full | HER | 499k | -1001 | -1001 | 🔴 |
+| `text_goal_sample_normal_buffer/01` | random§ | text | full | normal | 499k | -1001 | -1001 | 🔴 |
+| `text_goal_sample_8x8_goal_her_buffer/01` (RSSM 8×8) | random§ | text | full | HER | 499k | -998 | -121 | 🔴 |
+| `text_goal_sample_8x8_normal_buffer/01` (RSSM 8×8) | random§ | text | full | normal | 499k | -1000 | -811 | 🔴 |
 | `wm_only_random_mission/01` | fixed | — | — | — | 499k | -1001 (esperado) | — | ⚙ solo WM |
 | `post_train_from_wm_only/her_buffer_goals` | fixed | buffer | full | HER | 499k | **-426** | -240 | 🟢 |
 | `post_train_from_wm_only/normal_buffer_goals` | fixed | buffer | full | normal | 499k | **-497** | -245 | 🟢 |
@@ -58,8 +60,8 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 | `random_goal/...frozenwm_herbuf_goalbuf/01` | random | buffer | full | HER | 499k | -1001 | -637 | 🔴 |
 | `random_goal/...frozenwm_normalbuf_goalbuf/01` | random | buffer | full | normal | 499k | -1001 | -942 | 🔴 |
 | `random_goal/...frozenwm_normalbuf_goalimag/01` | random | imagination | full | normal | 499k | -1001 | -1000 | 🔴 |
-| **`post_train_from_wm_only/04_imag_prob/01`** | **fixed** | **imagination** | **prob** | normal | 499k | **+331** | +727 | 🟢 |
-| **`random_goal/...frozenwm_normalbuf_goalimag_prob/01`** | **random** | **imagination** | **prob** | normal | 499k | **0** | +73 | 🟢 |
+| **`post_train_from_wm_only/04_imag_prob/01`** | **fixed** | **imagination** | **prob**‡ | normal | 499k | **+331** | +727 | 🟢 |
+| **`random_goal/...frozenwm_normalbuf_goalimag_prob/01`** | **random** | **imagination** | **prob**‡ | normal | 499k | **0** (piso) | +73 | 🔴 |
 | `original_wm_crafter/02` (baseline vanilla) | crafter | — | — | — | 1.01M | eval≈10.9 | 14.1 | 🟢 WM juega |
 | `z_without_history_wm_crafter/01` (ablación) | crafter | — | — | — | 1.01M | eval≈8.7 | 12.1 | 🟢 −13% |
 
@@ -68,6 +70,16 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 > **primera fila** hardcodeado (`stoch[:, 0]`), no con `full`. El equivalente
 > actual es `goal_type=first_row`. Verificado contra su `.hydra/config.yaml`.
 > Detalle en [fase1](fase1_el_setup_funciona.md).
+>
+> ‡ Las corridas `goal_type=prob` están en **otra escala**: el score es la suma
+> de la recompensa de probabilidad ∈ [0,1], con **piso 0** (no -1001). Ahí
+> **0 = no aprende** (mínimo), no éxito. Por eso no son comparables con las demás
+> y van en su propia figura ([recompensa_prob](recompensa_prob_funciona.md)).
+>
+> § Las corridas `text_goal_sample_*` (Fase 2) se lanzaron en **`random_goal`**
+> (verificado vs `.hydra/config.yaml`), no en fixed_goal. Su -1001 está
+> **confundido**: random_goal + `full` ya falla por sí solo (sin texto), así que
+> no aíslan al text encoder. Detalle en [fase2](fase2_goal_desde_texto.md).
 
 ## Figuras de conjunto
 
@@ -77,11 +89,20 @@ docs/experimentos/scripts/plot_runs.py` cuando lleguen corridas nuevas.
 
 ### Qué sirve y qué no — score final por corrida
 
+Solo corridas con reward ∈ {-1, 0} (piso -1001), comparables entre sí. Las
+corridas `prob` están en otra escala y se grafican aparte (abajo).
+
 ![Score final por corrida](assets/score_final_barras.png)
 
 ### Curvas de entrenamiento por fase
 
 ![Curvas por fase](assets/curvas_por_fase.png)
+
+### Corridas `goal_type=prob` (escala propia, piso 0)
+
+Aquí **0 = no aprende**. fixed_goal despega; random_goal se queda en el piso.
+
+![Corridas prob](assets/prob_runs.png)
 
 ## Reproducibilidad
 

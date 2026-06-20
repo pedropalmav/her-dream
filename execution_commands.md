@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_rando
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/ ./logdir/random_goal/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/post_train_from_wm_only/04_imag_prob/ ./logdir/post_train_from_wm_only/04_imag_prob
 ```
 
 3. Correr el tensorboard
@@ -187,5 +187,27 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
     freeze_wm=True wm_only=False \ 
     env=random_goal seed=1 mission_text=False \
     env.goal_sample=imagination buffer=normal model.goal_imag_horizon=30 \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+22. **fixed_goal — Post-train con WM congelado, `goal_sample=imagination` y recompensa `prob`.** Goal imaginado (alcanzable por construcción) + recompensa densa por probabilidad de sampleo: `dist.log_prob(goal).exp()` ∈ [0,1], la probabilidad de samplear el goal bajo la distribución del estado imaginado (sin umbral). Parte del WM pre-entrenado/congelado de `wm_only_random_mission/01` (item 1.b); `mission_text=True` para casar con ese checkpoint. `buffer=normal` (el goal imaginado no se re-etiqueta, sin HER):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/wm_only_random_mission/01 \
+    logdir=./logdir/post_train_from_wm_only/04_imag_prob/01 \
+    freeze_wm=True wm_only=False mission_text=True \
+    env=fixed_goal env.goal_sample=imagination \
+    buffer=normal goal_type=prob seed=1 \
+    trainer.steps=500000 trainer.update_log_every=1000
+```
+
+23. **random_goal — Post-train con WM congelado, `goal_sample=imagination` y recompensa `prob`.** Igual que el item 22 pero en `random_goal`, partiendo del WM congelado de `wm_only_randomgoal/01` (item 17), sin texto. Compara directamente contra el item 20 (mismo goal imaginado pero recompensa `full`), aislando el efecto de usar la probabilidad de sampleo como recompensa densa:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_prob/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=normal goal_type=prob \
     env.steps=500000 trainer.update_log_every=1000
 ``` 

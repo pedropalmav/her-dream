@@ -115,7 +115,7 @@ ts -k {process_id}
       trainer.steps=500000 trainer.update_log_every=1000
 ```
 
-15. Post-train del checkpoint destilado (item 13) con reward **argmax_full** (doble argmax: moda del estado imaginado vs moda del goal) y HER. Goals muestreados desde el **text encoder** entrenado (`goal_sample=text`); con `goal_type=argmax_full` el goal de texto se toma como `argmax(text_logits)`:
+15. Igual que el item 14 (post-train sobre el checkpoint **destilado**, item 13) pero con reward **argmax_full** (doble argmax: moda del estado imaginado vs moda del goal). Goals desde el **text encoder** ya entrenado en la fase B (`goal_sample=text`); con `goal_type=argmax_full` el goal de texto se toma como `argmax(text_logits)`. Reward argmax_full + HER, sobre `fixed_goal`:
 ```bash
   CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/distill_text_from_wm_only/01 \
@@ -126,11 +126,11 @@ ts -k {process_id}
       trainer.steps=500000 trainer.update_log_every=1000
 ```
 
-16. Igual que el item 15 pero con goals muestreados desde el **replay buffer** (`goal_sample=buffer`); con `goal_type=argmax_full` el goal se toma como `argmax(data["logit"])`. Reward argmax_full + HER:
+16. Post-train directo desde el **WM-only** `wm_only_random_mission/01` (item 1.b, **no** desde el destilado), con goals muestreados desde el **replay buffer** (`goal_sample=buffer`); con `goal_type=argmax_full` el goal se toma como `argmax(data["logit"])`. Reward argmax_full + HER, sobre `fixed_goal`:
 ```bash
   CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
-      load_from=./logdir/distill_text_from_wm_only/01 \
-      logdir=./logdir/post_train_from_distill/03_argmax_buffer_her \
+      load_from=./logdir/wm_only_random_mission/01 \
+      logdir=./logdir/post_train_from_wm_only/06_argmax_buffer_her \
       freeze_wm=True wm_only=False mission_text=True \
       env=fixed_goal env.goal_sample=buffer \
       buffer=her goal_type=argmax_full seed=1 \
@@ -233,3 +233,15 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
     env.goal_sample=imagination buffer=her goal_type=prob \
     env.steps=500000 trainer.update_log_every=1000
 ```
+
+26. **fixed_goal — Joint desde 0 (WM + política juntos), espejo del item 22.** Mismo recipe que el item 22 (`goal_sample=imagination` + `goal_type=prob`, `fixed_goal`, `mission_text=True`) pero **end-to-end** y con **HER** (`buffer=her`): se omiten `load_from`, `freeze_wm` y `wm_only`, así el world model y el actor/critic se entrenan juntos desde cero. Es el control directo del post-train con WM congelado: si el joint aprende y el post-train no (o viceversa), aísla si el cuello de botella es el WM o la política:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/joint_from_scratch/01_imag_prob_her \
+    mission_text=True \
+    env=fixed_goal env.goal_sample=imagination \
+    buffer=her goal_type=prob seed=1 \
+    trainer.steps=500000 trainer.update_log_every=1000
+```
+   - Para la variante **random_goal**: `env=random_goal mission_text=False` y usar `env.steps=500000` en lugar de `trainer.steps` (lo hereda vía `trainer.steps: ${env.steps}`).
+   - Para la variante **full + goals del buffer**: `env.goal_sample=buffer goal_type=full` (quita `goal_sample=imagination`/`goal_type=prob`); con goals del buffer se puede sumar `buffer=her` para re-etiquetar.

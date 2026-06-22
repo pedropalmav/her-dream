@@ -116,3 +116,85 @@ Aquí **0 = no aprende**. fixed_goal despega; random_goal se queda en el piso.
 - Las figuras de diagnóstico (`experiments/`) se regeneran con los scripts de
   `experiments/` sobre el checkpoint correspondiente; ver
   [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md).
+
+## Qué falta por ejecutar y cómo atacar `random_goal`
+
+El gap fixed↔random **no es una sola falla**: son **dos mecanismos distintos**,
+uno por cada receta que se quedó pegada. Mezclarlos lleva a conclusiones
+contradictorias, así que se tratan por separado.
+
+> Dato base (vale para los dos casos): tanto el **goal que ve la política**
+> (`dreamer.py:355`) como la **reward** (`rewards.py`) son **`z` puro** — `deter`
+> nunca entra al goal. Y la posición del verde se decodifica **~0.91 desde
+> `deter`** vs solo **~0.25 desde `z`**
+> ([random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md)): `z` lleva **poca**
+> info de la posición, pero **no cero** (~16 slots se mueven con la celda).
+
+### Caso 1 — `full` + goal del buffer: el match exacto es demasiado estricto
+
+`full` exige que **los 32 grupos coincidan a la vez** (todo-o-nada). Con un goal
+del buffer de **otra** celda, los ~16 slots que sí codifican posición nunca
+matchean → reward -1 siempre → -1001. Lo contraintuitivo: aquí **menos** info de
+posición en `z` *ayudaría* — si `z` fuera de verdad ciego a la celda, el goal
+cruzado matchearía y random funcionaría como fixed. El obstáculo es que `z` **no
+es lo bastante ciego** para un match exacto; "poca info" todavía rompe un 32/32.
+
+- **Salida natural:** un goal de la **misma** celda (imaginación, misma posición)
+  o aflojar el "32 a la vez" (`argmax_full`/modas, o reward densa).
+
+### Caso 2 — `prob` + imagination: la señal densa es demasiado chata
+
+Aquí el goal viene del **mismo episodio** (misma celda) → es alcanzable por
+construcción y **la posición no es el obstáculo** (el propio
+[random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md) lo dice). El sospechoso
+es otro: `prob = log_prob(goal).exp()` solo es **alto** si la distribución de `z`
+del estado está **concentrada** alrededor del goal. Si el latente del WM es
+**difuso** (alta entropía), entonces *incluso parado en el estado-goal* la
+probabilidad del one-hot exacto es baja → reward **chata y ~0 en todas partes** →
+sin gradiente → se clava en 0. Y random_goal, al mover el verde entre episodios,
+da un WM más estocástico/difuso (ver [`analisis_trayectorias_crafter.md`](analisis_trayectorias_crafter.md):
+`z` más difuso en ambientes variables, más picudo en fixed). **No contradice el
+Caso 1:** lo que rompe aquí es la *difusez del latente*, no la posición — y encaja
+con la sospecha de que el WM de random esté **sub-entrenado** sobre la variedad de
+celdas.
+
+### Diagnósticos baratos (correr **antes** de quemar runs de 500k)
+
+0. **¿La `prob` es siquiera ganable?** (zanja el Caso 2) Sobre el WM de random vs
+   fixed, medir (a) la **entropía** del prior/posterior `z` y (b) la **`prob` máx
+   alcanzable**: `log_prob(goal).exp()` evaluada *en el propio estado-goal
+   imaginado*. Si en random eso ya es ~0 estando en el goal → la reward es
+   **inganable** y es problema de **nitidez del WM** (más/mejor entrenamiento,
+   latente más picudo). Si la `prob` máx es alta pero el agente no llega → es
+   problema de **política/crédito**, no del WM. Hoy ambas causas están confundidas.
+1. **Probe `z`→posición vs `(z++deter)`→posición** sobre el WM de random (ya
+   existe para fixed). Cuantifica cuánto se gana al meter `deter` en el goal.
+
+### Recetas para `random_goal` **sin "trampa"**
+
+"Trampa" = darle la `(x,y)` del verde, la reward real del env, o un goal hecho a
+mano. Sin trampa = quedarse en el marco goal-latente.
+
+| | Receta | Ataca | Por qué podría funcionar / matiz |
+|---|---|---|---|
+| **A** | **WM más nítido en random** (entrenar más, o latente más picudo: temperatura, balance de KL, menos grupos) | Caso 2 | Si la `prob` máx sube, la señal densa deja de ser chata. Es la lectura directa de la sospecha "falta entrenar el WM" |
+| **B** | **Comparar modas, no muestras** (`argmax_full`, o `prob` sobre el modo) | Caso 1 y 2 | Elimina la varianza de Gumbel (la columna C de `goal_reachability` daba 0% aun para el mismo estado); barato y ya codeado. `argmax_full`+imagination en random **no se ha corrido** |
+| **C** | **Horizonte de imaginación corto** (item 21, `goal_imag_horizon=5/8`) | Caso 2 | Goals más cercanos → estado-goal más alcanzable y distribución más concentrada → `prob` menos chata. Solo se probó h=15 |
+| **D** | **Meter `deter` en el *conditioning* del goal** (no en el match de `full`) | especificación | Le da a la política capacidad de identificar el estado-goal. Ojo: **no** arregla la difusez de `prob`, y meter `deter` en el *match* de `full` empeoraría el caso cruzado — útil solo como conditioning |
+
+Apuesta: el diagnóstico **0** decide casi todo. Si el Caso 2 es "WM difuso" →
+receta **A**/**C**; si la `prob` ya era ganable → el problema es la política y
+miramos **D**/credit assignment.
+
+### Cola de ejecución pendiente
+
+| Pendiente | Origen | Nota |
+|---|---|---|
+| Diagnóstico **0**: entropía `z` y `prob`-máx, random vs fixed | propuesto | el más informativo y barato; decide A/C vs D |
+| `argmax_full` + imagination en **random_goal** | propuesto (receta **B**) | sin correr |
+| Sweep de `goal_imag_horizon` en random (h=5/8/30) | `execution_commands` item 21 | sin correr; receta **C** |
+| `argmax_full` desde WM-only en fixed_goal | `execution_commands` item 15 (corregido) | sin reportar |
+| Rehacer **Fase 2** (text encoder) en **fixed_goal** con reward alcanzable | flag en [fase2](fase2_goal_desde_texto.md) | aísla el encoder sin el confound de random+`full` |
+| **Post-train sin congelar el WM** | flag en [fase3](fase3_posttrain_wm_aleatorio.md) | mide el salto frente al WM congelado; útil como cota |
+| **Joint desde 0** (sin post-train, WM+política juntos) | propuesto | controla si la separación WM→política ayuda o estorba vs entrenar end-to-end |
+| Probe `z` vs `deter` (posición/inventario) | propuesto en [trayectorias](analisis_trayectorias_crafter.md) | diagnóstico barato (1) |

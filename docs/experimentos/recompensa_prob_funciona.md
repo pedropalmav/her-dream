@@ -34,11 +34,23 @@ propia figura.
 | Corrida | Env | buffer | Score final (last10) | Máx | Trayectoria (media móvil 25) | |
 |---|---|---|---|---|---|:--:|
 | `post_train_from_wm_only/04_imag_prob/01` | **fixed_goal** | normal | **+331** | +727 | sube desde temprano: ~137 a los 70k → ~385 a los 380k, plateau ~350 (promedio global 238) | 🟢 aprende |
-| `random_goal/...goalimag_prob/01` | **random_goal** | normal | **0** | 72.9 | media móvil ~0 todo el run (promedio global 0.5; el 72.9 fue un pico aislado) | 🔴 no aprende |
+| `post_train_from_wm_only/05_imag_prob_her/01` | **fixed_goal** | **HER** | **+161** | +731 | misma forma que la normal: ~158 a los 70k → ~301 a los 261k, plateau ~240-300 (promedio global 220) | 🟢 aprende |
+| `random_goal/...normalbuf_goalimag_prob/01` | **random_goal** | normal | **0** | 72.9 | media móvil ~0 todo el run (promedio global 0.5; el 72.9 fue un pico aislado) | 🔴 no aprende |
+| `random_goal/...herbuf_goalimag_prob/01` | **random_goal** | **HER** | **0** | 85.4 | media móvil ~0 todo el run (promedio global 0.3; el 85.4 fue un pico aislado) | 🔴 no aprende |
 
-![goal_type=prob + imagination: fixed aprende, random no](assets/prob_runs.png)
+![goal_type=prob + imagination: fixed aprende (normal y HER), random no](assets/prob_runs.png)
 
 (Figura anterior del usuario, misma conclusión: ![score imag prob](assets/score_imag_prob.png))
+
+**HER no cambia el cuadro (items 24-25).** En fixed_goal la curva HER (naranja) se
+solapa con la normal (azul) — misma forma, mismo máx (~731), last10 algo más bajo
+(161 vs 331) pero dentro de la varianza de un run ruidoso; HER ni ayuda ni estorba
+sobre una recompensa que **ya** era densa. En random_goal la curva HER (roja) queda
+pegada al piso 0 igual que la normal (verde): **el re-etiquetado de goals no rescata
+el caso random.** Tiene sentido — HER ayuda cuando la recompensa es escasa y el
+problema es no ver nunca el premio; aquí `prob` ya da señal densa en cada paso, así
+que re-etiquetar no aporta señal nueva, y en random_goal lo que falta no es densidad
+sino que el goal sea alcanzable/comparable (ver el gap abajo).
 
 ## Lecturas
 
@@ -49,9 +61,11 @@ propia figura.
 2. **En random_goal no aprende**: se queda clavado en el piso 0 de la recompensa.
    El goal imaginado existe y la recompensa es densa, pero igual no hay señal
    suficiente. Es **otro caso más** del gap fixed↔random (ver abajo).
-3. **Ninguna de estas dos usa HER** (`buffer=normal`, items 22-23). La prueba
-   pendiente obvia es **HER** sobre el caso random (items **24-25** de
-   `execution_commands.md`): re-etiquetar goals podría dar la señal que falta.
+3. **HER probado (items 24-25) y no mueve la aguja.** En fixed sigue aprendiendo
+   (misma curva que normal); en random sigue en el piso 0. El re-etiquetado de
+   goals no rescata el caso random: sobre una recompensa `prob` ya densa no hay
+   señal nueva que aportar, y el cuello de botella de random no es la densidad de
+   la recompensa sino la alcanzabilidad/comparabilidad del goal.
 
 ## El gap fixed_goal ↔ random_goal (puzzle abierto)
 
@@ -60,7 +74,11 @@ Dos recetas distintas muestran el **mismo patrón**:
 | Receta | fixed_goal | random_goal |
 |---|---|---|
 | `goal_type=full` + `goal_sample=buffer` | 🟢 -426 / -497 | 🔴 -1001 |
-| `goal_type=prob` + `goal_sample=imagination` | 🟢 +331 | 🔴 0 (piso) |
+| `goal_type=prob` + `goal_sample=imagination` (normal) | 🟢 +331 | 🔴 0 (piso) |
+| `goal_type=prob` + `goal_sample=imagination` + **HER** | 🟢 +161 | 🔴 0 (piso) |
+
+El gap aguanta las tres recetas, **incluida HER**: nada de lo probado en el lado
+de la recompensa/buffer rescata random_goal.
 
 `full` con goal del buffer **es aprendible** (lo prueba fixed_goal): el reward de
 32 grupos no es intrínsecamente imposible, lo es solo cuando el goal viene de una
@@ -92,5 +110,20 @@ bash scripts/post_train.sh \
     freeze_wm=True wm_only=False env=random_goal seed=1 mission_text=False \
     env.goal_sample=imagination buffer=normal goal_type=prob trainer.steps=500000
 
-# Pendiente: versiones con HER (items 24-25) — ¿rescata HER el caso random?
+# fixed_goal — imagination + prob, CON HER (item 24) → aprende (+161, ≈ normal)
+bash scripts/post_train.sh \
+    load_from=./logdir/wm_only_random_mission/01 \
+    logdir=./logdir/post_train_from_wm_only/05_imag_prob_her/01 \
+    freeze_wm=True wm_only=False mission_text=True \
+    env=fixed_goal env.goal_sample=imagination \
+    buffer=her goal_type=prob seed=1 \
+    trainer.steps=500000 trainer.update_log_every=1000
+
+# random_goal — imagination + prob, CON HER (item 25) → no aprende (0, piso)
+bash scripts/post_train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_herbuf_goalimag_prob/01 \
+    freeze_wm=True wm_only=False env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=her goal_type=prob \
+    env.steps=500000 trainer.update_log_every=1000
 ```

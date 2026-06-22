@@ -52,8 +52,10 @@ GROUPS = [
 # probabilidad in [0,1] -> piso 0, mas alto es mejor (escala distinta a las de
 # arriba, cuyo piso es -1001). Van en su propia figura para no mezclar escalas.
 PROB_GROUPS = [
-    ("post_train_from_wm_only/04_imag_prob", "fixed_goal · imagination · prob"),
-    ("random_goal/posttrain_frozenwm_normalbuf_goalimag_prob", "random_goal · imagination · prob"),
+    ("post_train_from_wm_only/04_imag_prob", "fixed_goal · imagination · prob · normal"),
+    ("post_train_from_wm_only/05_imag_prob_her", "fixed_goal · imagination · prob · HER"),
+    ("random_goal/posttrain_frozenwm_normalbuf_goalimag_prob", "random_goal · imagination · prob · normal"),
+    ("random_goal/posttrain_frozenwm_herbuf_goalimag_prob", "random_goal · imagination · prob · HER"),
 ]
 
 

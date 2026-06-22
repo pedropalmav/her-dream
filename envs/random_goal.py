@@ -89,6 +89,12 @@ class RandomGoal(MiniGridEnv):
         agent_cell = self.grid.get(*self.agent_pos)
         return 0 if agent_cell is not None and agent_cell.type == "goal" else -1
 
+    @property
+    def goal_position(self):
+        """Current episode's (randomly placed) goal cell, as a uniform interface
+        for the GoalImageObservation wrapper (goal_sample="image")."""
+        return self._goal_pos
+
 
 def make_random_goal_env(
     size: int = 10,

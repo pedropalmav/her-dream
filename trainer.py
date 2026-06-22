@@ -5,6 +5,10 @@ import torch.nn.functional as F
 import tools
 from buffers.her_buffer import HERBuffer
 
+# Goal sources sampled by the trainer at episode start (everything except
+# "random", where the env-generated goal in the obs is used as-is).
+SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "image")
+
 
 class OnlineTrainer:
     def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs, reward_function=None):
@@ -70,6 +74,36 @@ class OnlineTrainer:
             return one_hot[:, 0, :]
         return one_hot
 
+    @torch.no_grad()
+    def _image_goal(self, agent, envs, indices):
+        """Sample one-hot goals by encoding env-rendered goal images with the WM.
+
+        Each env renders (with an auxiliary FixedGoal generator, see
+        envs.goal_image.GoalImageGenerator) the observation of a synthetic
+        state inside the current episode: the green square at the episode's
+        goal position and the agent at a random cell. The frozen world model
+        maps it to a goal z with a single posterior step (Dreamer.encode_observation),
+        so the goal's z is consistent with the current episode's goal position
+        by construction.
+
+        Args:
+            indices: list[int] of env indices that need a fresh goal (is_first=True).
+
+        Returns:
+            float32 one-hot tensor on agent.device with shape matching the
+            env's goal space, or None if `indices` is empty.
+        """
+        if not indices:
+            return None
+        promises = [envs.envs[i].goal_observation() for i in indices]
+        obs_list = [p() for p in promises]
+        obs = {k: torch.as_tensor(np.stack([o[k] for o in obs_list]), device=agent.device) for k in obs_list[0]}
+        goal = agent.encode_observation(obs)  # (N, S, K)
+        goal_shape = envs.observation_space["goal"].shape
+        if len(goal_shape) == 1:
+            return goal[:, 0, :]
+        return goal
+
     def eval(self, agent, train_step):
         """Run evaluation episodes.
 
@@ -86,7 +120,7 @@ class OnlineTrainer:
         steps = torch.zeros(envs.env_num, dtype=torch.int32, device=agent.device)
         returns = torch.zeros(envs.env_num, dtype=torch.float32, device=agent.device)
 
-        if self._goal_sample in ("buffer", "text", "imagination"):
+        if self._goal_sample in SAMPLED_GOAL_SOURCES:
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -113,7 +147,7 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
-            if self._goal_sample in ("buffer", "text", "imagination"):
+            if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 is_first = trans["is_first"][:, 0].bool()
                 if is_first.any():
                     self._sample_goals(agent, envs, is_first, goals, trans)
@@ -182,7 +216,7 @@ class OnlineTrainer:
         envs_ids = torch.arange(envs.env_num, dtype=torch.int32, device=agent.device)
         episode_ids = envs_ids.clone()  # used for HER to identify episodes in the buffer
 
-        if self._goal_sample in ("buffer", "text", "imagination"):
+        if self._goal_sample in SAMPLED_GOAL_SOURCES:
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
@@ -227,7 +261,7 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
-            if self._goal_sample in ("buffer", "text", "imagination"):
+            if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 is_first = trans["is_first"][:, 0].bool()
                 if is_first.any():
                     self._sample_goals(agent, envs, is_first, goals, trans)
@@ -318,6 +352,10 @@ class OnlineTrainer:
                              (in `trans`) and take the z reached at the last step,
                              so the goal is reachable from the current episode
                              by construction.
+            - "image":       render a synthetic goal observation in each env
+                             (green square at the episode's goal position,
+                             agent at a random cell) and encode it into z with
+                             the frozen world model. See `_image_goal`.
         """
         if self._goal_sample == "buffer":
             if self.replay_buffer.count() == 0:
@@ -349,6 +387,11 @@ class OnlineTrainer:
             if len(goal_shape) == 1:
                 new_goals = new_goals[:, 0, :]
             goals[indices] = new_goals
+        elif self._goal_sample == "image":
+            indices = mask.nonzero(as_tuple=True)[0].tolist()
+            new_goals = self._image_goal(agent, envs, indices)
+            if new_goals is not None:
+                goals[indices] = new_goals
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

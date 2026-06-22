@@ -99,7 +99,7 @@ class HERBuffer(Buffer):
             new_goal = self._sample_goal(envs[batch_idx], steps[batch_idx])
             sample_td["goal"][batch_idx] = new_goal
 
-            if self.goal_type == "log_prob" and self.rssm is not None:
+            if self.goal_type in ("log_prob", "prob") and self.rssm is not None:
                 achieved = self.rssm.get_dist(sample_td["logit"][batch_idx])
             else:
                 achieved = sample_td["stoch"][batch_idx]

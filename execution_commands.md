@@ -1,11 +1,11 @@
 1. Correr modelo
 ```bash
-ts -G 1 bash random_goal.sh logdir=./logdir/full_goal_dreamer_with_text/01 seed=1 mission_text=True trainer.steps=100000 trainer.update_log_every=1000
+ts -G 1 bash scripts/train.sh logdir=./logdir/full_goal_dreamer_with_text/01 seed=1 mission_text=True trainer.steps=100000 trainer.update_log_every=1000
 ```
 
 1.b Correr modelo en la segunda GPU (GPU 1) — usa `goal_sample=text` para muestrear goals desde el text encoder vivo:
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash random_goal.sh logdir=./logdir/wm_only_random_mission/01 env=fixed_goal seed=1 mission_text=True env.goal_sample=random trainer.steps=500000 buffer=normal wm_only=True
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/wm_only_random_mission/01 env=fixed_goal seed=1 mission_text=True env.goal_sample=random trainer.steps=500000 buffer=normal wm_only=True
 ```
 
 2. Traerse el tensorboard
@@ -26,7 +26,7 @@ python3 eval_text_goal.py --logdir logdir/goal_dreamer_with_text/04 --episodes 1
 
 4.b Post-training: cargar el WM congelado desde `wm_only_random_mission/01` y entrenar solo actor/critic (puedes cambiar logdir, goal_sample, buffer, steps, etc.):
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/wm_only_random_mission/01 \
     logdir=./logdir/post_train_from_wm_only_sample_buffer/01 \
     freeze_wm=True wm_only=False \
@@ -36,7 +36,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
 
 5. Correr codigo de pedro:
 ```bash
-ts -G 1 bash random_goal.sh logdir=./logdir/observed-z-goals/01 seed=1 trainer.steps=1000000 trainer.update_log_every=1000 env.goal_sample=buffer buffer=her env=fixed_goal
+ts -G 1 bash scripts/train.sh logdir=./logdir/observed-z-goals/01 seed=1 trainer.steps=1000000 trainer.update_log_every=1000 env.goal_sample=buffer buffer=her env=fixed_goal
 ```
 
 
@@ -62,7 +62,7 @@ ts -k {process_id}
 
 10. Post train:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/wm_only_random_mission/01 \
       logdir=./logdir/post_train_from_wm_only/01 \
       freeze_wm=True wm_only=False \
@@ -73,7 +73,7 @@ ts -k {process_id}
 
 11. Post train con goals sampleados del replay buffer (misiones pasadas), sin HER:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/wm_only_random_mission/01 \
       logdir=./logdir/post_train_from_wm_only/02_normal_buffer_goals \
       freeze_wm=True wm_only=False \
@@ -84,7 +84,7 @@ ts -k {process_id}
 
 12. Post train con goals sampleados del replay buffer (misiones pasadas), con HER:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/wm_only_random_mission/01 \
       logdir=./logdir/post_train_from_wm_only/03_her_buffer_goals \
       freeze_wm=True wm_only=False \
@@ -95,7 +95,7 @@ ts -k {process_id}
 
 13. Fase B — Destilar el text encoder sobre el WM congelado. Carga el checkpoint de `wm_only_random_mission/01`, mantiene WM y actor/critic fijos y entrena SOLO el `TextEncoderGRU` contra el posterior congelado (target estacionario). Usa el mismo `env`/`buffer` que la corrida wm_only (item 1.b) para que la distribución de datos coincida; `goal_sample=random` evita usar el text encoder (aún sin entrenar) para muestrear goals. `text_kl=1.0` porque es la única loss:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/distill_text.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh train_text_only=True \
       load_from=./logdir/wm_only_random_mission/01 \
       logdir=./logdir/distill_text_from_wm_only/01 \
       mission_text=True \
@@ -106,7 +106,7 @@ ts -k {process_id}
 
 14. Fase C — Entrenar la política sobre el checkpoint destilado (item 13), con WM y text encoder ya entrenados y AMBOS congelados. `goal_sample=text` muestrea los goals desde el text encoder entrenado en la fase B:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/distill_text_from_wm_only/01 \
       logdir=./logdir/post_train_from_distill/01 \
       freeze_wm=True wm_only=False mission_text=True \
@@ -117,7 +117,7 @@ ts -k {process_id}
 
 15. Post-train del checkpoint destilado (item 13) con reward **argmax_full** (doble argmax: moda del estado imaginado vs moda del goal) y HER. Goals muestreados desde el **text encoder** entrenado (`goal_sample=text`); con `goal_type=argmax_full` el goal de texto se toma como `argmax(text_logits)`:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/distill_text_from_wm_only/01 \
       logdir=./logdir/post_train_from_distill/02_argmax_text_her \
       freeze_wm=True wm_only=False mission_text=True \
@@ -128,7 +128,7 @@ ts -k {process_id}
 
 16. Igual que el item 15 pero con goals muestreados desde el **replay buffer** (`goal_sample=buffer`); con `goal_type=argmax_full` el goal se toma como `argmax(data["logit"])`. Reward argmax_full + HER:
 ```bash
-  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+  CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
       load_from=./logdir/distill_text_from_wm_only/01 \
       logdir=./logdir/post_train_from_distill/03_argmax_buffer_her \
       freeze_wm=True wm_only=False mission_text=True \
@@ -139,7 +139,7 @@ ts -k {process_id}
 
 17. **random_goal — Fase 1: WM only.** Pre-entrena solo el world model en el ambiente `random_goal` (cuadrado verde se mueve al terminar el episodio), sin texto. Base para los post-trains de los items 18-19, para poder comparar de forma justa contra el run joint-from-scratch (`random_goal_herbuf_goalbuf`). `env.steps` se usa porque `trainer.steps` lo hereda (`trainer.steps: ${env.steps}`):
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/random_goal.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     logdir=./logdir/random_goal/wm_only_randomgoal/01 \
     env=random_goal seed=1 mission_text=False \
     env.goal_sample=random buffer=normal wm_only=True \
@@ -148,7 +148,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/random_goal.sh \
 
 18. **random_goal — Fase 2a: Post-train con WM congelado, HER + goals del buffer.** Réplica del run fallido pero partiendo del WM pre-entrenado/congelado del item 17 (esperar a que termine). Solo entrena actor/critic:
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_herbuf_goalbuf/01 \
     freeze_wm=True wm_only=False \
@@ -159,7 +159,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
 
 19. **random_goal — Fase 2b: Post-train con WM congelado, buffer normal + goals del buffer (sin HER).** Baseline para aislar el efecto de HER frente al item 18:
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01 \
     freeze_wm=True wm_only=False \
@@ -170,7 +170,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
 
 20. **random_goal — Fase 2c: Post-train con WM congelado y `goal_sample=imagination`.** Igual base que los items 18-19 (WM pre-entrenado/congelado del item 17), pero el goal de cada episodio se genera imaginando `imag_horizon` pasos con acciones aleatorias desde la primera observación (`Dreamer.imagine_goal`), así es alcanzable por construcción dentro del mismo episodio — la hipótesis para destrabar `random_goal` frente a los goals del buffer. `buffer=normal` (sin HER, ya que el goal imaginado no se re-etiqueta):
 ```bash
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag/01 \
     freeze_wm=True wm_only=False \
@@ -181,7 +181,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
 
  21. **random_goal — Fase 2c con horizonte de goal imaginado configurable.** Igual que el item 20, pero usando `model.goal_imag_horizon` para controlar cuántos pasos se imaginan al generar el goal (antes era fijo en `imag_horizon=15`). Un horizonte más corto da goals más cercanos/alcanzables; uno más largo, goals más lejanos. Default = `imag_horizon` si se omite. El `logdir` incluye el horizonte para no pisar otras corridas:                                                
 ```bash                                                                         
-CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/post_train.sh \
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_h30/01 \
     freeze_wm=True wm_only=False \ 

@@ -96,7 +96,7 @@ falla). **Entender este gap es la pregunta abierta principal.**
 
 ```bash
 # fixed_goal — imagination + prob, sin HER (item 22) → aprende (+331)
-bash scripts/post_train.sh \
+bash scripts/train.sh \
     load_from=./logdir/wm_only_random_mission/01 \
     logdir=./logdir/post_train_from_wm_only/04_imag_prob/01 \
     freeze_wm=True wm_only=False mission_text=True \
@@ -104,14 +104,14 @@ bash scripts/post_train.sh \
     buffer=normal goal_type=prob seed=1 trainer.steps=500000
 
 # random_goal — imagination + prob, sin HER (item 23) → no aprende (0)
-bash scripts/post_train.sh \
+bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_normalbuf_goalimag_prob/01 \
     freeze_wm=True wm_only=False env=random_goal seed=1 mission_text=False \
     env.goal_sample=imagination buffer=normal goal_type=prob trainer.steps=500000
 
 # fixed_goal — imagination + prob, CON HER (item 24) → aprende (+161, ≈ normal)
-bash scripts/post_train.sh \
+bash scripts/train.sh \
     load_from=./logdir/wm_only_random_mission/01 \
     logdir=./logdir/post_train_from_wm_only/05_imag_prob_her/01 \
     freeze_wm=True wm_only=False mission_text=True \
@@ -120,7 +120,7 @@ bash scripts/post_train.sh \
     trainer.steps=500000 trainer.update_log_every=1000
 
 # random_goal — imagination + prob, CON HER (item 25) → no aprende (0, piso)
-bash scripts/post_train.sh \
+bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomgoal/01 \
     logdir=./logdir/random_goal/posttrain_frozenwm_herbuf_goalimag_prob/01 \
     freeze_wm=True wm_only=False env=random_goal seed=1 mission_text=False \

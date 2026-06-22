@@ -1,4 +1,4 @@
-# Fase 1 — Probar que el setup funciona (abr 17 → abr 28)
+# Fase 1 — La primera fila sí se puede alcanzar (abr 17 → abr 28)
 
 [← Índice](README.md)
 
@@ -11,10 +11,11 @@ actor/critic goal-conditioned) aprende algo cuando el goal es un `z` real?
 
 ## Setup (verificado contra `.hydra/config.yaml`)
 
-> ⚠️ **Corrección importante.** Una lectura anterior describía estas corridas
-> como `env=fixed_goal` + `goal_type=full`. La config guardada de la corrida lo
-> desmiente: era **`random_goal`** y el reward comparaba **solo la primera fila**
-> de `z`, no los 32 grupos.
+> **QUÉ SE EVALÚA Y CÓMO.** Estas corridas miden si el aparato goal-conditioned
+> **puede siquiera optimizar** el reward cuando el goal es un `z` **alcanzable**.
+> Setup real (según la config guardada, `.hydra/config.yaml`): entorno
+> **`random_goal`** y el reward compara **solo la primera fila** de `z`
+> (`stoch[:, 0]`), **no** los 32 grupos (`full`) ni `fixed_goal`.
 
 - `env.task: random-goal_` → **entorno `random_goal`** (el verde se mueve cada
   episodio), `env.mission_text: true`.
@@ -26,9 +27,14 @@ actor/critic goal-conditioned) aprende algo cuando el goal es un `z` real?
   goal"; `goal_sample=text` el 2026-05-07). La config de estas corridas
   (2026-04-28) es anterior, por lo que corrieron con el reward de **primera
   fila** hardcodeado (`her_buffer.py` devolvía `stoch[:, 0]`).
-- El `TextEncoderGRU` está presente y se entrena (`text_kl` en las losses), pero
-  **no es la fuente del goal** todavía: "mission text as the goal" llegó el
-  2026-05-01, después de esta corrida.
+- **El `TextEncoderGRU` está presente y se entrena** (`text_kl` en las losses),
+  así que la *dirección* del proyecto ya apuntaba al texto — por eso es fácil
+  recordar estas corridas como "aprender con el text encoder". Pero el goal de
+  **estas** corridas **no** sale del encoder: el muestreo de goal "observed z"
+  (del buffer) se agregó la **misma tarde** (`09bb148`, 28-abr 17:47), justo
+  antes de lanzarlas (20:27), mientras que "mission text as the goal"
+  (`10666c6`) recién llegó el **1-may**, 3 días después. El encoder estaba
+  entrenándose en paralelo; el goal, sin embargo, era un `z` del **buffer**.
 - Dos seeds (3 y 4) para descartar suerte; 500k steps, `update_log_every=1000`.
 
 ## Resultado: **sí aprende**
@@ -83,5 +89,4 @@ python3 train.py logdir=./logdir/goal_dreamer_with_text/03 seed=3 \
     trainer.steps=500000 trainer.update_log_every=1000
 ```
 
-> **Siguiente:** [Fase 2 — mover el goal al text encoder](fase2_goal_desde_texto.md),
-> donde todo se cae.
+> **Siguiente:** [Fase 2 — mover el goal al text encoder](fase2_goal_desde_texto.md).

@@ -77,12 +77,16 @@ re-correr en `fixed_goal` con un reward alcanzable (`first_row`/`prob`).**
 La sospecha natural es que el text encoder produce un `z` *demasiado ruidoso o
 inconsistente* respecto del posterior del WM, y el reward function nunca se
 dispara. Pero, ¿es el text encoder, el WM, o la política? Para separarlo nace el
-post-training con WM congelado → [Fase 3](fase3_aislar_wm_vs_politica.md).
+post-training con WM congelado → [Fase 3](fase3_posttrain_wm_aleatorio.md).
 
-> **Spoiler.** El verdadero culpable no es ninguno de esos tres por separado,
-> sino la **forma de la recompensa** `goal_type=full`: ver
-> [hallazgo_goal_type_full](hallazgo_goal_type_full.md). Pero eso recién se
-> diagnostica el 2026-06-02.
+> **Spoiler.** Un factor de mucho peso es la **forma de la recompensa**
+> `goal_type=full` (match exacto sobre los 32 grupos), que recién se diagnostica
+> el 2026-06-02: ver [hallazgo_goal_type_full](hallazgo_goal_type_full.md). Pesa
+> **sobre todo cuando el goal viene del text encoder**, y también en
+> `random_goal` con goal del buffer. Pero **no es universal**: con goal del
+> **buffer**, `fixed_goal` aprende bien con `full` (Fase 3). O sea, `full` es
+> muy importante, pero **no es la única causa** ni explica por sí solo todo el
+> gap fixed↔random.
 
 ## Comando
 

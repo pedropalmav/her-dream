@@ -1,4 +1,4 @@
-# Fase 3 — Aislar el problema: ¿es el WM o la política? (may 22 → may 30)
+# Fase 3 — Post-train sobre un WM entrenado de forma aleatoria (may 22 → may 30)
 
 [← Índice](README.md)
 
@@ -85,7 +85,7 @@ python3 train.py logdir=./logdir/wm_only_random_mission/01 wm_only=True \
     env=fixed_goal env.mission_text=True trainer.steps=500000
 
 # 2) post-train con WM congelado (goal del buffer → aprende)
-python3 post_train.py logdir=./logdir/post_train_from_wm_only/her_buffer_goals \
+python3 train.py logdir=./logdir/post_train_from_wm_only/her_buffer_goals \
     load_from=./logdir/wm_only_random_mission/01 freeze_wm=True \
     env.goal_sample=buffer buffer=her goal_type=full trainer.steps=500000
 ```

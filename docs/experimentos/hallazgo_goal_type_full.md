@@ -59,7 +59,7 @@ síntoma exacto: `score` -1001, `loss/policy` ≈ -5e-4.
 Porque **Fase 1 no usaba `full`**: usaba el reward de **primera fila**
 (`stoch[:, 0]`, un solo grupo), que es anterior a que existiera `goal_type`
 (verificado contra el `.hydra/config.yaml`; ver
-[fase1](fase1_el_setup_funciona.md)). Con un solo grupo el match es alcanzable
+[fase1](fase1_primera_row_alcanzable.md)). Con un solo grupo el match es alcanzable
 (colisión ~0.39 en el slot 0), así que la política recibe señal y aprende
 (-357/-417), **incluso en `random_goal`**. El salto a -1001 ocurre exactamente
 cuando se pasa a exigir los **32 grupos a la vez** (`full`): el producto de

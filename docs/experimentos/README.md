@@ -15,12 +15,13 @@ lo reproducible y presentable.
 
 | Documento | Contenido |
 |---|---|
-| [`fase1_el_setup_funciona.md`](fase1_el_setup_funciona.md) | El setup base aprende cuando el goal sale del posterior del WM (seeds 3/4 → -357/-417). |
-| [`fase2_goal_desde_texto.md`](fase2_goal_desde_texto.md) | Mover la fuente del goal al text-encoder rompe el aprendizaje (todo a -1001). |
-| [`fase3_aislar_wm_vs_politica.md`](fase3_aislar_wm_vs_politica.md) | WM congelado + post-train: el WM no era el cuello de botella. |
+| [`fase1_primera_row_alcanzable.md`](fase1_primera_row_alcanzable.md) | Prueba preliminar: la **primera fila** del `z` **sí se puede alcanzar** y la política aprende cuando el goal sale del posterior del WM (seeds 3/4 → -357/-417). |
+| [`fase2_goal_desde_texto.md`](fase2_goal_desde_texto.md) | Mover la fuente del goal al text-encoder rompe el aprendizaje (todo a -1001). **Pendiente:** rehacer estos experimentos en **fixed_goal** (se corrieron en random_goal, que ya falla por sí solo y confunde el resultado). |
+| [`fase3_posttrain_wm_aleatorio.md`](fase3_posttrain_wm_aleatorio.md) | Post-train sobre un WM entrenado con acciones aleatorias: **congelar el WM sí ayuda** a los resultados. **Falta** una corrida **sin** congelar el WM para medir el salto de diferencia. |
 | [`hallazgo_goal_type_full.md`](hallazgo_goal_type_full.md) | **El bloqueante central:** `goal_type=full` (sample==sample sobre 32 grupos) es inalcanzable por construcción (P≈4e-13). |
 | [`random_goal_vs_fixed_goal.md`](random_goal_vs_fixed_goal.md) | Por qué post-train funciona en fixed_goal y falla en random_goal: la posición del verde vive en `z`/`deter`. Incluye `goal_sample=imagination`. |
 | [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | Recompensa densa `prob` + goal de imaginación → aprende en **fixed_goal** (+331), pero **no** en random_goal (se clava en el piso 0). El gap fixed↔random sigue abierto. |
+| [`analisis_trayectorias_crafter.md`](analisis_trayectorias_crafter.md) | Inspección de los `z` a lo largo de rollouts reales: en ambientes **complejos** (crafter) los `z` son **muy estocásticos** (entropía ≈1.96/4 bits, 48% de grupos difusos), mientras que en **fixed_goal** tienden a ser **mucho más deterministas**. Abre la pregunta de cuánta información útil vive en `z` vs en `h`. |
 | [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md) | Las herramientas de `experiments/` (estocasticidad del WM/text, consistencia del posterior). |
 
 ## La historia en una línea
@@ -30,9 +31,10 @@ con goal del buffer aprende en fixed_goal → el match exacto **no** es imposibl
 Lo que lo rompe es exigir match **exacto sobre los 32 grupos** cuando el goal
 viene de una fuente que produce goals inalcanzables (texto, random,
 cross-posición). Una recompensa **densa** (`goal_type=prob`) sobre un goal
-**alcanzable por construcción** (`goal_sample=imagination`) **sí** desbloquea el
-aprendizaje en **fixed_goal** (+331), pero **no** en **random_goal** (se clava en
-el piso 0). Persiste un **gap grande entre fixed_goal y random_goal** que es la
+**alcanzable por construcción** (`goal_sample=imagination`) **no desbloquea**
+nada nuevo en **fixed_goal** —que **ya aprendía desde antes** (post-train con
+`full`+buffer llega a ≈-426/-497)— y **tampoco** mueve a **random_goal**, que
+sigue **clavado en el piso 0**. Persiste un **gap grande entre fixed_goal y random_goal** que es la
 pregunta abierta central: la misma receta funciona en uno y falla en el otro.
 
 ## Tabla maestra de corridas

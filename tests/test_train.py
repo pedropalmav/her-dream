@@ -19,6 +19,11 @@ def make_config(tmp_path, **overrides):
         model=SimpleNamespace(),
         device="cpu",
         trainer=SimpleNamespace(),
+        # Mode-selecting flags (default = from-scratch training).
+        load_from=None,
+        freeze_wm=False,
+        wm_only=False,
+        train_text_only=False,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -86,7 +91,14 @@ def mock_make_buffer():
 @pytest.fixture
 def mock_dreamer_cls():
     with patch("train.Dreamer") as m:
-        m.return_value.to.return_value = m.return_value  # .to() returns self
+        agent = m.return_value
+        agent.to.return_value = agent  # .to() returns self
+        # `load_checkpoint` sums numel() over parameters(); keep it iterable.
+        agent.parameters.return_value = []
+        # Default to "no extra freeze applied" so load_checkpoint branches are
+        # only taken when a test sets them explicitly.
+        agent.train_text_only = False
+        agent.freeze_wm = False
         yield m
 
 
@@ -99,6 +111,13 @@ def mock_trainer_cls():
 @pytest.fixture
 def mock_torch_save():
     with patch("torch.save") as m:
+        yield m
+
+
+@pytest.fixture
+def mock_torch_load():
+    with patch("train.torch.load") as m:
+        m.return_value = {"agent_state_dict": {}}
         yield m
 
 
@@ -128,6 +147,7 @@ def noop(
     mock_dreamer_cls,
     mock_trainer_cls,
     mock_torch_save,
+    mock_torch_load,
     mock_atexit,
 ):
     """Activate all patches so main.__wrapped__ can run without side effects."""
@@ -299,3 +319,104 @@ class TestCheckpointSave:
         saved_dict, _ = mock_torch_save.call_args[0]
         assert "optims_state_dict" in saved_dict
         mock_collect_optim.assert_called_once_with(mock_dreamer_cls.return_value)
+
+
+# ---------------------------------------------------------------------------
+# Loading from a checkpoint: post-training and text-distillation modes.
+# ---------------------------------------------------------------------------
+
+
+def make_ckpt(tmp_path, name="src"):
+    """Create a source logdir containing a latest.pt file and return its path."""
+    src = tmp_path / name
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "latest.pt").write_bytes(b"")  # torch.load is mocked; just needs to exist
+    return src
+
+
+class TestNoLoadFrom:
+    def test_does_not_load_when_load_from_none(self, noop, mock_torch_load, mock_dreamer_cls, cfg):
+        cfg.load_from = None
+        train.main.__wrapped__(cfg)
+        mock_torch_load.assert_not_called()
+        mock_dreamer_cls.return_value.load_state_dict.assert_not_called()
+
+
+class TestPostTrainMode:
+    def test_loads_checkpoint_from_load_from(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(tmp_path, load_from=str(src), freeze_wm=True)
+        mock_dreamer_cls.return_value.freeze_wm = True
+        train.main.__wrapped__(cfg)
+        mock_torch_load.assert_called_once()
+        assert mock_torch_load.call_args[0][0] == src / "latest.pt"
+
+    def test_loads_state_dict_and_reclones(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(tmp_path, load_from=str(src), freeze_wm=True)
+        agent = mock_dreamer_cls.return_value
+        agent.freeze_wm = True
+        train.main.__wrapped__(cfg)
+        agent.load_state_dict.assert_called_once_with(mock_torch_load.return_value["agent_state_dict"])
+        agent.clone_and_freeze.assert_called_once()
+
+    def test_applies_freeze_wm_when_frozen(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(tmp_path, load_from=str(src), freeze_wm=True)
+        agent = mock_dreamer_cls.return_value
+        agent.freeze_wm = True
+        agent.train_text_only = False
+        train.main.__wrapped__(cfg)
+        agent._apply_freeze_wm.assert_called_once()
+        agent._apply_train_text_only.assert_not_called()
+
+    def test_no_freeze_apply_when_not_frozen(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(tmp_path, load_from=str(src), freeze_wm=False)
+        agent = mock_dreamer_cls.return_value
+        agent.freeze_wm = False
+        agent.train_text_only = False
+        train.main.__wrapped__(cfg)  # full fine-tune; just warns
+        agent._apply_freeze_wm.assert_not_called()
+        agent._apply_train_text_only.assert_not_called()
+
+    def test_missing_checkpoint_raises(self, noop, mock_dreamer_cls, tmp_path):
+        cfg = make_config(tmp_path, load_from=str(tmp_path / "does_not_exist"), freeze_wm=True)
+        with pytest.raises(FileNotFoundError):
+            train.main.__wrapped__(cfg)
+
+    def test_wm_only_with_load_from_raises(self, mock_seed, mock_enable_det, mock_console_log, mock_atexit, tmp_path):
+        cfg = make_config(tmp_path, load_from=str(make_ckpt(tmp_path)), wm_only=True)
+        with pytest.raises(ValueError):
+            train.main.__wrapped__(cfg)
+
+
+class TestDistillMode:
+    def test_applies_train_text_only(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(tmp_path, load_from=str(src), train_text_only=True, mission_text=True)
+        agent = mock_dreamer_cls.return_value
+        agent.train_text_only = True
+        train.main.__wrapped__(cfg)
+        agent._apply_train_text_only.assert_called_once()
+        agent._apply_freeze_wm.assert_not_called()
+
+    def test_forces_off_incompatible_modes(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
+        src = make_ckpt(tmp_path)
+        cfg = make_config(
+            tmp_path, load_from=str(src), train_text_only=True, mission_text=True, wm_only=True, freeze_wm=True
+        )
+        mock_dreamer_cls.return_value.train_text_only = True
+        train.main.__wrapped__(cfg)
+        assert cfg.wm_only is False
+        assert cfg.freeze_wm is False
+
+    def test_requires_load_from(self, mock_seed, mock_enable_det, mock_console_log, mock_atexit, tmp_path):
+        cfg = make_config(tmp_path, train_text_only=True, mission_text=True, load_from=None)
+        with pytest.raises(ValueError):
+            train.main.__wrapped__(cfg)
+
+    def test_requires_mission_text(self, mock_seed, mock_enable_det, mock_console_log, mock_atexit, tmp_path):
+        cfg = make_config(tmp_path, train_text_only=True, mission_text=False, load_from=str(make_ckpt(tmp_path)))
+        with pytest.raises(ValueError):
+            train.main.__wrapped__(cfg)

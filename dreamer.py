@@ -39,7 +39,7 @@ class Dreamer(nn.Module):
             raise ValueError("wm_only=True and freeze_wm=True are mutually exclusive.")
         # Text-encoder distillation mode: world model and actor-critic are kept
         # fixed, and only the text encoder is trained to predict the (frozen)
-        # posterior from the mission text. See distill_text.py.
+        # posterior from the mission text. See train.py (train_text_only=True).
         self.train_text_only = bool(getattr(config, "train_text_only", False))
         if self.train_text_only and (self.wm_only or self.freeze_wm):
             raise ValueError("train_text_only is exclusive with wm_only and freeze_wm.")

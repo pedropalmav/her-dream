@@ -245,3 +245,13 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
 ```
    - Para la variante **random_goal**: `env=random_goal mission_text=False` y usar `env.steps=500000` en lugar de `trainer.steps` (lo hereda vía `trainer.steps: ${env.steps}`).
    - Para la variante **full + goals del buffer**: `env.goal_sample=buffer goal_type=full` (quita `goal_sample=imagination`/`goal_type=prob`); con goals del buffer se puede sumar `buffer=her` para re-etiquetar.
+
+27. **random_goal — WM only con inicio del agente aleatorio, 1M steps.** Igual que el item 17 (pre-entrena solo el world model en `random_goal`, sin texto, acciones aleatorias) pero ahora el **agente** también parte en una celda interior uniformemente aleatoria cada episodio (`env.agent_start_random=True`, además del cuadrado verde que ya se movía), y entrenado por **el doble de pasos (1M)**. Amplía la distribución del WM para que tanto el agente como el goal cubran toda la grilla. `logdir` nuevo para no pisar el WM del item 17. `env.steps` se usa porque `trainer.steps` lo hereda (`trainer.steps: ${env.steps}`):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/random_goal/wm_only_randomstart/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=random env.agent_start_random=True \
+    buffer=normal wm_only=True \
+    env.steps=1000000 trainer.update_log_every=1000
+```

@@ -27,10 +27,10 @@ python3 train.py logdir=./logdir/run/01 seed=1 env.mission_text=True model.rep_l
 python3 train.py logdir=./logdir/wm_only/01 wm_only=True
 
 # Post-training: load a pretrained WM, freeze it, train actor/critic on top
-python3 post_train.py logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
+python3 train.py logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
 
 # Distill the text encoder against a frozen WM
-python3 distill_text.py logdir=./logdir/distill/01 load_from=./logdir/wm_only/01
+python3 train.py logdir=./logdir/distill/01 load_from=./logdir/wm_only/01 train_text_only=True mission_text=True
 
 # Switch reward variant (see "Goal-conditioned rewards" below)
 python3 train.py goal_type=first_row
@@ -46,9 +46,11 @@ python3 train.py env=fixed_goal
 python3 train.py env=crafter
 python3 train.py env=dmc_vision env.task=dmc_walker_walk
 
-# Run on a server with GPU + headless rendering (uses uv)
-bash random_goal.sh logdir=./logdir/run/01 seed=1 env.mission_text=True
-bash post_train.sh logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01
+# Run on a server with GPU + headless rendering (uses uv); scripts/train.sh is
+# the single generic launcher — the mode is selected by the args (load_from=,
+# train_text_only=, wm_only=, ...).
+bash scripts/train.sh logdir=./logdir/run/01 seed=1 env.mission_text=True
+bash scripts/train.sh logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
 
 # Monitor training
 tensorboard --logdir ./logdir
@@ -81,10 +83,12 @@ The goal source is `env.goal_sample`:
 
 ## Training pipelines
 
-Three entry points share `Dreamer`/`OnlineTrainer`:
-- **`train.py`** — end-to-end training (WM + actor/critic). With `wm_only=True` it trains only the WM with random actions.
-- **`post_train.py`** — loads a checkpoint (`load_from=<logdir>`), optionally freezes the WM (`freeze_wm=True`), and trains actor/critic on top. Used to isolate "is the WM or the policy the problem".
-- **`distill_text.py`** — trains only the `TextEncoderGRU` (KL against a frozen WM posterior).
+A single entry point — **`train.py`** — covers three modes, selected purely from the config (see `train.py:validate_config`/`load_checkpoint`):
+- **From-scratch** (default, `load_from=null`) — end-to-end training (WM + actor/critic). With `wm_only=True` it trains only the WM with random actions.
+- **Post-training** (`load_from=<logdir>`) — loads a checkpoint, optionally freezes the WM (`freeze_wm=True`), and trains actor/critic on top. Used to isolate "is the WM or the policy the problem".
+- **Text distillation** (`train_text_only=True load_from=<logdir> mission_text=True`) — trains only the `TextEncoderGRU` (KL against a frozen WM posterior); WM and actor/critic stay fixed.
+
+There is a single launcher script, `scripts/train.sh` (uv + headless rendering); the mode is chosen entirely by the args it forwards to `train.py` (e.g. `load_from=`, `freeze_wm=True`, `train_text_only=True mission_text=True`).
 
 Diagnostic scripts live in `experiments/` (WM/text-encoder stochasticity, posterior consistency across trajectories, `text_wm_alignment.py` which pairs missions with WM posteriors over real rollouts). `tools/`/`viz/` contain the interactive Crafter dash and trajectory replay utilities.
 

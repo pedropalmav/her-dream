@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 import tools
+from envs.goal_image import GoalImageGenerator
 
 
 def get_wrapper(env, wrapper_type):
@@ -185,6 +186,37 @@ class GoalConditioned(gym.Wrapper):
         obs, reward, done, info = self.env.step(action)
         obs["goal"] = self.goal
         return obs, reward, done, info
+
+
+class GoalImageObservation(gym.Wrapper):
+    """Render the current episode's goal state for goal_sample="image".
+
+    Exposes `goal_observation()`: the green square at the episode's goal
+    position and the agent at a random interior cell, rendered via an auxiliary
+    goal env (`GoalImageGenerator`) and later encoded into the goal z by the
+    frozen world model (`Dreamer.encode_observation`). Unlike buffer-sampled
+    goals, the rendered state is consistent with the current episode's goal
+    position by construction.
+
+    Works for any wrapped env that exposes the current goal cell via a
+    `goal_position` attribute. `env_factory` is a zero-arg callable returning
+    the auxiliary goal env used for rendering (it must honour
+    `goal_pos` / `agent_start_pos`, e.g. fixed_goal.make_fixed_goal_env).
+    """
+
+    def __init__(self, env, env_factory):
+        super().__init__(env)
+        self._generator = GoalImageGenerator(env_factory)
+
+    def reset(self):
+        return self.env.reset()
+
+    def step(self, action):
+        return self.env.step(action)
+
+    def goal_observation(self):
+        goal_pos = self.env.get_wrapper_attr("goal_position")
+        return self._generator.observation(goal_pos)
 
 
 class NoMission(gym.ObservationWrapper):

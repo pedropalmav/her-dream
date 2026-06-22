@@ -1,11 +1,13 @@
-"""Fixtures for exercising `Dreamer.imagine_goal` (goal_sample="imagination").
+"""Fixtures for exercising the goal-sampling slices of `Dreamer`.
 
-`imagine_goal` only touches a small slice of `Dreamer`: the frozen RSSM, the
-frozen encoder, `preprocess`, `_random_action`, and the `goal_imag_horizon` /
-`goal_type` attributes. Building a full `Dreamer` (encoders, decoder, optimizer,
-EMA copies, ...) just to test the goal rollout would be slow and brittle, so we
+Both `Dreamer.imagine_goal` (goal_sample="imagination") and
+`Dreamer.encode_observation` (goal_sample="image") only touch a small slice of
+`Dreamer`: the frozen RSSM, the frozen encoder, `preprocess`, the
+`goal_imag_horizon` / `goal_type` attributes (and `_random_action` for the
+imagination rollout). Building a full `Dreamer` (encoders, decoder, optimizer,
+EMA copies, ...) just to test the goal logic would be slow and brittle, so we
 borrow the real methods onto a minimal stub backed by a real `RSSM`. This keeps
-the rollout dynamics genuine while isolating the behavior under test.
+the latent dynamics genuine while isolating the behavior under test.
 """
 
 from types import SimpleNamespace
@@ -44,14 +46,16 @@ def make_rssm_config(**overrides):
 
 
 class StubDreamer:
-    """Minimal object exposing only what `Dreamer.imagine_goal` touches.
+    """Minimal object exposing only what the goal methods touch.
 
-    The real `imagine_goal` and `_random_action` are borrowed verbatim so the
-    tests run the actual implementation, not a reimplementation.
+    The real `imagine_goal`, `encode_observation` and `_random_action` are
+    borrowed verbatim so the tests run the actual implementation, not a
+    reimplementation.
     """
 
     # Real implementations under test.
     imagine_goal = Dreamer.imagine_goal
+    encode_observation = Dreamer.encode_observation
     _random_action = Dreamer._random_action
 
     def __init__(self, rssm, *, goal_imag_horizon, goal_type, act_dim=A, embed_size=E, device="cpu"):
@@ -67,12 +71,14 @@ class StubDreamer:
         self._act_nvec = None
 
     def preprocess(self, obs):
-        # The real preprocess only normalizes "image"; our obs has none.
+        # The real preprocess only normalizes "image"; our encoder is a stub.
         return obs
 
     def _frozen_encoder(self, p_obs):
-        # Stand-in for MultiEncoder: maps the first transition to a (N, E) embed.
-        n = p_obs["is_first"].shape[0]
+        # Stand-in for MultiEncoder: N is the batch dim of any obs entry, so this
+        # works for both is_first (imagination) and image (image) goal obs.
+        some = next(iter(p_obs.values()))
+        n = some.shape[0]
         return torch.randn(n, self._embed_size, device=self.device)
 
 
@@ -86,6 +92,21 @@ def obs():
     # imagine_goal reads obs["is_first"] (shape[0] -> N) and passes it as the
     # posterior reset mask. True == start of episode, matching real usage.
     return {"is_first": torch.ones(N, dtype=torch.bool)}
+
+
+def make_goal_image_obs(n=N):
+    """A rendered-goal obs as encode_observation expects: image + one-hot direction."""
+    direction = torch.zeros(n, 4, dtype=torch.float32)
+    direction[:, 0] = 1.0
+    return {
+        "image": torch.zeros(n, 8, 8, 3, dtype=torch.uint8),
+        "direction": direction,
+    }
+
+
+@pytest.fixture
+def goal_image_obs():
+    return make_goal_image_obs()
 
 
 @pytest.fixture

@@ -66,11 +66,14 @@ Losses finales de la corrida 03 (referencia):
 1. **El reward de slot-0 (primera fila) es entrenable, incluso en `random_goal`.**
    Que la primera fila baste vuelve la recompensa alcanzable: hay muchos estados
    cuyo `stoch[:, 0]` coincide con el goal, así que la política recibe señal.
-2. **Esto encaja perfecto con el hallazgo central.** El mismo entorno
-   `random_goal`, pero con reward **`full`** (32 grupos exactos), se queda en
-   -1001 (ver [random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md)). La
-   diferencia entre "aprende" y "no aprende" **nunca fue el entorno ni la fuente
-   del goal, sino la *forma* del reward**: 1 fila vs 32 filas a la vez.
+2. **La *forma* del reward pesa fuerte.** El mismo entorno `random_goal`, pero
+   con reward **`full`** (32 grupos exactos), se queda en -1001 (ver
+   [random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md)). A igualdad de
+   entorno y de fuente del goal, pasar de **1 fila a 32 filas a la vez** es lo
+   que rompe el aprendizaje. Ojo: `full` **no es la única causa** — el entorno y
+   la fuente del goal también importan (con goal del **buffer**, `fixed_goal` sí
+   aprende con `full`; ver
+   [hallazgo_goal_type_full](hallazgo_goal_type_full.md)).
 3. La `text_kl` se estaciona en ≈ 11.5 — no es chica. Queda la sospecha (que se
    confirma en Fase 2) de que ese residual es lo que rompe `goal_sample=text`
    cuando se intenta usar el encoder como fuente del goal.

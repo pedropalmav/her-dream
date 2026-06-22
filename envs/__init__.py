@@ -63,7 +63,11 @@ def make_env(config, id):
     elif suite == "random-goal":
         import envs.random_goal as random_goal
 
-        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        agent_start_pos = (
+            None
+            if getattr(config, "agent_start_random", False)
+            else (config.agent_start_pos_x, config.agent_start_pos_y)
+        )
         env = random_goal.make_random_goal_env(
             size=config.env_size,
             agent_start_dir=config.agent_start_dir,

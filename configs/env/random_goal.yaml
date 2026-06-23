@@ -21,4 +21,8 @@ env_size: 10
 agent_start_dir: 0
 agent_start_pos_x: 1
 agent_start_pos_y: 1
+# If True, the agent spawns at a uniformly random interior cell (and random
+# direction) every episode, ignoring agent_start_pos_x/y/dir. Used to widen the
+# WM training distribution so both the agent and the green square cover the grid.
+agent_start_random: False
 render_mode: "rgb_array"

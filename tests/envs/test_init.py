@@ -192,6 +192,37 @@ class TestMakeEnvSuites:
 
         assert isinstance(env, Dtype)
 
+    def test_random_goal_random_start_passes_none_pos(self):
+        dummy_env = _make_dummy_gym_env()
+        dummy_env.action_space = gym.spaces.Discrete(7)
+
+        import envs.random_goal as rg_module
+
+        with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
+            from envs import make_env
+
+            config = make_config(
+                task="random-goal_default", mission_text=False, agent_start_random=True
+            )
+            make_env(config, 0)
+
+        assert mock_make.call_args.kwargs["agent_start_pos"] is None
+
+    def test_random_goal_fixed_start_passes_configured_pos(self):
+        dummy_env = _make_dummy_gym_env()
+        dummy_env.action_space = gym.spaces.Discrete(7)
+
+        import envs.random_goal as rg_module
+
+        with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
+            from envs import make_env
+
+            # agent_start_random absent → getattr default False → use configured pos
+            config = make_config(task="random-goal_default", mission_text=False)
+            make_env(config, 0)
+
+        assert mock_make.call_args.kwargs["agent_start_pos"] == (1, 1)
+
     def test_random_goal_with_mission_text_uses_mission_wrapper(self):
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)

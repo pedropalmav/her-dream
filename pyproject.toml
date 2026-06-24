@@ -41,6 +41,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.16",
+    "scikit-learn>=1.9.0",
 ]
 
 [tool.pytest.ini_options]

@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/wm_only_ran
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/post_train_from_wm_only/05_imag_prob_her/ ./logdir/post_train_from_wm_only/05_imag_prob_her/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/ ./logdir/random_goal/
 ```
 
 3. Correr el tensorboard
@@ -254,4 +254,42 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     env.goal_sample=random env.agent_start_random=True \
     buffer=normal wm_only=True \
     env.steps=1000000 trainer.update_log_every=1000
+```
+
+Luego, post-entrenar la **política** sobre este WM (congelado), manteniendo el mismo ambiente (`env=random_goal env.agent_start_random=True`) para que la distribución calce. Goal por imaginación (alcanzable por construcción) + `buffer=her`. Dos comandos para comparar full vs prob sobre el mismo WM ampliado:
+
+Reward **full** (match exacto de los 32 grupos):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_full/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=full \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+Reward **prob** (densa, `dist.log_prob(goal).exp()` ∈ [0,1]); idéntico salvo `goal_type`:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_prob/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=prob \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+Reward **row_by_row** (densa, `(filas que matchean / S) - 1` ∈ [-1, 0]); reutiliza el mismo WM congelado que `full`/`prob`, idéntico salvo `goal_type` y `logdir`:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row \
+    env.steps=500000 trainer.update_log_every=1000
 ```

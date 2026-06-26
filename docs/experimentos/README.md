@@ -23,6 +23,7 @@ lo reproducible y presentable.
 | [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | Recompensa densa `prob` + goal de imaginación → aprende en **fixed_goal** (+331), pero **no** en random_goal (se clava en el piso 0). El gap fixed↔random sigue abierto. |
 | [`analisis_trayectorias_crafter.md`](analisis_trayectorias_crafter.md) | Inspección de los `z` a lo largo de rollouts reales: en ambientes **complejos** (crafter) los `z` son **muy estocásticos** (entropía ≈1.96/4 bits, 48% de grupos difusos), mientras que en **fixed_goal** tienden a ser **mucho más deterministas**. Abre la pregunta de cuánta información útil vive en `z` vs en `h`. |
 | [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md) | Las herramientas de `experiments/` (estocasticidad del WM/text, consistencia del posterior). |
+| [`papers_sugeridos.md`](papers_sugeridos.md) | Literatura relacionada (clásica + reciente 2024-2025) mapeada a cada problema/receta del proyecto. La lectura común: **abandonar el match exacto en latente** en favor de distancias aprendidas y goals con incertidumbre explícita. |
 
 ## La historia en una línea
 

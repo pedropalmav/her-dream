@@ -24,6 +24,7 @@ import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as mticker  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from hydra import compose, initialize  # noqa: E402
@@ -116,6 +117,7 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--horizon", type=int, default=15)
     ap.add_argument("--resets", type=int, default=100)
+    ap.add_argument("--show_seqs", type=int, default=6, help="# of individual action sequences to plot")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -137,30 +139,51 @@ def main():
     pvg_groups = np.zeros(H + 1)   # real execution vs final goal
     pvg_full = np.zeros(H + 1)
     ivg_groups = np.zeros(H + 1)   # imagined trajectory vs its own final goal
+    # joint probability of drawing the imagined z (z-hat) under two different logits:
+    # the real posterior logit P(.|x_t,h_t) and the prior logit P(.|h_t) (h only).
+    # product over the 32 one-hot groups -> even ~7 differing low-prob groups -> ~0.
+    prob_imag = np.zeros(H + 1)      # P(z_hat | real posterior logit)
+    prob_imag_h = np.zeros(H + 1)    # P(z_hat | prior logit from h)
+    # same two probabilities, kept per individual action sequence (not averaged)
+    seq_prob_imag = []    # list of (H+1,) arrays, one per shown sequence
+    seq_prob_imag_h = []
     # goal reachability: best match of any real step vs the FINAL imagined goal z
     best_vs_goal = []
     full_reach = 0
 
-    for _ in range(args.resets):
+    for r in range(args.resets):
         post_z, post_lg, imag_z, imag_lg = dual_rollout(agent, env, H, rng)
         goal = imag_z[H]
         best = 0
         reached = False
+        cur_pi = np.zeros(H + 1) if r < args.show_seqs else None  # this sequence's curves
+        cur_ph = np.zeros(H + 1) if r < args.show_seqs else None
         for t in range(H + 1):
             ng, nf = groups_eq(post_z[t], imag_z[t])
             samp_groups[t] += ng; samp_full[t] += nf
             mg = (post_lg[t].argmax(-1) == imag_lg[t].argmax(-1)).sum().item()
             mode_groups[t] += mg; mode_full[t] += (mg == S)
             # sampling floor: resample z from the same posterior logits
-            z2 = agent.rssm.get_dist(post_lg[t]).rsample()
+            post_dist = agent.rssm.get_dist(post_lg[t])
+            z2 = post_dist.rsample()
             fg, ff = groups_eq(post_z[t], z2)
             floor_groups[t] += fg; floor_full[t] += ff
+            # joint prob of the imagined z under the real posterior logit vs the prior
+            # logit (from h only); product over the 32 groups
+            pi = post_dist.log_prob(imag_z[t]).exp().item()
+            ph = agent.rssm.get_dist(imag_lg[t]).log_prob(imag_z[t]).exp().item()
+            prob_imag[t] += pi
+            prob_imag_h[t] += ph
+            if cur_pi is not None:
+                cur_pi[t] = pi; cur_ph[t] = ph
             # per-step approach to the final imagined goal
             gg, gf = groups_eq(post_z[t], goal)
             pvg_groups[t] += gg; pvg_full[t] += gf
             ivg_groups[t] += groups_eq(imag_z[t], goal)[0]
             best = max(best, gg)
             reached = reached or gf
+        if cur_pi is not None:
+            seq_prob_imag.append(cur_pi); seq_prob_imag_h.append(cur_ph)
         best_vs_goal.append(best)
         full_reach += reached
 
@@ -176,9 +199,14 @@ def main():
     print(f" best groups matched over the episode (mean of {n}): {np.mean(best_vs_goal):.1f} / {S}")
     print(f" episodes with ANY exact full-z match to the goal: {full_reach}/{n} ({100*full_reach/n:.0f}%)")
 
+    print(f"\n=== Joint prob of the imagined z (z_hat), mean of {n} ===")
+    print(" step | P(z_hat | real posterior logit) | P(z_hat | prior logit from h)")
+    for t in range(H + 1):
+        print(f" {t:4d} |          {prob_imag[t]/n:.3e}          |       {prob_imag_h[t]/n:.3e}")
+
     # ---- step-by-step plots ----
     steps = np.arange(H + 1)
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4.5))
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(21, 4.5))
 
     # Panel 1: full-match RATE per step (does the reward fire?)
     ax1.plot(steps, 100 * samp_full / n, "-o", label="A: sample  (goal_type=full)")
@@ -203,11 +231,46 @@ def main():
     ax3.set_ylim(0, S + 1); ax3.legend()
     ax3.set_title(f"Approach to FINAL goal z (full-reach {100*full_reach/n:.0f}%)")
 
+    # Panel 4: joint probability of sampling the imagined z (z-hat), under the real
+    # posterior logit P(.|x_t,h_t) vs the prior logit P(.|h_t) (from h only). Like panel
+    # 2 (how close?) but multiplying the per-group probabilities: a handful of low-prob
+    # groups makes drawing the exact z-hat essentially impossible (~0).
+    eps = 1e-300
+    ax4.semilogy(steps, prob_imag / n + eps, "-o", label=r"$P_{post}(\hat z)$")
+    ax4.semilogy(steps, prob_imag_h / n + eps, "-^", label=r"$P_{prior}(\hat z)$")
+    ax4.set_xlabel("aligned step t"); ax4.set_ylabel("joint sampling probability (log)")
+    # show minor ticks with labels too (the range spans < 1 decade -> few major ticks)
+    ax4.yaxis.set_minor_locator(mticker.LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1))
+    ax4.yaxis.set_minor_formatter(mticker.LogFormatterSciNotation(minor_thresholds=(np.inf, np.inf)))
+    ax4.tick_params(axis="y", which="minor", labelsize=7)
+    ax4.legend(); ax4.set_title("How likely to sample z-hat?  (P over the 32 groups)")
+
     fig.suptitle(f"{args.env}: reachability of imagined goal-z, step by step (n={n} resets, 0% full-z reach)")
     fig.tight_layout()
     path = OUT / f"goal_reachability_{args.env}.png"
     fig.savefig(path, dpi=120)
     print("\nsaved", path)
+
+    # ---- per-sequence figure: panel-4 metric for a few individual action sequences ----
+    m = len(seq_prob_imag)
+    if m:
+        ncols = min(3, m)
+        nrows = int(np.ceil(m / ncols))
+        fig2, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3.5 * nrows), squeeze=False)
+        for i in range(nrows * ncols):
+            ax = axes[i // ncols][i % ncols]
+            if i >= m:
+                ax.axis("off"); continue
+            ax.semilogy(steps, seq_prob_imag[i] + eps, "-o", label=r"$P_{post}(\hat z)$")
+            ax.semilogy(steps, seq_prob_imag_h[i] + eps, "-^", label=r"$P_{prior}(\hat z)$")
+            ax.set_title(f"action sequence #{i}")
+            ax.set_xlabel("aligned step t"); ax.set_ylabel("joint prob (log)")
+            ax.legend(fontsize=8)
+        fig2.suptitle(f"{args.env}: P(z-hat) per individual action sequence (product over 32 groups)")
+        fig2.tight_layout()
+        path2 = OUT / f"goal_reachability_seqs_{args.env}.png"
+        fig2.savefig(path2, dpi=120)
+        print("saved", path2)
 
 
 if __name__ == "__main__":

@@ -9,14 +9,19 @@ observation image + stochastic embedding for each step.
 Every step creates a brand new node and a new edge from the previous node,
 even if the observation matches one seen earlier in the episode.
 
+Also serves a separate cluster-explorer page: at startup, collects random-
+policy episodes, clusters the visited states by their RSSM stoch, and exposes
+the result over REST (/clusters/states, /clusters/states/{id},
+/clusters/{cluster_id}/states, /clusters/row_stats) for z-flow's clustering
+view.
+
 Usage:
-    uv run serve.py <experiment_dir>
-    uv run serve.py <experiment_dir> --host 0.0.0.0 --port 8765 --time-limit 200
+    uv run zflow/serve.py <experiment_dir>
+    uv run zflow/serve.py <experiment_dir> --host 0.0.0.0 --port 8765 --time-limit 200
+    uv run zflow/serve.py <experiment_dir> --cluster-episodes 30 --cluster-k 10
 """
 
 import argparse
-import base64
-import io
 import pathlib
 import sys
 import warnings
@@ -24,13 +29,15 @@ import warnings
 import numpy as np
 import torch
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from omegaconf import OmegaConf
-from PIL import Image
 from tensordict import TensorDict
 
-sys.path.append(str(pathlib.Path(__file__).parent))
+sys.path.append(str(pathlib.Path(__file__).parent.parent))  # repo root: tools, dreamer, envs, rewards
+from clustering import ClusterStore, collect_random_states, compute_row_stats, run_clustering
+from serve_utils import encode_image, make_trans
+
 import tools
 from dreamer import Dreamer
 from envs import make_env
@@ -38,26 +45,6 @@ from rewards import make_reward
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision("high")
-
-
-def _encode_image(img_np: np.ndarray) -> str:
-    if img_np.dtype != np.uint8:
-        img_np = (img_np * 255.0).clip(0, 255).astype(np.uint8)
-    buf = io.BytesIO()
-    Image.fromarray(img_np, mode="RGB").save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def _make_trans(obs: dict, action: torch.Tensor, device) -> TensorDict:
-    """Build a TensorDict from the raw obs dict + action, matching evaluate.py exactly."""
-    trans = TensorDict(
-        {k: torch.as_tensor(v, device="cpu").unsqueeze(0) for k, v in obs.items()},
-        batch_size=(1,),
-        device="cpu",
-    ).pin_memory()
-    trans = trans.to(device, non_blocking=True)
-    trans["action"] = action
-    return trans
 
 
 def _reward_input(agent_state: TensorDict, agent):
@@ -83,7 +70,7 @@ def _backfill_config(config):
     return OmegaConf.merge(config, updates) if updates else config
 
 
-def create_app(config, env, agent, reward_function) -> FastAPI:
+def create_app(config, env, agent, reward_function, cluster_store: ClusterStore) -> FastAPI:
     n_actions = env.action_space.shape[0]
     S = config.model.rssm.stoch
     K = config.model.rssm.discrete
@@ -107,6 +94,69 @@ def create_app(config, env, agent, reward_function) -> FastAPI:
     async def health():
         return {"status": "ok", "env": config.env.task}
 
+    @app.get("/clusters/states")
+    async def list_cluster_states():
+        return {
+            "k": cluster_store.k,
+            "n_states": cluster_store.n_states,
+            "n_trajectories": cluster_store.n_trajectories,
+            "states": [
+                {
+                    "id": f"cz_{idx}",
+                    "x": float(x),
+                    "y": float(y),
+                    "cluster_id": int(c),
+                    "trajectory_id": int(t),
+                    "timestep": int(ts),
+                }
+                for idx, ((x, y), c, t, ts) in enumerate(
+                    zip(
+                        cluster_store.coords,
+                        cluster_store.cluster_ids,
+                        cluster_store.trajectory_ids,
+                        cluster_store.timesteps,
+                    )
+                )
+            ],
+        }
+
+    @app.get("/clusters/row_stats")
+    async def get_row_stats():
+        return compute_row_stats(cluster_store.stochs)
+
+    @app.get("/clusters/states/{state_id}")
+    async def get_cluster_state(state_id: str):
+        idx = cluster_store.parse_state_id(state_id)
+        if idx is None:
+            raise HTTPException(status_code=404, detail="state not found")
+        return {
+            "id": state_id,
+            "cluster_id": int(cluster_store.cluster_ids[idx]),
+            "x": float(cluster_store.coords[idx, 0]),
+            "y": float(cluster_store.coords[idx, 1]),
+            "image_b64": encode_image(cluster_store.images[idx]),
+            "stoch": cluster_store.stochs[idx].tolist(),
+            "trajectory_id": int(cluster_store.trajectory_ids[idx]),
+            "timestep": int(cluster_store.timesteps[idx]),
+            "prev_id": cluster_store.state_id(cluster_store.prev_ids[idx]),
+            "next_id": cluster_store.state_id(cluster_store.next_ids[idx]),
+        }
+
+    @app.get("/clusters/{cluster_id}/states")
+    async def get_cluster_states(cluster_id: int, limit: int = 200, offset: int = 0):
+        if cluster_id < 0 or cluster_id >= cluster_store.k:
+            raise HTTPException(status_code=404, detail="cluster not found")
+        limit = max(0, min(limit, 500))
+        members = cluster_store.cluster_members[cluster_id]
+        page = members[offset : offset + limit]
+        return {
+            "cluster_id": cluster_id,
+            "total": len(members),
+            "offset": offset,
+            "limit": limit,
+            "states": [{"id": f"cz_{idx}", "image_b64": encode_image(cluster_store.images[idx])} for idx in page],
+        }
+
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
         await websocket.accept()
@@ -118,7 +168,7 @@ def create_app(config, env, agent, reward_function) -> FastAPI:
         done = False
 
         def _run_inference(obs, agent_state, action):
-            trans = _make_trans(obs, action, agent.device)
+            trans = make_trans(obs, action, agent.device)
             with torch.no_grad():
                 _, new_state, _ = agent.act(trans, agent_state, eval=True)
             reward = reward_function(_reward_input(new_state, agent), trans["goal"]).item()
@@ -135,7 +185,7 @@ def create_app(config, env, agent, reward_function) -> FastAPI:
                 "timestep": step_idx,
             }
 
-            image_b64 = _encode_image(np.asarray(obs["image"]))
+            image_b64 = encode_image(np.asarray(obs["image"]))
             msg: dict = {
                 "type": "step",
                 "node_id": node_id,
@@ -204,6 +254,14 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--time-limit", type=int, default=None, help="Override episode time limit")
     parser.add_argument("--device", default=None, help="Override device (e.g. cpu, cuda)")
+    parser.add_argument(
+        "--cluster-episodes", type=int, default=20, help="Random-policy episodes to collect for the cluster view"
+    )
+    parser.add_argument(
+        "--cluster-max-steps", type=int, default=200, help="Max steps per episode collected for the cluster view"
+    )
+    parser.add_argument("--cluster-k", type=int, default=8, help="Number of KMeans clusters")
+    parser.add_argument("--cluster-seed", type=int, default=0, help="Random seed for KMeans/PCA")
     args = parser.parse_args()
 
     train_cfg = OmegaConf.load(args.experiment_dir / ".hydra/config.yaml")
@@ -232,7 +290,25 @@ def main():
     agent.load_state_dict(torch.load(args.experiment_dir / "latest.pt", map_location=config.device)["agent_state_dict"])
     agent.eval()
 
-    app = create_app(config, env, agent, reward_function)
+    print(
+        f"Collecting {args.cluster_episodes} random episodes for clustering "
+        f"(max {args.cluster_max_steps} steps each)..."
+    )
+    collected = collect_random_states(agent, env, args.cluster_episodes, args.cluster_max_steps, config.device)
+    print(f"Collected {len(collected['stochs'])} states. Running KMeans (k={args.cluster_k}) + PCA...")
+    clustered = run_clustering(collected["stochs"], args.cluster_k, args.cluster_seed)
+    cluster_store = ClusterStore(
+        coords=clustered["coords"],
+        cluster_ids=clustered["cluster_ids"],
+        images=collected["images"],
+        stochs=collected["stochs"],
+        trajectory_ids=collected["trajectory_ids"],
+        timesteps=collected["timesteps"],
+        k=args.cluster_k,
+    )
+    print(f"Clustering ready: {cluster_store.n_states} states, {args.cluster_k} clusters.")
+
+    app = create_app(config, env, agent, reward_function, cluster_store)
     print(f"Serving at ws://{args.host}:{args.port}/ws")
     uvicorn.run(app, host=args.host, port=args.port)
 

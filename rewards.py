@@ -1,7 +1,25 @@
 import math
+import os
 
 import torch
 import torch.nn.functional as F
+
+# The exact-match rewards (first_row / row_by_row / full / argmax_full) used to
+# compare one-hot tensors with `state == goal`. That float equality is fragile:
+# under fp16 autocast + torch.compile on GPU a straight-through one-hot whose
+# "1" entry is e.g. 0.9995 never equals the exact-1.0 goal, so the reward
+# collapses to ~-1 even when the states actually match (the CPU/fp32 collection
+# path is fine, which is why episode/score stayed dense while train/rew pinned
+# at -1). We compare argmax (category) indices instead — semantically identical
+# for one-hots and immune to any precision/graph perturbation.
+#
+# ONEHOT_ATOL: how far the mode (argmax) entry may sit from 1.0 (and the row sum
+# from 1.0) before we consider the input not a valid one-hot.
+ONEHOT_ATOL = 1e-3
+# Validation forces a host<->device sync (it reads a bool off a tensor), which
+# breaks cudagraphs / reduce-overhead. Keep it on to *confirm* the fix, then set
+# VALIDATE_ONEHOT=0 in the env for the fast production run.
+VALIDATE_ONEHOT = os.environ.get("VALIDATE_ONEHOT", "1") == "1"
 
 
 def make_reward(config):
@@ -23,6 +41,23 @@ def make_reward(config):
             raise ValueError(f"Tipo de objetivo no soportado: {config.goal_type}")
 
 
+def _mode_idx(x: torch.Tensor, atol: float = ONEHOT_ATOL) -> torch.Tensor:
+    """Argmax (category index) over the last dim of a (near-)one-hot tensor.
+
+    Asserts the input really is one-hot to within `atol`: the winning entry must
+    be within `atol` of 1.0 and each row must sum to ~1.0. This guards against
+    silently taking the argmax of a degenerate / non-one-hot tensor.
+    """
+    if VALIDATE_ONEHOT:
+        peak_err = (x.amax(dim=-1) - 1.0).abs().amax()
+        sum_err = (x.sum(dim=-1) - 1.0).abs().amax()
+        assert bool(peak_err < atol) and bool(sum_err < atol), (
+            f"reward input is not (close to) one-hot: |max-1|={peak_err.item():.2e}, "
+            f"|sum-1|={sum_err.item():.2e} (atol={atol:g})"
+        )
+    return x.argmax(dim=-1)
+
+
 def first_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     """
     Compute reward for a given state and goal.
@@ -38,14 +73,13 @@ def first_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     """
     if state.dim() == 3:
         # Caso (B, S, K) con goal (K,)
-        first_rows = state[:, 0, :]
-        matches = torch.all(first_rows == goal, dim=1, keepdim=True)
+        # (B,) == () -> (B,)
+        matches = (_mode_idx(state[:, 0, :]) == _mode_idx(goal)).unsqueeze(-1)
 
     elif state.dim() == 4:
         # Caso (B, T, S, K) con goal (B, K)
-        first_rows = state[:, :, 0, :]
-        goal_expanded = goal.unsqueeze(1).expand_as(first_rows)
-        matches = torch.all(first_rows == goal_expanded, dim=-1, keepdim=True)
+        # (B, T) == (B, 1) -> (B, T)
+        matches = (_mode_idx(state[:, :, 0, :]) == _mode_idx(goal).unsqueeze(1)).unsqueeze(-1)
 
     else:
         raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")
@@ -69,14 +103,15 @@ def row_by_row_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     if state.dim() == 3:
         # Caso (B, S, K) con goal (S, K)
         _, S, _ = state.shape
-        matches = torch.all(state == goal, dim=-1)
+        # (B, S) == (S,) -> (B, S)
+        matches = _mode_idx(state) == _mode_idx(goal)
         num_matching_rows = matches.sum(dim=1, keepdim=True)
 
     elif state.dim() == 4:
         # Caso (B, T, S, K) con goal (B, S, K)
         _, _, S, _ = state.shape
-        goal_expanded = goal.unsqueeze(1).expand_as(state)
-        matches = torch.all(state == goal_expanded, dim=-1)
+        # (B, T, S) == (B, 1, S) -> (B, T, S)
+        matches = _mode_idx(state) == _mode_idx(goal).unsqueeze(1)
         num_matching_rows = matches.sum(dim=2, keepdim=True)
 
     else:
@@ -99,13 +134,12 @@ def full_goal_reward(state: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         torch.Tensor: Reward tensor of shape (B, 1) or (B, T, 1).
     """
     if state.dim() == 3:
-        # Caso (B, S, K) con goal (S, K)
-        matches = torch.all(state == goal, dim=(1, 2)).unsqueeze(-1)
+        # Caso (B, S, K) con goal (S, K): all S groups must share the argmax category
+        matches = torch.all(_mode_idx(state) == _mode_idx(goal), dim=1).unsqueeze(-1)
 
     elif state.dim() == 4:
         # Caso (B, T, S, K) con goal (B, S, K)
-        goal_expanded = goal.unsqueeze(1).expand_as(state)
-        matches = torch.all(state == goal_expanded, dim=(2, 3)).unsqueeze(-1)
+        matches = torch.all(_mode_idx(state) == _mode_idx(goal).unsqueeze(1), dim=2).unsqueeze(-1)
 
     else:
         raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")

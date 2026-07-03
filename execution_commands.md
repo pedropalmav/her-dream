@@ -10,12 +10,12 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/wm_only_ran
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/ ./logdir/random_goal/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow
 ```
 
 3. Correr el tensorboard
 ```bash
-tensorboard --logdir ./logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01
+tensorboard --logdir ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/01
 ```
 
 4. Correr evaluación con el text_encoder al azar:
@@ -293,3 +293,48 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     buffer=her goal_type=row_by_row \
     env.steps=500000 trainer.update_log_every=1000
 ```
+
+28. **Diagnóstico — ¿por qué `train/rew ≈ -1` en los goal_type de match exacto (`full`/`row_by_row`)?** El item 27 (`row_by_row`) logueó `train/rew ≈ -1.0` (0 filas calzadas en TODO el batch de imaginación) pese a que `episode/score` era denso (~-650 ≈ 11 filas). Reproducir el camino de `_cal_grad` fiel en CPU da ~-0.65, **no** -1. La única diferencia con el run real es el paso de entrenamiento en GPU: `fp16 autocast` (descartado como causa: ni CPU ni MPS castean el one-hot del gumbel) + `torch.compile(reduce-overhead/cudagraphs)` (sospechoso principal, no reproducible sin CUDA). Estos 3 runs cortos aíslan la causa y prueban el fix. Runs de ~20k pasos bastan: el `-1` aparece desde la primera actualización. Ver memoria `exact-match-reward-flat-minus1-gpu`.
+
+   **A) Diagnóstico — recompensa `==` actual + `compile=TRUE`** (reproduce el bug). Usa el `rewards.py` que está hoy en barto (comparación float `==`):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/dbg/rbr_eq_compile/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row model.compile=True \
+    env.steps=20000 trainer.update_log_every=200
+```
+
+   **B) Diagnóstico — recompensa `==` actual + `compile=FALSE`** (idéntico a A salvo `model.compile`). Aísla `torch.compile` como única variable:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/dbg/rbr_eq_nocompile/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row model.compile=False \
+    env.steps=20000 trainer.update_log_every=200
+```
+
+   **C) Fix — recompensa argmax (nueva) + `compile=TRUE` + assert de one-hot activo.** Requiere aplicar el fix de `rewards.py` (compara `argmax`, no `==`). `VALIDATE_ONEHOT=1` corre el assert que valida que `imag_stoch` sea un one-hot legítimo (moda a <1e-3 de 1.0):
+```bash
+CUDA_VISIBLE_DEVICES=1 VALIDATE_ONEHOT=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart/01 \
+    logdir=./logdir/dbg/rbr_argmax_compile/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row model.compile=True \
+    env.steps=20000 trainer.update_log_every=200
+```
+
+   **Cómo leer los resultados** (mirar `train/rew` en TensorBoard o `metrics.jsonl`):
+   - **A ≈ -1 y B ≈ -0.65** ⟹ confirmado: la causa es `torch.compile`/cudagraphs.
+   - **A ≈ B ≈ -1** ⟹ NO es compile; mi diagnóstico está mal, hay que seguir buscando.
+   - **C ≈ -0.65 y el assert NO salta** ⟹ el estado siempre fue un one-hot válido; solo el `==` fallaba y el fix argmax lo resuelve.
+   - **C: el assert SALTA** (`reward input is not (close to) one-hot`) ⟹ bajo compile `imag_stoch` llega corrupto (aliasing de cudagraphs), no es solo el `==`; el fix argmax por sí solo no bastaría. Reintentar C con `model.compile=False` para separar.
+   - Nota: con `compile=True`, el assert de `VALIDATE_ONEHOT=1` fuerza un sync y puede romper/lentificar cudagraphs. Si C crashea por eso, correrlo con `VALIDATE_ONEHOT=0` (pierde el assert pero prueba el reward) y/o `model.compile=False`. Para la corrida de producción final: `VALIDATE_ONEHOT=0`.

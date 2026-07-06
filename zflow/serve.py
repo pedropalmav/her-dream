@@ -62,15 +62,98 @@ def _reward_input(agent_state: TensorDict, agent):
     return agent_state["stoch"]
 
 
-def _backfill_config(config):
-    """Fill in config keys added after older experiments were trained."""
+def _backfill_config(config, force_wm_only=False):
+    """Fill in config keys added after older experiments were trained.
+
+    Returns ``(config, wm_only)``. ``wm_only`` is True for pre-goal-conditioning
+    checkpoints (e.g. the original-Dreamer WM on `feat/original-dreamer-wm`),
+    detected by the absence of the top-level ``goal_type`` key. In that mode the
+    goal-conditioned actor/critic and the reward/continue predictors in the
+    checkpoint are not loaded; only the world model (encoder + RSSM) is used.
+    """
     updates = {}
     if "goal_imag_horizon" not in config.model:
         updates["model"] = {"goal_imag_horizon": int(config.model.imag_horizon)}
-    return OmegaConf.merge(config, updates) if updates else config
+
+    wm_only = force_wm_only or ("goal_type" not in config)
+    if wm_only:
+        # Dummy goal-conditioning keys so main's Dreamer can be *constructed*.
+        # These only size the actor/value heads, which are neither loaded nor
+        # run in WM-only mode; make_reward is skipped entirely.
+        goal_defaults = {
+            "goal_type": "full",
+            "mission_text": False,
+            "wm_only": False,
+            "train_text_only": False,
+            "freeze_wm": False,
+            "prob_threshold": 0.5,
+            "prob_threshold_step": 0.1,
+        }
+        top = {k: v for k, v in goal_defaults.items() if k not in config}
+        model_missing = {k: v for k, v in goal_defaults.items() if k not in config.model}
+        # Deep-merge: preserves the model.goal_imag_horizon backfill above.
+        updates = OmegaConf.merge(updates, {**top, "model": model_missing})
+
+    return (OmegaConf.merge(config, updates) if updates else config, wm_only)
 
 
-def create_app(config, env, agent, reward_function, cluster_store: ClusterStore) -> FastAPI:
+# state_dict prefixes that make up the world model — identical in keys and
+# shapes between the goal-conditioned Dreamer and the original-Dreamer runs.
+_WM_PREFIXES = ("encoder.", "_frozen_encoder.", "rssm.", "_frozen_rssm.", "return_ema.")
+
+
+def _load_agent_weights(agent, checkpoint, wm_only: bool):
+    """Load agent weights, tolerating original-Dreamer checkpoints.
+
+    Full (goal-conditioned) checkpoints load strictly. In ``wm_only`` mode only
+    the world-model tensors (``_WM_PREFIXES``) are loaded; the checkpoint's
+    reward/continue predictors and its non-goal-conditioned actor/value heads
+    (which have incompatible shapes) are intentionally skipped. The randomly
+    initialised actor/value on the agent are never exercised in WM-only mode.
+    """
+    if not wm_only:
+        agent.load_state_dict(checkpoint)
+        return
+
+    filtered = {k: v for k, v in checkpoint.items() if k.startswith(_WM_PREFIXES)}
+    missing, unexpected = agent.load_state_dict(filtered, strict=False)
+
+    # Guard against a silent partial WM load: every WM tensor we filtered in
+    # must have matched a parameter on the agent.
+    wm_missing = [k for k in missing if k.startswith(_WM_PREFIXES)]
+    if wm_missing or unexpected:
+        raise RuntimeError(
+            f"WM-only load failed. Unmatched WM keys: {wm_missing[:5]}... Unexpected keys: {list(unexpected)[:5]}..."
+        )
+
+    skipped = sorted({k.split(".")[0] for k in checkpoint if not k.startswith(_WM_PREFIXES)})
+    print(f"  WM-only load: loaded {len(filtered)} world-model tensors (encoder + RSSM). Skipped modules: {skipped}.")
+    print("  (actor/value use random init and are not run; reward = env reward.)")
+
+
+def _wm_forward(agent, obs, state, prev_action):
+    """World-model-only inference step for non-goal-conditioned checkpoints.
+
+    Runs encoder + RSSM posterior (`obs_step`) to advance the latent state,
+    threading the action that actually produced `obs` as `prev_action` (the
+    real transition action, unlike the goal-mode path which reuses the actor's
+    discarded action). No goal, no actor, no reward predictor.
+    """
+    trans = make_trans(obs, prev_action, agent.device)
+    with torch.no_grad():
+        p_obs = agent.preprocess(trans)
+        embed = agent._frozen_encoder(p_obs)
+        stoch, deter, _ = agent._frozen_rssm.obs_step(
+            state["stoch"], state["deter"], prev_action, embed, trans["is_first"]
+        )
+    new_state = TensorDict(
+        {"stoch": stoch, "deter": deter, "prev_action": prev_action},
+        batch_size=state.batch_size,
+    )
+    return new_state, trans
+
+
+def create_app(config, env, agent, reward_function, cluster_store: ClusterStore, wm_only: bool = False) -> FastAPI:
     n_actions = env.action_space.shape[0]
     S = config.model.rssm.stoch
     K = config.model.rssm.discrete
@@ -167,7 +250,11 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore)
         prev_node_id = None
         done = False
 
-        def _run_inference(obs, agent_state, action):
+        def _run_inference(obs, agent_state, action, env_reward=0.0):
+            if wm_only:
+                # No goal / actor / reward predictor; report the env's own reward.
+                new_state, trans = _wm_forward(agent, obs, agent_state, action)
+                return new_state, float(env_reward), trans
             trans = make_trans(obs, action, agent.device)
             with torch.no_grad():
                 _, new_state, _ = agent.act(trans, agent_state, eval=True)
@@ -234,8 +321,8 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore)
                     action = torch.zeros(1, n_actions, device=agent.device)
                     action[0, action_idx] = 1.0
 
-                    obs, _, done, _ = env.step(action[0].cpu().numpy())
-                    agent_state, reward, _ = _run_inference(obs, agent_state, action)
+                    obs, env_reward, done, _ = env.step(action[0].cpu().numpy())
+                    agent_state, reward, _ = _run_inference(obs, agent_state, action, env_reward=env_reward)
                     await websocket.send_json(_build_step_msg(obs, agent_state, reward, is_first=False))
 
                     if done:
@@ -262,6 +349,12 @@ def main():
     )
     parser.add_argument("--cluster-k", type=int, default=8, help="Number of KMeans clusters")
     parser.add_argument("--cluster-seed", type=int, default=0, help="Random seed for KMeans/PCA")
+    parser.add_argument(
+        "--wm-only",
+        action="store_true",
+        help="Force world-model-only load (encoder + RSSM). Auto-enabled for "
+        "pre-goal-conditioning checkpoints, e.g. original-Dreamer WM runs.",
+    )
     args = parser.parse_args()
 
     train_cfg = OmegaConf.load(args.experiment_dir / ".hydra/config.yaml")
@@ -271,14 +364,18 @@ def main():
     if args.device is not None:
         overrides["device"] = args.device
     config = OmegaConf.merge(train_cfg, overrides)
-    config = _backfill_config(config)
+    config, wm_only = _backfill_config(config, force_wm_only=args.wm_only)
+    if wm_only:
+        print("World-model-only mode: goal/actor/reward heads are skipped (WM latent stream only).")
 
     tools.set_seed_everywhere(config.seed)
 
     print(f"Loading env: {config.env.task}")
     env = make_env(config.env, 0)
 
-    reward_function = make_reward(config)
+    # In WM-only mode the goal-conditioned reward is undefined (no goal wrapper);
+    # the interactive view uses the environment's own reward instead.
+    reward_function = None if wm_only else make_reward(config)
 
     print(f"Loading agent from: {args.experiment_dir / 'latest.pt'}")
     agent = Dreamer(
@@ -287,7 +384,8 @@ def main():
         env.action_space,
         reward_function=reward_function,
     ).to(config.device)
-    agent.load_state_dict(torch.load(args.experiment_dir / "latest.pt", map_location=config.device)["agent_state_dict"])
+    checkpoint = torch.load(args.experiment_dir / "latest.pt", map_location=config.device)["agent_state_dict"]
+    _load_agent_weights(agent, checkpoint, wm_only)
     agent.eval()
 
     print(
@@ -308,7 +406,7 @@ def main():
     )
     print(f"Clustering ready: {cluster_store.n_states} states, {args.cluster_k} clusters.")
 
-    app = create_app(config, env, agent, reward_function, cluster_store)
+    app = create_app(config, env, agent, reward_function, cluster_store, wm_only=wm_only)
     print(f"Serving at ws://{args.host}:{args.port}/ws")
     uvicorn.run(app, host=args.host, port=args.port)
 

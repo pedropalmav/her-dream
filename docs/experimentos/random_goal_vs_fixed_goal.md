@@ -127,3 +127,13 @@ explica el caso `full`+buffer (goal de otra posición), pero **no** el caso
 `prob`+imagination (donde el goal es alcanzable por construcción desde el episodio
 actual). Queda una diferencia de fondo entre los dos entornos —más allá de la
 posición— **todavía no entendida**, y es la pregunta abierta principal.
+
+> **Actualización (jul 2026).** Parte del gap resultó ser un **artefacto de
+> cómputo**: los rewards de match exacto comparaban floats con `==` y eso se
+> rompió en el paso GPU a mediados de junio (train/rew=-1 → gradiente cero).
+> Con el fix argmax, `row_by_row`+imagination **aprende en random_goal**
+> (score -732→-396 @249k). El diagnóstico de este documento **sigue en pie**
+> donde aplica: los -1001 de `full`+buffer (jun 8) son genuinos (su `==` aún
+> funcionaba, y el cross-posición los explica), igual que el -1 de
+> `full`+imagination (sample==sample ≈ 0 por Gumbel). Detalle y datación en
+> [artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md).

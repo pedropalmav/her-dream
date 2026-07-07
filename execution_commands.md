@@ -10,12 +10,12 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/wm_only_ran
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow_fixedrew/ ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow_fixedrew/
 ```
 
 3. Correr el tensorboard
 ```bash
-tensorboard --logdir ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/01
+tensorboard --logdir ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow_fixedrew/01
 ```
 
 4. Correr evaluación con el text_encoder al azar:
@@ -274,9 +274,9 @@ Reward **prob** (densa, `dist.log_prob(goal).exp()` ∈ [0,1]); idéntico salvo 
 ```bash
 CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomstart/01 \
-    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_prob/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_prob/02 \
     freeze_wm=True wm_only=False \
-    env=random_goal seed=1 mission_text=False \
+    env=random_goal seed=2 mission_text=False \
     env.agent_start_random=True env.goal_sample=imagination \
     buffer=her goal_type=prob \
     env.steps=500000 trainer.update_log_every=1000
@@ -286,9 +286,9 @@ Reward **row_by_row** (densa, `(filas que matchean / S) - 1` ∈ [-1, 0]); reuti
 ```bash
 CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomstart/01 \
-    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/02 \
     freeze_wm=True wm_only=False \
-    env=random_goal seed=1 mission_text=False \
+    env=random_goal seed=2 mission_text=False \
     env.agent_start_random=True env.goal_sample=imagination \
     buffer=her goal_type=row_by_row \
     env.steps=500000 trainer.update_log_every=1000

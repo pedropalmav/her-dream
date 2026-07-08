@@ -6,7 +6,6 @@ goals for `imag_horizon` steps. These tests pin that contract: the default
 follows `imag_horizon`, and an explicit override decouples the two.
 """
 
-import pytest
 from hydra import compose, initialize
 
 

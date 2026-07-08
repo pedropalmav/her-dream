@@ -32,6 +32,8 @@ def make_reward(config):
             return lambda dist, goal: log_prob_reward(dist, goal, log_threshold)
         case "prob":
             return prob_reward
+        case "max_cosine":
+            return max_cosine_reward
         case _:
             raise ValueError(f"Tipo de objetivo no soportado: {config.goal_type}")
 
@@ -183,3 +185,40 @@ def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     K = logit.shape[-1]
     hard_stoch = F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
     return full_goal_reward(hard_stoch, goal)
+
+
+def max_cosine_reward(state: torch.Tensor, goal: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Max-normalized dot product between the state and goal logit vectors.
+
+    Each (S, K) latent is flattened into a single S*K vector; the reward is
+    r = (g/m)^T (s/m) = (g . s) / m^2, with m = max(||g||, ||s||). It peaks at
+    1 when g == s and stays roughly in [-1, 1]. Both `state` and `goal` are the
+    raw logits returned by RSSM's obs_step/img_step (not one-hot samples).
+
+    Args:
+        state (torch.Tensor): Current-state logits. Shape (B, S, K) or (B, T, S, K).
+        goal (torch.Tensor): Goal logits. Shape (S, K) or (B, S, K).
+        eps (float): Guards the all-zero degenerate case.
+
+    Returns:
+        torch.Tensor: Reward tensor of shape (B, 1) or (B, T, 1).
+    """
+    if state.dim() == 3:
+        # Caso (B, S, K) con goal (S, K) o (B, S, K)
+        s = state.flatten(start_dim=1)  # (B, S*K)
+        g = goal.reshape(*goal.shape[:-2], -1)  # (S*K,) o (B, S*K)
+
+    elif state.dim() == 4:
+        # Caso (B, T, S, K) con goal (B, S, K)
+        s = state.flatten(start_dim=2)  # (B, T, S*K)
+        g = goal.reshape(goal.shape[0], -1).unsqueeze(1)  # (B, 1, S*K)
+
+    else:
+        raise ValueError(f"Estado con número de dimensiones no soportado: {state.dim()}")
+
+    dot = (s * g).sum(dim=-1, keepdim=True)
+    s_norm = torch.linalg.vector_norm(s, dim=-1, keepdim=True)
+    g_norm = torch.linalg.vector_norm(g, dim=-1, keepdim=True)
+    m = torch.maximum(s_norm, g_norm)
+    return dot / m.pow(2).clamp_min(eps)

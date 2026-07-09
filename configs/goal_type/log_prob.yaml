@@ -1,0 +1,4 @@
+# @package _global_
+goal_type: log_prob
+prob_threshold: 0.5 # probability in [0,1]; compared in log-space
+prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)

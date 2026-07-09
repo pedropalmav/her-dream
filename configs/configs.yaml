@@ -2,6 +2,7 @@ defaults:
   - env: random_goal
   - model: size12M
   - buffer: her
+  - goal_type: full # first_row|row_by_row|full|argmax_full|log_prob|prob|max_cosine
   - logger: tensorboard
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
@@ -18,9 +19,6 @@ hydra:
 
 batch_size: 16
 batch_length: 64
-goal_type: full # first_row|row_by_row|full|argmax_full|log_prob|prob
-prob_threshold: 0.5 # probability in [0,1]; compared in log-space
-prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)
 mission_text: False
 wm_only: False
 freeze_wm: False
@@ -40,8 +38,8 @@ model:
   wm_only: ${wm_only}
   freeze_wm: ${freeze_wm}
   train_text_only: ${train_text_only}
-  prob_threshold: ${prob_threshold}
-  prob_threshold_step: ${prob_threshold_step}
+  prob_threshold: ${oc.select:prob_threshold,0.5}
+  prob_threshold_step: ${oc.select:prob_threshold_step,0.05}
 
 buffer:
   goal_type: ${goal_type}

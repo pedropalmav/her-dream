@@ -88,7 +88,7 @@ class TestFirstRowReward:
 
     def test_4d_output_shape(self):
         goal = F.one_hot(torch.zeros(B, dtype=torch.long), K).float()
-        state = torch.zeros(B, T, S, K)
+        state = F.one_hot(torch.zeros(B, T, S, dtype=torch.long), K).float()
         assert first_row_reward(state, goal).shape == (B, T, 1)
 
     def test_invalid_dim_raises(self):
@@ -176,6 +176,25 @@ class TestFullGoalReward:
         goal = torch.zeros(K)
         with pytest.raises(ValueError):
             full_goal_reward(state, goal)
+
+
+class TestOneHotComparison:
+    """The exact-match rewards compare argmax indices, not float `==`, so a
+    one-hot whose '1' entry is slightly off (e.g. 0.9995 under fp16) still
+    matches; a non-one-hot input trips the validation assert."""
+
+    def test_perturbed_onehot_still_matches(self):
+        goal = F.one_hot(torch.zeros(B, S, dtype=torch.long), K).float()
+        state = goal.clone()
+        state[state == 1.0] = 0.9995  # within ONEHOT_ATOL of 1.0, like fp16
+        result = full_goal_reward(state, goal)
+        assert torch.all(result == 0)  # would be -1 under exact `==`
+
+    def test_non_onehot_input_asserts(self):
+        goal = F.one_hot(torch.zeros(S, dtype=torch.long), K).float()
+        state = torch.zeros(B, S, K)  # degenerate: not one-hot
+        with pytest.raises(AssertionError):
+            row_by_row_reward(state, goal)
 
 
 class TestLogProbReward:

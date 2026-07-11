@@ -1,5 +1,4 @@
 import math
-import os
 
 import torch
 import torch.nn.functional as F
@@ -16,10 +15,6 @@ import torch.nn.functional as F
 # ONEHOT_ATOL: how far the mode (argmax) entry may sit from 1.0 (and the row sum
 # from 1.0) before we consider the input not a valid one-hot.
 ONEHOT_ATOL = 1e-3
-# Validation forces a host<->device sync (it reads a bool off a tensor), which
-# breaks cudagraphs / reduce-overhead. Keep it on to *confirm* the fix, then set
-# VALIDATE_ONEHOT=0 in the env for the fast production run.
-VALIDATE_ONEHOT = os.environ.get("VALIDATE_ONEHOT", "1") == "1"
 
 
 def make_reward(config):
@@ -48,13 +43,12 @@ def _mode_idx(x: torch.Tensor, atol: float = ONEHOT_ATOL) -> torch.Tensor:
     be within `atol` of 1.0 and each row must sum to ~1.0. This guards against
     silently taking the argmax of a degenerate / non-one-hot tensor.
     """
-    if VALIDATE_ONEHOT:
-        peak_err = (x.amax(dim=-1) - 1.0).abs().amax()
-        sum_err = (x.sum(dim=-1) - 1.0).abs().amax()
-        assert bool(peak_err < atol) and bool(sum_err < atol), (
-            f"reward input is not (close to) one-hot: |max-1|={peak_err.item():.2e}, "
-            f"|sum-1|={sum_err.item():.2e} (atol={atol:g})"
-        )
+    peak_err = (x.amax(dim=-1) - 1.0).abs().amax()
+    sum_err = (x.sum(dim=-1) - 1.0).abs().amax()
+    assert bool(peak_err < atol) and bool(sum_err < atol), (
+        f"reward input is not (close to) one-hot: |max-1|={peak_err.item():.2e}, "
+        f"|sum-1|={sum_err.item():.2e} (atol={atol:g})"
+    )
     return x.argmax(dim=-1)
 
 

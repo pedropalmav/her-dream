@@ -1,4 +1,4 @@
-# El artefacto del reward exacto en GPU — y el primer aprendizaje en random_goal (jun 28 → jul 7)
+# El artefacto del reward exacto en GPU — y el primer aprendizaje en random_goal (jun 28 → jul 9)
 
 [← Índice](README.md)
 
@@ -100,6 +100,43 @@ receta**. La conclusión del item 27 ("random_goal no aprende ni ampliando el
 WM") queda invertida para la rama de match exacto: era el artefacto, no la
 estructura del entorno.
 
+## La réplica (jul 7-9): 3/3 seeds, y el techo de la receta
+
+Relanzamientos completos de la misma receta:
+`posttrain_randomstart_goalimag_rowbyrow/02` (seed 2, 500k) y `/03` (seed 3,
+**1M** — el doble de pasos, para medir si el límite eran los steps).
+
+![episode/score: row_by_row 3 seeds vs prob](assets/episode_scores_jul2026.png)
+
+**1. Replicado 3/3.** Las trayectorias son casi calcadas donde se solapan —
+ma25 del score @249k: seed 1 **-396**, seed 2 **-439**, seed 3 **-395**. El
+primer-aprendizaje no era suerte de una seed.
+
+**2. Plateau en ≈ -290: el cuello de botella ya no son los pasos.** El `/03`
+(1M) gana mucho menos en la segunda mitad y desde ~700k oscila plano:
+
+| ma25 score (seed 3) | @249k | @499k | @749k | @899k | @999k |
+|---|---|---|---|---|---|
+| | -395 | -371 | -317 | -283 | **-290** |
+
+Eval: mejor **-220 @730k**, últimos evals ≈ -250 sin mejorar. Correr más largo
+con esta receta no mueve la aguja.
+
+**3. `train/rew` satura en ≈ -0.21 (≈25/32 filas).** De -0.79 inicial a -0.25
+@500k y solo -0.21 @1M: en imaginación calza ~25 de las 32 filas del goal y ahí
+se estanca — consistente con que las ~7 restantes sean las filas
+difusas/estocásticas del latente, no algo que más gradiente resuelva.
+
+**4. El contraste con `prob`, con todo lo demás igual.** En paralelo corrió
+`posttrain_randomstart_goalimag_prob/{01,02}` (seeds 1-2): **mismo WM
+randomstart congelado, mismo goal imaginado, mismo HER**, solo cambia el
+`goal_type` — y `prob` queda **plana en el piso 0** los 500k (6 de 499
+episodios sobre 0.5, nunca sostenidos; `train/rew` ≈ 0.001). Es el A/B más
+limpio hasta ahora de que lo que importa es la **forma de la recompensa**
+(densa por filas-moda vs probabilidad de sampleo), y descarta de una vez las
+dos excusas que le quedaban a `prob` en random_goal: ni HER ni un WM más
+entrenado la despegan.
+
 ### Matices para no sobrevender
 
 - **`episode/length` = 1000 siempre, por diseño**: `random_goal.py` fuerza
@@ -115,17 +152,20 @@ estructura del entorno.
 - O sea: lo que quedó demostrado es que **la maquinaria goal-condicionada en
   latente funciona en random_goal**. El eslabón pendiente es una fuente de goal
   que sí pida el verde — el candidato natural es `goal_sample=image` (ya
-  fusionado, sin correr) con esta misma receta.
-- El run **murió silenciosamente a 249k/500k** (2.13 h, sin error en el log —
-  SIGKILL/OOM/sesión cortada) y no dejó `latest.pt`. Relanzamiento a `/02`
-  pendiente (con `nohup`/`tmux`).
+  fusionado, sin correr) con esta misma receta. Con el plateau de ≈-290 a 1M,
+  cambiar *qué pide el goal* es la única palanca que queda en esta rama.
+- El run seed 1 **murió silenciosamente a 249k/500k** (2.13 h, sin error en el
+  log — SIGKILL/OOM/sesión cortada) y no dejó `latest.pt`. Los `/02` y `/03`
+  (arriba) son sus relanzamientos completos.
+- Falta ver el `eval_video.mp4` del `/03` para confirmar que repite el
+  comportamiento del `/02` (persigue el `z` imaginado, ignora el verde).
 
 ## Cola actualizada
 
 | Pendiente | Nota |
 |---|---|
-| Relanzar fixedrew `/02` a 500k completos | misma receta, `VALIDATE_ONEHOT=0`, en tmux |
-| `goal_sample=image` + `row_by_row` en random_goal | conecta el goal latente con la tarea del verde |
-| Réplica con `seed=2` | afirmar el primer-aprendizaje |
+| `goal_sample=image` + `row_by_row` en random_goal | conecta el goal latente con la tarea del verde; la palanca con más retorno esperado |
+| Ver `eval_video.mp4` del `/03` | confirmar el comportamiento persigue-`z` |
 | Confirmar en barto qué `rewards.py` corrió el A/B | cierra (o no) la causa compile |
+| Diagnóstico 0 (entropía `z` / `prob`-máx) | cerraría formalmente que `prob` es inganable en random_goal |
 | Revisitar Fase 2 (texto) con el reward arreglado | `first_row`/`row_by_row` en fixed_goal |

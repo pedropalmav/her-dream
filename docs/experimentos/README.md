@@ -21,7 +21,7 @@ lo reproducible y presentable.
 | [`hallazgo_goal_type_full.md`](hallazgo_goal_type_full.md) | **Un bloqueante de mucho peso** (sobre todo con goal de **texto**/random): `goal_type=full` (sample==sample sobre 32 grupos) es inalcanzable por construcción (P≈4e-13). No universal: con goal del **buffer**, fixed_goal sí aprende con `full`. |
 | [`random_goal_vs_fixed_goal.md`](random_goal_vs_fixed_goal.md) | Por qué post-train funciona en fixed_goal y falla en random_goal: la posición del verde vive en `z`/`deter`. Incluye `goal_sample=imagination`. |
 | [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | Recompensa densa `prob` + goal de imaginación → aprende en **fixed_goal** (+331), pero **no** en random_goal (se clava en el piso 0). El gap fixed↔random sigue abierto. |
-| [`artefacto_reward_exacto_gpu.md`](artefacto_reward_exacto_gpu.md) | **Bug de cómputo + primer aprendizaje en random_goal.** El `==` de floats de los rewards de match exacto se rompió en el paso GPU entre el 8 y el 26 de junio (train/rew clavado en -1 = gradiente cero); con el fix argmax, la receta rowbyrow+imagination del item 27 **aprende en random_goal** (score -732→-396 @249k). Matiz: alcanza el goal latente, no el cuadrado verde. |
+| [`artefacto_reward_exacto_gpu.md`](artefacto_reward_exacto_gpu.md) | **Bug de cómputo + primer aprendizaje en random_goal.** El `==` de floats de los rewards de match exacto se rompió en el paso GPU entre el 8 y el 26 de junio (train/rew clavado en -1 = gradiente cero); con el fix argmax, la receta rowbyrow+imagination del item 27 **aprende en random_goal**, replicado en 3/3 seeds con plateau ≈ -290 a 1M. Matiz: alcanza el goal latente, no el cuadrado verde. |
 | [`analisis_trayectorias_crafter.md`](analisis_trayectorias_crafter.md) | Inspección de los `z` a lo largo de rollouts reales: en ambientes **complejos** (crafter) los `z` son **muy estocásticos** (entropía ≈1.96/4 bits, 48% de grupos difusos), mientras que en **fixed_goal** tienden a ser **mucho más deterministas**. Abre la pregunta de cuánta información útil vive en `z` vs en `h`. |
 | [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md) | Las herramientas de `experiments/` (estocasticidad del WM/text, consistencia del posterior). |
 | [`papers_sugeridos.md`](papers_sugeridos.md) | Literatura relacionada (clásica + reciente 2024-2025) mapeada a cada problema/receta del proyecto. La lectura común: **abandonar el match exacto en latente** en favor de distancias aprendidas y goals con incertidumbre explícita. |
@@ -43,10 +43,15 @@ pregunta abierta central: la misma receta funciona en uno y falla en el otro.
 `==` de floats de los rewards de match exacto se rompió en el paso de
 entrenamiento GPU a mediados de junio (train/rew clavado en -1 → gradiente
 cero). Con el fix argmax (`025f3b3`), **random_goal aprende por primera vez**
-(`row_by_row` + imagination, score -732→-396 y subiendo al corte de 249k). El
-matiz honesto: aprende a alcanzar el **goal latente imaginado**, no a ir al
-cuadrado verde (el goal no se lo pide); conectar el goal con la tarea real
-(`goal_sample=image`) es el siguiente eslabón. Ver
+(`row_by_row` + imagination), y quedó **replicado en 3/3 seeds** (jul 7-9):
+trayectorias casi calcadas (ma25 ≈ -395/-439/-395 @249k) y **plateau en
+score ≈ -290** a 1M de pasos — el cuello de botella ya no son los pasos
+(`train/rew` satura en ≈ -0.21 ≈ 25/32 filas). El matiz honesto: aprende a
+alcanzar el **goal latente imaginado**, no a ir al cuadrado verde (el goal no
+se lo pide); conectar el goal con la tarea real (`goal_sample=image`) es el
+siguiente eslabón. La rama `prob`, en cambio, queda **descartada en
+random_goal**: con HER + el WM randomstart (seeds 1-2) sigue plana en el piso 0,
+así que ni el re-etiquetado ni un WM más entrenado eran lo que le faltaba. Ver
 [artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md).
 
 ## Tabla maestra de corridas
@@ -78,7 +83,10 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 | **`random_goal/...frozenwm_normalbuf_goalimag_prob/01`** | **random** | **imagination** | **prob**‡ | normal | 499k | **0** (piso) | +73 | 🔴 |
 | `random_goal/...randomstart_goalimag_full/01` (item 27) | random | imagination | full | HER | 499k | -1001 | -999 | 🔴 |
 | `random_goal/...randomstart_goalimag_rowbyrow/01` | random | imagination | row_by_row¶ | HER | 499k | -686 (plano) | — | ⚠️ artefacto |
-| **`random_goal/...rowbyrow_fixedrew/01`** | **random** | **imagination** | **row_by_row**¶ | HER | 249k× | **-396 ↗ subiendo** | -114 | 🟢 **primero en random** |
+| **`random_goal/...rowbyrow_fixedrew/01`** (seed 1) | **random** | **imagination** | **row_by_row**¶ | HER | 249k× | **-396 ↗ subiendo** | -114 | 🟢 **primero en random** |
+| **`random_goal/...randomstart_goalimag_rowbyrow/02`** (seed 2) | **random** | **imagination** | **row_by_row**¶ | HER | 499k | **-316 ↗ subiendo** | -102 | 🟢 réplica |
+| **`random_goal/...randomstart_goalimag_rowbyrow/03`** (seed 3) | **random** | **imagination** | **row_by_row**¶ | HER | 999k | **-290 (plateau ~700k)** | -116 | 🟢 réplica, 1M |
+| `random_goal/...randomstart_goalimag_prob/{01,02}` (seeds 1-2) | random | imagination | prob‡ | HER | 499k | 0 (piso) | 12 | 🔴 |
 | `original_wm_crafter/02` (baseline vanilla) | crafter | — | — | — | 1.01M | eval≈10.9 | 14.1 | 🟢 WM juega |
 | `z_without_history_wm_crafter/01` (ablación) | crafter | — | — | — | 1.01M | eval≈8.7 | 12.1 | 🟢 −13% |
 
@@ -103,7 +111,8 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 > aprende" = plano ~-690, no -1001. El run del 26 jun está **contaminado por el
 > artefacto del `==`** (train/rew=-1 → gradiente cero); el `fixedrew` es la
 > misma receta con el fix argmax (`025f3b3`) y **× murió a 249k/500k** (corte
-> silencioso, relanzamiento pendiente). Ver
+> silencioso). Los `/02` (seed 2, 500k) y `/03` (seed 3, 1M) son sus
+> relanzamientos completos. Ver
 > [artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md).
 
 ## Figuras de conjunto
@@ -215,17 +224,21 @@ miramos **D**/credit assignment.
 > corrió: ver [artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md). La
 > receta **B** (comparar modas) quedó implementada de facto en **todos** los
 > rewards de match exacto por el fix `025f3b3`, y `row_by_row`+imagination
-> **aprende en random_goal** — el Caso 1 se destraba. El Caso 2 (`prob` chata)
-> sigue vigente y el diagnóstico 0 sigue pendiente.
+> **aprende en random_goal** — el Caso 1 se destraba (replicado en 3/3 seeds,
+> plateau ≈ -290 a 1M; ni la réplica ni el doble de pasos eran el límite). El
+> Caso 2 (`prob` chata) se **endurece**: los runs randomstart+HER de `prob`
+> (seeds 1-2, jul 7) descartan a la vez "le faltaba HER" y "le faltaba un WM
+> mejor entrenado" — sobre el mismo WM, mismo goal y misma seed, `row_by_row`
+> aprende y `prob` no. La evidencia apunta a que `prob` es inganable en
+> random_goal; el diagnóstico 0 lo cerraría formalmente.
 
 | Pendiente | Origen | Nota |
 |---|---|---|
-| **Relanzar `rowbyrow_fixedrew/02`** a 500k completos | [artefacto](artefacto_reward_exacto_gpu.md) | el `/01` murió a 249k sin checkpoint; `nohup`/tmux |
-| **`goal_sample=image` + `row_by_row`** en random_goal | [artefacto](artefacto_reward_exacto_gpu.md) | conecta el goal latente con la tarea del verde |
-| Réplica fixedrew con `seed=2` | [artefacto](artefacto_reward_exacto_gpu.md) | afirmar el primer-aprendizaje |
+| **`goal_sample=image` + `row_by_row`** en random_goal | [artefacto](artefacto_reward_exacto_gpu.md) | conecta el goal latente con la tarea del verde; **la palanca con más retorno esperado** (la receta actual ya saturó en ≈-290) |
+| Ver `eval_video.mp4` de `/03` | [artefacto](artefacto_reward_exacto_gpu.md) | confirmar que repite el comportamiento del `/02` (persigue el `z`, ignora el verde) |
 | Confirmar en barto qué `rewards.py` corrió el A/B | [artefacto](artefacto_reward_exacto_gpu.md) | cierra (o no) la causa `torch.compile` |
-| Diagnóstico **0**: entropía `z` y `prob`-máx, random vs fixed | propuesto | el más informativo y barato para el Caso 2 |
-| `argmax_full` + imagination en **random_goal** | propuesto (receta **B**) | menos urgente: rowbyrow fixedrew ya prueba el mecanismo |
+| Diagnóstico **0**: entropía `z` y `prob`-máx, random vs fixed | propuesto | cerraría formalmente que `prob` es inganable (HER y WM ampliado ya descartados) |
+| `argmax_full` + imagination en **random_goal** | propuesto (receta **B**) | menos urgente: rowbyrow ya prueba el mecanismo |
 | Sweep de `goal_imag_horizon` en random (h=5/8/30) | `execution_commands` item 21 | sin correr; receta **C** |
 | `argmax_full` desde WM-only en fixed_goal | `execution_commands` item 15 (corregido) | sin reportar |
 | Rehacer **Fase 2** (text encoder) en **fixed_goal** con reward alcanzable | flag en [fase2](fase2_goal_desde_texto.md) | aísla el encoder sin el confound de random+`full` |

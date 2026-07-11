@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/wm_only_ran
 
 2. Traerse el tensorboard
 ```bash
-scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow_fixedrew/ ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow_fixedrew/
+scp -r iamonardes@barto.ing.uc.cl:/home/iamonardes/her-dream/logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/03 ./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/03
 ```
 
 3. Correr el tensorboard
@@ -286,12 +286,12 @@ Reward **row_by_row** (densa, `(filas que matchean / S) - 1` ∈ [-1, 0]); reuti
 ```bash
 CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     load_from=./logdir/random_goal/wm_only_randomstart/01 \
-    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/02 \
+    logdir=./logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/03 \
     freeze_wm=True wm_only=False \
-    env=random_goal seed=2 mission_text=False \
+    env=random_goal seed=3 mission_text=False \
     env.agent_start_random=True env.goal_sample=imagination \
     buffer=her goal_type=row_by_row \
-    env.steps=500000 trainer.update_log_every=1000
+    env.steps=1000000 trainer.update_log_every=1000
 ```
 
 28. **Diagnóstico — ¿por qué `train/rew ≈ -1` en los goal_type de match exacto (`full`/`row_by_row`)?** El item 27 (`row_by_row`) logueó `train/rew ≈ -1.0` (0 filas calzadas en TODO el batch de imaginación) pese a que `episode/score` era denso (~-650 ≈ 11 filas). Reproducir el camino de `_cal_grad` fiel en CPU da ~-0.65, **no** -1. La única diferencia con el run real es el paso de entrenamiento en GPU: `fp16 autocast` (descartado como causa: ni CPU ni MPS castean el one-hot del gumbel) + `torch.compile(reduce-overhead/cudagraphs)` (sospechoso principal, no reproducible sin CUDA). Estos 3 runs cortos aíslan la causa y prueban el fix. Runs de ~20k pasos bastan: el `-1` aparece desde la primera actualización. Ver memoria `exact-match-reward-flat-minus1-gpu`.

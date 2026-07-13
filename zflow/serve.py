@@ -74,32 +74,11 @@ def _backfill_config(config, force_wm_only=False):
     updates = {}
     if "goal_imag_horizon" not in config.model:
         updates["model"] = {"goal_imag_horizon": int(config.model.imag_horizon)}
-
-    wm_only = force_wm_only or ("goal_type" not in config)
-    if wm_only:
-        # Dummy goal-conditioning keys so main's Dreamer can be *constructed*.
-        # These only size the actor/value heads, which are neither loaded nor
-        # run in WM-only mode; make_reward is skipped entirely.
-        goal_defaults = {
-            "goal_type": "full",
-            "mission_text": False,
-            "wm_only": False,
-            "train_text_only": False,
-            "freeze_wm": False,
-            "prob_threshold": 0.5,
-            "prob_threshold_step": 0.1,
-        }
-        top = {k: v for k, v in goal_defaults.items() if k not in config}
-        model_missing = {k: v for k, v in goal_defaults.items() if k not in config.model}
-        # Deep-merge: preserves the model.goal_imag_horizon backfill above.
-        updates = OmegaConf.merge(updates, {**top, "model": model_missing})
-
-    config = OmegaConf.merge(config, updates) if updates else config
-
     if "goal_type" in config.model and "state_repr" not in config.model:
         # Goal-type descriptors were added later; load them from the config group.
-        config = OmegaConf.merge(config, {"model": goals.default_descriptors(config.model.goal_type)})
-    return config, wm_only
+        model_updates = updates.setdefault("model", {})
+        model_updates.update(goals.default_descriptors(config.model.goal_type))
+    return OmegaConf.merge(config, updates) if updates else config
 
 
 # state_dict prefixes that make up the world model — identical in keys and

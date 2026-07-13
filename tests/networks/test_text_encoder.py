@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from networks.text_encoder import TextEncoderGRU
+from her_dream.networks.text_encoder import TextEncoderGRU
 
 from .conftest import B, K, S, T, make_text_encoder_config
 

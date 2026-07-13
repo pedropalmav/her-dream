@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-import distributions as dists
+import her_dream.distributions as dists
 
 
 class MLP(nn.Module):

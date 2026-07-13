@@ -5,7 +5,7 @@ These operate on RSSM categorical posteriors with shape (..., S, K).
 
 import torch
 
-import distributions as dists
+import her_dream.distributions as dists
 
 
 def posterior_probs(agent, logit: torch.Tensor) -> torch.Tensor:

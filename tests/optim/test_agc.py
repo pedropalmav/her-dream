@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from optim import clip_grad_agc_
+from her_dream.optim import clip_grad_agc_
 
 from .conftest import make_param
 
@@ -78,7 +78,7 @@ class TestClipGradAGC:
     def test_foreach_true_raises_on_unsupported_device(self):
         p = make_param((4,), grad_val=1.0)
         with (
-            patch("optim.agc._device_has_foreach_support", return_value=False),
+            patch("her_dream.optim.agc._device_has_foreach_support", return_value=False),
             pytest.raises(RuntimeError, match="foreach=True"),
         ):
             clip_grad_agc_([p], clip=0.1, pmin=1e-3, foreach=True)

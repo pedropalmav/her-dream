@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.distributions as torchd
 
-from distributions.constructors import (
+from her_dream.distributions.constructors import (
     binary,
     bounded_normal,
     identity,
@@ -14,7 +14,7 @@ from distributions.constructors import (
     symexp_twohot,
     symlog_mse,
 )
-from distributions.distributions import Bound, MSEDist, MultiOneHotDist, OneHotDist, SymlogDist, TwoHot
+from her_dream.distributions.distributions import Bound, MSEDist, MultiOneHotDist, OneHotDist, SymlogDist, TwoHot
 
 from .conftest import B, K, T
 

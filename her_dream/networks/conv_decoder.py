@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 
-from tools import weight_init_
+from her_dream.tools import weight_init_
 
 from .block_linear import BlockLinear
 from .rmsnorm_2d import RMSNorm2D

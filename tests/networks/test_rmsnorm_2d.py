@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from networks.rmsnorm_2d import RMSNorm2D
+from her_dream.networks.rmsnorm_2d import RMSNorm2D
 
 from .conftest import B, C, H, W
 

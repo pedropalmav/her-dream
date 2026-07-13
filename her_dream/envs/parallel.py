@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
-import tools
+import her_dream.tools as tools
 
 
 class ParallelEnv:

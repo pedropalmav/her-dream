@@ -16,7 +16,7 @@ class DeepMindControl(gym.Env):
             domain, task = name.rsplit("_", 1)
 
         if is_subtle:
-            from envs import dmc_subtle
+            from her_dream.envs import dmc_subtle
 
             func = getattr(dmc_subtle, name)
             self._env = func(random=seed)

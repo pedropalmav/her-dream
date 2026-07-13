@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from distributions.functional import symexp, symlog
+from her_dream.distributions.functional import symexp, symlog
 
 from .conftest import B, K
 

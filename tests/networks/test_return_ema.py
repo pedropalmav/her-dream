@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from networks.return_ema import ReturnEMA
+from her_dream.networks.return_ema import ReturnEMA
 
 from .conftest import B, T
 

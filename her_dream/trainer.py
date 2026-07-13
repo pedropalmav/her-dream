@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-import tools
-from buffers.her_buffer import HERBuffer
-from goals import goal_from_latent, make_goal_spec, reward_state
+import her_dream.tools as tools
+from her_dream.buffers.her_buffer import HERBuffer
+from her_dream.goals import goal_from_latent, make_goal_spec, reward_state
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).

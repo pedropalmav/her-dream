@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from tools.benchmark import CudaBenchmark
+from her_dream.tools.benchmark import CudaBenchmark
 
 
 class TestCudaBenchmark:
@@ -16,7 +16,10 @@ class TestCudaBenchmark:
 
     def test_enter_returns_none(self):
         mock_event_cls, _ = self._mock_cuda()
-        with patch("tools.benchmark.torch.cuda.Event", mock_event_cls), patch("tools.benchmark.torch.cuda.synchronize"):
+        with (
+            patch("her_dream.tools.benchmark.torch.cuda.Event", mock_event_cls),
+            patch("her_dream.tools.benchmark.torch.cuda.synchronize"),
+        ):
             cb = CudaBenchmark("bench")
             result = cb.__enter__()
         assert result is None
@@ -24,8 +27,8 @@ class TestCudaBenchmark:
     def test_context_manager_as_clause_is_none(self):
         mock_event_cls, _ = self._mock_cuda()
         with (
-            patch("tools.benchmark.torch.cuda.Event", mock_event_cls),
-            patch("tools.benchmark.torch.cuda.synchronize"),
+            patch("her_dream.tools.benchmark.torch.cuda.Event", mock_event_cls),
+            patch("her_dream.tools.benchmark.torch.cuda.synchronize"),
             CudaBenchmark("bench") as x,
         ):
             pass
@@ -34,8 +37,8 @@ class TestCudaBenchmark:
     def test_exit_calls_synchronize(self):
         mock_event_cls, _ = self._mock_cuda()
         with (
-            patch("tools.benchmark.torch.cuda.Event", mock_event_cls),
-            patch("tools.benchmark.torch.cuda.synchronize") as mock_sync,
+            patch("her_dream.tools.benchmark.torch.cuda.Event", mock_event_cls),
+            patch("her_dream.tools.benchmark.torch.cuda.synchronize") as mock_sync,
             CudaBenchmark("bench"),
         ):
             pass
@@ -44,8 +47,8 @@ class TestCudaBenchmark:
     def test_exit_prints_comment_and_seconds(self, capsys):
         mock_event_cls, _ = self._mock_cuda(elapsed_ms=500.0)
         with (
-            patch("tools.benchmark.torch.cuda.Event", mock_event_cls),
-            patch("tools.benchmark.torch.cuda.synchronize"),
+            patch("her_dream.tools.benchmark.torch.cuda.Event", mock_event_cls),
+            patch("her_dream.tools.benchmark.torch.cuda.synchronize"),
             CudaBenchmark("my_bench"),
         ):
             pass
@@ -56,8 +59,8 @@ class TestCudaBenchmark:
     def test_timing_divides_elapsed_by_1000(self, capsys):
         mock_event_cls, _ = self._mock_cuda(elapsed_ms=1000.0)
         with (
-            patch("tools.benchmark.torch.cuda.Event", mock_event_cls),
-            patch("tools.benchmark.torch.cuda.synchronize"),
+            patch("her_dream.tools.benchmark.torch.cuda.Event", mock_event_cls),
+            patch("her_dream.tools.benchmark.torch.cuda.synchronize"),
             CudaBenchmark("t"),
         ):
             pass

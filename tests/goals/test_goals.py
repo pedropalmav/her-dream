@@ -14,8 +14,8 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-import goals
-from rewards import make_reward
+import her_dream.goals as goals
+from her_dream.rewards import make_reward
 
 CONFIG_DIR = os.path.join(os.path.dirname(goals.__file__), "configs", "goal_type")
 

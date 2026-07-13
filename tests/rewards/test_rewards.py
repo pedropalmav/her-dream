@@ -5,7 +5,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from rewards import (
+from her_dream.rewards import (
     argmax_full_reward,
     first_row_reward,
     full_goal_reward,

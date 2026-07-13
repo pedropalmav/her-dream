@@ -10,14 +10,14 @@ from .conftest import A, D, K, S, make_her_buffer, make_mock_buffer_for_goal, ma
 
 class TestHERStrategyEnum:
     def test_enum_members_exist(self):
-        from buffers.her_buffer import HERStrategy
+        from her_dream.buffers.her_buffer import HERStrategy
 
         assert HERStrategy.FUTURE.value == 0
         assert HERStrategy.FINAL.value == 1
         assert HERStrategy.EPISODE.value == 2
 
     def test_enum_from_string(self):
-        from buffers.her_buffer import HERStrategy
+        from her_dream.buffers.her_buffer import HERStrategy
 
         assert HERStrategy["FUTURE"] == HERStrategy.FUTURE
         assert HERStrategy["FINAL"] == HERStrategy.FINAL

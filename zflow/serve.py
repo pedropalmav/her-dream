@@ -23,26 +23,23 @@ Usage:
 
 import argparse
 import pathlib
-import sys
 import warnings
 
 import numpy as np
 import torch
 import uvicorn
+from clustering import ClusterStore, collect_random_states, compute_row_stats, run_clustering
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from omegaconf import OmegaConf
+from serve_utils import encode_image, make_trans
 from tensordict import TensorDict
 
-sys.path.append(str(pathlib.Path(__file__).parent.parent))  # repo root: tools, dreamer, envs, rewards
-from clustering import ClusterStore, collect_random_states, compute_row_stats, run_clustering
-from serve_utils import encode_image, make_trans
-
-import goals
-import tools
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+import her_dream.goals as goals
+import her_dream.tools as tools
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_env
+from her_dream.rewards import make_reward
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision("high")

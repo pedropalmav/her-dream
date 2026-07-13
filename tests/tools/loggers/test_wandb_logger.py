@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tools.loggers.wandb_logger import WandbLogger
+from her_dream.tools.loggers.wandb_logger import WandbLogger
 
 
 def _make(mock_wandb, tmp_path, project="test"):

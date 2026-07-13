@@ -3,7 +3,7 @@ import re
 import torch
 import torch.nn as nn
 
-from tools import weight_init_
+from her_dream.tools import weight_init_
 
 from .conv_encoder import ConvEncoder
 from .mlp import MLP

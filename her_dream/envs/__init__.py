@@ -15,12 +15,12 @@ def make_envs(config):
 def make_env(config, id):
     suite, task = config.task.split("_", 1)
     if suite == "dmc":
-        import envs.dmc as dmc
+        import her_dream.envs.dmc as dmc
 
         env = dmc.DeepMindControl(task, config.action_repeat, config.size, seed=config.seed + id)
         env = wrappers.NormalizeActions(env)
     elif suite == "atari":
-        import envs.atari as atari
+        import her_dream.envs.atari as atari
 
         env = atari.Atari(
             task,
@@ -41,17 +41,17 @@ def make_env(config, id):
         )
         env = wrappers.OneHotAction(env)
     elif suite == "memorymaze":
-        from envs.memorymaze import MemoryMaze
+        from her_dream.envs.memorymaze import MemoryMaze
 
         env = MemoryMaze(task, seed=config.seed + id)
         env = wrappers.OneHotAction(env)
     elif suite == "crafter":
-        import envs.crafter as crafter
+        import her_dream.envs.crafter as crafter
 
         env = crafter.Crafter(task, config.size, seed=config.seed + id)
         env = wrappers.OneHotAction(env)
     elif suite == "metaworld":
-        import envs.metaworld as metaworld
+        import her_dream.envs.metaworld as metaworld
 
         env = metaworld.MetaWorld(
             task,
@@ -61,8 +61,8 @@ def make_env(config, id):
             config.seed + id,
         )
     elif suite == "random-goal":
-        import envs.fixed_goal as fixed_goal
-        import envs.random_goal as random_goal
+        import her_dream.envs.fixed_goal as fixed_goal
+        import her_dream.envs.random_goal as random_goal
 
         agent_start_pos = (
             None
@@ -85,7 +85,7 @@ def make_env(config, id):
         env = wrappers.GoalImageObservation(env, lambda: fixed_goal.make_fixed_goal_env(size=config.env_size))
 
     elif suite == "fixed-goal":
-        import envs.fixed_goal as fixed_goal
+        import her_dream.envs.fixed_goal as fixed_goal
 
         agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
         goal_pos = (config.goal_pos_x, config.goal_pos_y)

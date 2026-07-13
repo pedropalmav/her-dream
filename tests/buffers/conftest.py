@@ -5,7 +5,7 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-import goals
+import her_dream.goals as goals
 
 S, K, D, A = 8, 8, 16, 3
 
@@ -50,7 +50,7 @@ def make_transition(n_envs=2):
 
 
 def make_her_buffer(**config_overrides):
-    from buffers.her_buffer import HERBuffer
+    from her_dream.buffers.her_buffer import HERBuffer
 
     config = make_her_config(**config_overrides)
 
@@ -76,7 +76,7 @@ def buf_config():
 
 @pytest.fixture
 def buffer(buf_config):
-    from buffers.buffer import Buffer
+    from her_dream.buffers.buffer import Buffer
 
     return Buffer(buf_config)
 

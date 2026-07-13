@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from deter import Deter
+from her_dream.deter import Deter
 
 DETER = 32
 STOCH = 32

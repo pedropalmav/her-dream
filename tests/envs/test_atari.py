@@ -30,7 +30,7 @@ def _make_atari(name="pong", ale_mock=None, rom_mock=None, **kwargs):
         rom_mock = MagicMock(return_value="/fake/path/pong.bin")
 
     # Reset LOCK so __init__ always creates one
-    from envs import atari as atari_module
+    from her_dream.envs import atari as atari_module
 
     atari_module.Atari.LOCK = None
 
@@ -42,7 +42,7 @@ def _make_atari(name="pong", ale_mock=None, rom_mock=None, **kwargs):
         mp_ctx.return_value.Lock.return_value = MagicMock()
         mp_ctx.return_value.Lock.return_value.__enter__ = MagicMock(return_value=None)
         mp_ctx.return_value.Lock.return_value.__exit__ = MagicMock(return_value=False)
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         env = Atari(name, **kwargs)
     return env, ale_mock
@@ -50,7 +50,7 @@ def _make_atari(name="pong", ale_mock=None, rom_mock=None, **kwargs):
 
 class TestAtariInit:
     def test_size_must_be_square(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         ale = _make_ale_mock()
@@ -58,42 +58,42 @@ class TestAtariInit:
             _make_atari("pong", ale_mock=ale, size=(64, 84))
 
     def test_invalid_lives_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
             _make_atari("pong", lives="bad_mode")
 
     def test_invalid_actions_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
             _make_atari("pong", actions="partial")
 
     def test_invalid_resize_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
             _make_atari("pong", resize="bilinear")
 
     def test_invalid_aggregate_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
             _make_atari("pong", aggregate="sum")
 
     def test_pooling_too_small_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
             _make_atari("pong", pooling=0)
 
     def test_action_repeat_too_small_raises(self):
-        from envs.atari import Atari
+        from her_dream.envs.atari import Atari
 
         Atari.LOCK = None
         with pytest.raises(AssertionError):
@@ -105,7 +105,7 @@ class TestAtariInit:
 
     def test_ale_rom_path_env_var(self):
         ale = _make_ale_mock()
-        from envs import atari as atari_module
+        from her_dream.envs import atari as atari_module
 
         atari_module.Atari.LOCK = None
         with (
@@ -117,14 +117,14 @@ class TestAtariInit:
             mp_ctx.return_value.Lock.return_value = MagicMock()
             mp_ctx.return_value.Lock.return_value.__enter__ = MagicMock(return_value=None)
             mp_ctx.return_value.Lock.return_value.__exit__ = MagicMock(return_value=False)
-            from envs.atari import Atari
+            from her_dream.envs.atari import Atari
 
             Atari("pong")
             ale.loadROM.assert_called_with("/custom/roms/pong.bin")
             rom_mock.assert_not_called()
 
     def test_lock_reused_on_second_instance(self):
-        from envs import atari as atari_module
+        from her_dream.envs import atari as atari_module
 
         atari_module.Atari.LOCK = None
         env1, _ = _make_atari("pong")
@@ -135,14 +135,14 @@ class TestAtariInit:
             patch.object(atari_module.ale_py, "ALEInterface", return_value=ale2),
             patch.object(atari_module.roms, "get_rom_path", return_value="/fake/pong.bin"),
         ):
-            from envs.atari import Atari
+            from her_dream.envs.atari import Atari
 
             Atari("pong")
         assert atari_module.Atari.LOCK is first_lock
 
     def test_opencv_resize_imports_cv2(self):
 
-        from envs import atari as atari_module
+        from her_dream.envs import atari as atari_module
 
         atari_module.Atari.LOCK = None
         ale = _make_ale_mock()
@@ -156,7 +156,7 @@ class TestAtariInit:
             mp_ctx.return_value.Lock.return_value.__enter__ = MagicMock(return_value=None)
             mp_ctx.return_value.Lock.return_value.__exit__ = MagicMock(return_value=False)
             with patch.dict(sys.modules, {"cv2": mock_cv2}):
-                from envs.atari import Atari
+                from her_dream.envs.atari import Atari
 
                 env = Atari("pong", resize="opencv")
         assert env._resize_fn == "opencv"
@@ -258,7 +258,7 @@ class TestAtariObs:
         ale = _make_ale_mock(screen_h=16, screen_w=16)
         mock_cv2 = MagicMock()
         mock_cv2.resize.return_value = np.zeros((8, 8, 3), dtype=np.uint8)
-        from envs import atari as atari_module
+        from her_dream.envs import atari as atari_module
 
         atari_module.Atari.LOCK = None
         with (
@@ -270,7 +270,7 @@ class TestAtariObs:
             mp_ctx.return_value.Lock.return_value.__enter__ = MagicMock(return_value=None)
             mp_ctx.return_value.Lock.return_value.__exit__ = MagicMock(return_value=False)
             with patch.dict(sys.modules, {"cv2": mock_cv2}):
-                from envs.atari import Atari
+                from her_dream.envs.atari import Atari
 
                 env = Atari("pong", size=(8, 8), resize="opencv", gray=False, pooling=2)
         env._cv2 = mock_cv2

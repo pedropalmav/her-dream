@@ -19,6 +19,7 @@ from dash import html
 from gymnasium.utils import seeding
 from omegaconf import OmegaConf
 
+import goals
 from dreamer import Dreamer
 from envs import make_env, make_envs
 from rewards import make_reward
@@ -397,9 +398,7 @@ class TrajectoryBuilder:
 
     def save(self, out_root, name: str | None = None, names: dict | None = None, fps: float = 2.0):
         """Guarda la trayectoria acumulada (sin re-ejecutar nada)."""
-        return save_trajectory(
-            self.raw, self.actions, out_root, seed=self.seed, name=name, names=names, fps=fps
-        )
+        return save_trajectory(self.raw, self.actions, out_root, seed=self.seed, name=name, names=names, fps=fps)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -497,7 +496,11 @@ def regenerate_gif(traj_dir, fps: float | None = None):
     traj_dir = pathlib.Path(traj_dir)
     arr = np.load(traj_dir / "arrays.npz")
     meta_path = traj_dir / "metadata.json"
-    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+    else:
+        meta = {}
 
     # Nombres de acción: claves a int cuando se pueda; -1 marca el reset (t=0).
     names: dict = {}
@@ -794,6 +797,11 @@ def load_agent(logdir, device: str | None = None):
     for key, val in model_defaults.items():
         if key not in config.model:
             config.model[key] = val
+    # Goal-type descriptors were added later; backfill from the config group so the
+    # Dreamer constructor (make_goal_spec) does not fail on older checkpoints.
+    if "state_repr" not in config.model:
+        for key, val in goals.default_descriptors(config.model.goal_type).items():
+            config.model[key] = val
 
     reward_fn = make_reward(config) if "goal_type" in config else None
     _, _, obs_space, act_space = make_envs(config.env)
@@ -814,9 +822,7 @@ def load_agent(logdir, device: str | None = None):
     loadable = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
     agent.load_state_dict(loadable, strict=False)
 
-    wm_missing = [
-        k for k in own if (k.startswith("encoder.") or k.startswith("rssm.")) and k not in loadable
-    ]
+    wm_missing = [k for k in own if (k.startswith("encoder.") or k.startswith("rssm.")) and k not in loadable]
     if wm_missing:
         print(f"[warn] {len(wm_missing)} claves del world model NO se cargaron, p.ej. {wm_missing[:3]}")
     agent.eval()

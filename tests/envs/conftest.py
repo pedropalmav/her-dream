@@ -12,6 +12,7 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
+import goals
 from envs.fixed_goal import make_fixed_goal_env
 from envs.goal_image import GoalImageGenerator
 
@@ -39,7 +40,10 @@ def make_goal_config(**overrides):
         stochastic_rows=N_ROWS,
         goal_type="first_row",
     )
-    return DictNamespace(**{**defaults, **overrides})
+    merged = {**defaults, **overrides}
+    for key, val in goals.default_descriptors(merged["goal_type"]).items():
+        merged.setdefault(key, val)
+    return DictNamespace(**merged)
 
 
 def make_discrete_env(n_actions=4, obs_keys=None):

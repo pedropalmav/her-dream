@@ -1,2 +1,6 @@
 # @package _global_
 goal_type: argmax_full
+state_repr: logit # stoch | dist | logit   (reward fn's state arg)
+goal_repr: argmax # sample | argmax | logit (the goal tensor)
+scope: full # first_row | full          (actor/critic goal input)
+uses_threshold: false

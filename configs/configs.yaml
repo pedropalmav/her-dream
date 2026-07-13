@@ -27,6 +27,9 @@ load_from: null
 
 env:
   goal_type: ${goal_type}
+  state_repr: ${state_repr}
+  goal_repr: ${goal_repr}
+  scope: ${scope}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
   goal_sample: buffer # buffer|text|random|imagination|image
@@ -34,6 +37,10 @@ env:
 
 model:
   goal_type: ${goal_type}
+  state_repr: ${state_repr}
+  goal_repr: ${goal_repr}
+  scope: ${scope}
+  uses_threshold: ${uses_threshold}
   mission_text: ${mission_text}
   wm_only: ${wm_only}
   freeze_wm: ${freeze_wm}
@@ -43,6 +50,9 @@ model:
 
 buffer:
   goal_type: ${goal_type}
+  state_repr: ${state_repr}
+  goal_repr: ${goal_repr}
+  scope: ${scope}
 
 # buffer:
 #   batch_size: ${batch_size}
@@ -70,5 +80,8 @@ trainer:
   action_repeat: ${env.action_repeat}
   goal_sample: ${env.goal_sample}
   goal_type: ${goal_type}
+  state_repr: ${state_repr}
+  goal_repr: ${goal_repr}
+  scope: ${scope}
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}

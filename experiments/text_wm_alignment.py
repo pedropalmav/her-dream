@@ -35,42 +35,34 @@ Uso:
 """
 
 import argparse
-import json
 import pathlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 
-from dreamer import Dreamer
-from envs import make_env, make_envs
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    dump_json,
+    entropy,
+    env_factory,
+    experiment_outdir,
+    load_agent,
+    posterior_probs,
+    posterior_rollout,
+    random_policy,
+    save_fig,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Recolección de pares emparejados (misión, posterior WM)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _preprocess_obs(obs: dict, device: str) -> dict:
-    """Convierte el obs (dict de numpy) a tensores (1, ...). Igual criterio que
-    los otros experimentos: solo ndarrays (uint8 → /255) y bools."""
-    out = {}
-    for k, v in obs.items():
-        if isinstance(v, np.ndarray):
-            t = torch.as_tensor(v, dtype=torch.float32, device=device)
-            if v.dtype == np.uint8:
-                t = t / 255.0
-            out[k] = t.unsqueeze(0)
-        elif isinstance(v, (bool, np.bool_)):
-            out[k] = torch.tensor([[float(v)]], dtype=torch.float32, device=device)
-    return out
-
-
 @torch.no_grad()
 def collect_pairs(
-    agent: Dreamer,
+    agent,
     env_factory,
     n_trajectories: int,
     traj_len: int,
@@ -92,35 +84,13 @@ def collect_pairs(
 
     for n in range(n_trajectories):
         env = env_factory()
-        obs = env.reset()
-
-        stoch, deter = agent.rssm.initial(1)
-        n_actions = env.action_space.shape[0]
-        action = torch.zeros(1, n_actions, device=device)
-
-        for t in range(traj_len):
-            obs_t = _preprocess_obs(obs, device)
-            is_first = torch.tensor([t == 0], dtype=torch.bool, device=device)
-
-            embed = agent.encoder(obs_t)
-            stoch, deter, post_logit = agent.rssm.obs_step(stoch, deter, action, embed, is_first)
-
+        for step in posterior_rollout(agent, env, random_policy(np.random), device, traj_len - 1):
             # Emparejar misión ↔ posterior en el mismo paso.
-            if t % stride == 0 and "mission" in obs:
-                wm_logits.append(post_logit.squeeze(0))  # (S, K)
+            if step.t % stride == 0 and "mission" in step.obs:
+                wm_logits.append(step.logit.squeeze(0))  # (S, K)
                 mission_ids.append(
-                    torch.as_tensor(obs["mission"], device=device).long()  # (L,)
+                    torch.as_tensor(step.obs["mission"], device=device).long()  # (L,)
                 )
-
-            # Acción aleatoria one-hot (igual que la recolección de la destilación).
-            act_idx = np.random.randint(n_actions)
-            act_np = np.zeros(n_actions, dtype=np.float32)
-            act_np[act_idx] = 1.0
-            action = torch.as_tensor(act_np, device=device).unsqueeze(0)
-
-            obs, _, done, _ = env.step(act_np)
-            if done:
-                break
 
         if (n + 1) % 20 == 0:
             print(f"  Trayectoria {n + 1}/{n_trajectories}  (pares: {len(wm_logits)})")
@@ -143,19 +113,14 @@ def collect_pairs(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _probs(agent, logits: torch.Tensor) -> torch.Tensor:
-    """(N,S,K) logits → (N,S,K) probs, con el mismo unimix que usa el training."""
-    return agent.rssm.get_dist(logits).base_dist.probs
-
-
 def _kl(p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
     """KL(p || q) por slot. p, q: (N, S, K) → (N, S)."""
     return (p * ((p + 1e-8).log() - (q + 1e-8).log())).sum(-1)
 
 
 def compute_alignment(agent, wm_logits, text_logits) -> dict:
-    p_wm = _probs(agent, wm_logits)  # (N, S, K)
-    p_tx = _probs(agent, text_logits)  # (N, S, K)
+    p_wm = posterior_probs(agent, wm_logits)  # (N, S, K)
+    p_tx = posterior_probs(agent, text_logits)  # (N, S, K)
     N, S, K = p_wm.shape
 
     # ── KL / JS por slot ──────────────────────────────────────────────────────
@@ -174,8 +139,8 @@ def compute_alignment(agent, wm_logits, text_logits) -> dict:
 
     # ── Foco en slot 0 (el único que usa el reward) ──────────────────────────
     p_wm0, p_tx0 = p_wm[:, 0], p_tx[:, 0]  # (N, K)
-    H_wm0 = -(p_wm0 * (p_wm0 + 1e-8).log()).sum(-1)  # (N,)
-    H_tx0 = -(p_tx0 * (p_tx0 + 1e-8).log()).sum(-1)
+    H_wm0 = entropy(p_wm0)  # (N,)
+    H_tx0 = entropy(p_tx0)
     am_wm0, am_tx0 = am_wm[:, 0], am_tx[:, 0]
 
     # Cobertura de clases del slot 0: ¿el text apunta a clases que el WM realiza?
@@ -222,12 +187,6 @@ def compute_alignment(agent, wm_logits, text_logits) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot: {path}")
-
-
 def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     S, K = r["S"], r["K"]
 
@@ -243,7 +202,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Divergencia (nats)")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "align_divergence_per_slot.png")
+    save_fig(fig, outdir / "align_divergence_per_slot.png")
 
     # ── Acuerdo de argmax por slot + colisión ─────────────────────────────────
     fig, ax = plt.subplots(figsize=(max(12, S * 0.4), 5), constrained_layout=True)
@@ -256,7 +215,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     ax.set_ylabel("Fracción")
     ax.set_ylim(0, 1)
     ax.legend(fontsize=9)
-    _save(fig, outdir / "align_agreement_per_slot.png")
+    save_fig(fig, outdir / "align_agreement_per_slot.png")
 
     # ── Slot 0 — matriz de confusión ──────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
@@ -265,7 +224,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     ax.set_xlabel("clase text encoder")
     ax.set_ylabel("clase WM posterior")
     plt.colorbar(im, ax=ax, fraction=0.046, label="conteo")
-    _save(fig, outdir / "align_slot0_confusion.png")
+    save_fig(fig, outdir / "align_slot0_confusion.png")
 
     # ── Slot 0 — soporte de clases (¿el text apunta a clases que el WM realiza?)
     fig, ax = plt.subplots(figsize=(max(8, K * 0.4), 5), constrained_layout=True)
@@ -278,7 +237,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     ax.set_xlabel("clase k")
     ax.set_ylabel("conteo (argmax)")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "align_slot0_coverage.png")
+    save_fig(fig, outdir / "align_slot0_coverage.png")
 
     # ── Slot 0 — entropía WM vs text ──────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -289,7 +248,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
     ax.set_xlabel("Entropía (nats)")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "align_slot0_entropy.png")
+    save_fig(fig, outdir / "align_slot0_entropy.png")
 
     # ── Heatmaps de pares lado a lado (q_wm vs q_text) ────────────────────────
     n_show = min(n_show_pairs, r["p_wm"].shape[0])
@@ -305,7 +264,7 @@ def _plot_all(r: dict, n_show_pairs: int, outdir: Path):
             ax.set_xlabel("clase k")
             ax.set_ylabel("slot s")
             plt.colorbar(im, ax=ax, fraction=0.046)
-        _save(fig, outdir / f"align_pair_{idx}.png")
+        save_fig(fig, outdir / f"align_pair_{idx}.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,8 +362,7 @@ def run_alignment(
             "collision_per_slot": r["collision"].tolist(),
         },
     }
-    with open(outdir / "align_results.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "align_results.json")
 
     print(f"  Guardado en {outdir}")
     return results
@@ -415,11 +373,7 @@ def run_alignment(
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--logdir", required=True, help="Run con latest.pt y .hydra/config.yaml (ej: el checkpoint destilado)."
-    )
-    parser.add_argument("--device", default=None)
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--n_traj", type=int, default=200)
     parser.add_argument("--traj_len", type=int, default=50)
     parser.add_argument("--stride", type=int, default=5, help="Guardar 1 par cada `stride` pasos (decorrelaciona).")
@@ -428,42 +382,14 @@ if __name__ == "__main__":
 
     logdir = pathlib.Path(args.logdir)
 
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = args.device or config.device
-    config.device = device
-
-    # Backfill de claves añadidas después de este run.
-    if "wm_only" not in config.model:
-        OmegaConf.set_struct(config.model, False)
-        config.model.wm_only = False
-
-    if not config.mission_text:
-        raise ValueError("Este experimento requiere mission_text=True (el run debe tener TextEncoderGRU).")
-
-    reward_function = make_reward(config)
-    _, _, obs_space, act_space = make_envs(config.env)
-
-    agent = Dreamer(
-        config.model,
-        obs_space,
-        act_space,
-        reward_function=reward_function,
-    ).to(device)
-
-    checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint cargado: {logdir / 'latest.pt'}")
-
-    def env_factory():
-        return make_env(config.env, 0)
+    agent, config, _ = load_agent(logdir, args.device, require_mission_text=True)
 
     run_alignment(
         agent=agent,
-        env_factory=env_factory,
+        env_factory=env_factory(config),
         n_trajectories=args.n_traj,
         traj_len=args.traj_len,
         stride=args.stride,
         n_show_pairs=args.n_pairs,
-        outdir=logdir / "experiments" / "text_wm_align",
+        outdir=experiment_outdir(logdir, "text_wm_align"),
     )

@@ -1,16 +1,21 @@
 import argparse
-import json
 import pathlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 
-from dreamer import Dreamer
 from envs import make_envs
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    dump_json,
+    entropy,
+    experiment_outdir,
+    load_agent,
+    posterior_probs,
+    save_fig,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades compartidas
@@ -25,7 +30,7 @@ def get_logits_and_probs(agent, tokens: torch.Tensor):
       probs  : (N, S, K)   softmax de logits
     """
     logits = agent.text_encoder(tokens)[:, 0]  # (N, S, K)
-    probs = agent.rssm.get_dist(logits).base_dist.probs
+    probs = posterior_probs(agent, logits)
     return logits, probs
 
 
@@ -43,7 +48,7 @@ def encode_missions(env, n: int, device: str) -> torch.Tensor:
 
 @torch.no_grad()
 def exp_text_encoder_stochasticity(
-    agent: Dreamer,
+    agent,
     env,
     n_missions: int = 200,
     n_samples_per_mission: int = 50,
@@ -108,7 +113,7 @@ def exp_text_encoder_stochasticity(
     # ── Exp 3: entropía de los logits ────────────────────────────────────────
     # H^i_s = - sum_k p^i_sk * log(p^i_sk)
     print("Exp 3: entropía de logits …")
-    H_all_t = -(probs * (probs + 1e-8).log()).sum(-1)  # (N, S)
+    H_all_t = entropy(probs)  # (N, S)
     H_all = H_all_t.cpu().numpy()
     H_per_slot = H_all.mean(0)  # (S,)
     H_global = float(H_all.mean())
@@ -181,8 +186,7 @@ def exp_text_encoder_stochasticity(
             "pi_chance": pi_chance,
         },
     }
-    with open(outdir / "text_stoch_results.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "text_stoch_results.json")
 
     print(f"\n  Guardado en {outdir}")
     return results
@@ -191,12 +195,6 @@ def exp_text_encoder_stochasticity(
 # ─────────────────────────────────────────────────────────────────────────────
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot guardado: {path}")
 
 
 def _plot_all(
@@ -229,7 +227,7 @@ def _plot_all(
     ax.set_xlabel("Hamming por par")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "exp1_hist_inter_mission.png")
+    save_fig(fig, outdir / "exp1_hist_inter_mission.png")
 
     # ── Exp 2 — Distribución de D_intra^i ────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
@@ -240,7 +238,7 @@ def _plot_all(
     ax.set_xlabel("D_intra^i  (Hamming entre muestras de la misma misión)")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "exp2_hist_intra_mission.png")
+    save_fig(fig, outdir / "exp2_hist_intra_mission.png")
 
     # ── Exp 3 — Distribución H por slot (boxplot, agrandado) ─────────────────
     # Ancho proporcional a S para que se vea cada slot
@@ -257,7 +255,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Entropía (nats)")
     ax.legend(fontsize=10)
-    _save(fig, outdir / "exp3_box_H_per_slot.png")
+    save_fig(fig, outdir / "exp3_box_H_per_slot.png")
 
     # ── Exp 3 — H_s media por slot (barras) ──────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
@@ -268,7 +266,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_ylabel("H_s (nats)")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "exp3_bar_H_per_slot.png")
+    save_fig(fig, outdir / "exp3_bar_H_per_slot.png")
 
     # ── Exp 3 — Histograma global de H^i_s ───────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -279,7 +277,7 @@ def _plot_all(
     ax.set_xlabel("Entropía (nats)")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "exp3_hist_H_global.png")
+    save_fig(fig, outdir / "exp3_hist_H_global.png")
 
     # ── Exp 3 — Heatmap H^i_s (agrandado) ────────────────────────────────────
     # Ancho ∝ slots, alto ∝ misiones (con tope) para que se distinga celda a celda
@@ -291,7 +289,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Misión i")
     plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label="H (nats)")
-    _save(fig, outdir / "exp3_heatmap_H.png")
+    save_fig(fig, outdir / "exp3_heatmap_H.png")
 
     # ── Exp 4 — Distribución π^i_s ───────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -302,7 +300,7 @@ def _plot_all(
     ax.set_xlabel("max_k p^i_sk")
     ax.set_ylabel("Frecuencia")
     ax.legend(fontsize=9)
-    _save(fig, outdir / "exp4_hist_peak_prob.png")
+    save_fig(fig, outdir / "exp4_hist_peak_prob.png")
 
     # ── Exp 4 — Heatmap π^i_s ────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
@@ -311,7 +309,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Misión i")
     plt.colorbar(im, ax=ax, fraction=0.046, label="π^i_s")
-    _save(fig, outdir / "exp4_heatmap_peak_prob.png")
+    save_fig(fig, outdir / "exp4_heatmap_peak_prob.png")
 
     # ── Exp 5 — Heatmaps de probabilidad por misión ──────────────────────────
     n_show = prob_heatmaps.shape[0]
@@ -322,7 +320,7 @@ def _plot_all(
         ax.set_xlabel("Clase k")
         ax.set_ylabel("Slot s")
         plt.colorbar(im, ax=ax, fraction=0.046, label="p^i_sk")
-        _save(fig, outdir / f"exp5_prob_mission_{idx}.png")
+        save_fig(fig, outdir / f"exp5_prob_mission_{idx}.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -336,57 +334,32 @@ if __name__ == "__main__":
         --exp text \
         --device cpu
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True, help="Directorio del run (contiene latest.pt y .hydra/config.yaml)")
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--exp", default="text", choices=["text", "wm", "frozen", "alignment"])
-    parser.add_argument("--device", default=None)
     parser.add_argument("--n_missions", type=int, default=200)
     parser.add_argument("--n_samples", type=int, default=50)
     args = parser.parse_args()
 
     logdir = pathlib.Path(args.logdir)
 
-    # ── 1. Cargar config guardado por Hydra ───────────────────────────────────
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = args.device or config.device
-    config.device = device
+    # ── 1-3. Reconstruir agente desde el checkpoint ───────────────────────────
+    agent, config, _ = load_agent(logdir, args.device)
 
-    # Backfill defaults for keys added after this run was trained.
-    if "wm_only" not in config.model:
-        OmegaConf.set_struct(config.model, False)
-        config.model.wm_only = False
-
-    # ── 2. Reconstruir envs y agente ─────────────────────────────────────────
-    _, eval_envs, obs_space, act_space = make_envs(config.env)
-    reward_function = make_reward(config)
-
-    agent = Dreamer(
-        config.model,
-        obs_space,
-        act_space,
-        reward_function=reward_function,
-    ).to(config.device)
-
-    # ── 3. Cargar pesos del checkpoint ────────────────────────────────────────
-    checkpoint = torch.load(logdir / "latest.pt", map_location=config.device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint cargado desde {logdir / 'latest.pt'}")
-
-    # ── 4. Tomar un env individual de eval_envs ───────────────────────────────
+    # ── 4. Tomar un env individual de eval_envs (mismo muestreador de misiones
+    #       que en las otras visualizaciones: el proxy Parallel expone
+    #       encoded_random_mission con la convención de doble llamada). ─────────
+    _, eval_envs, _, _ = make_envs(config.env)
     env = eval_envs.envs[0]
     if not hasattr(env, "encoded_random_mission"):
         _fn = env.get_wrapper_attr("encoded_random_mission")
         env.encoded_random_mission = _fn
 
     # ── 5. Correr el experimento pedido ───────────────────────────────────────
-    outdir = logdir / "experiments"
-
     if args.exp == "text":
         exp_text_encoder_stochasticity(
             agent=agent,
             env=env,
             n_missions=args.n_missions,
             n_samples_per_mission=args.n_samples,
-            outdir=outdir / "text_stoch",
+            outdir=experiment_outdir(logdir, "text_stoch"),
         )

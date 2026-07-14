@@ -1,16 +1,25 @@
 import argparse
-import json
 import pathlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    dump_json,
+    entropy,
+    env_factory,
+    experiment_outdir,
+    load_agent,
+    pairwise_hamming,
+    posterior_probs,
+    posterior_rollout,
+    random_policy,
+    save_fig,
+    upper_triangular_mean,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Recolección de estados finales de trayectorias
@@ -19,7 +28,7 @@ from rewards import make_reward
 
 @torch.no_grad()
 def collect_final_states(
-    agent: Dreamer,
+    agent,
     env_factory,
     n_trajectories: int,
     traj_len: int,
@@ -40,42 +49,13 @@ def collect_final_states(
 
     for n in range(n_trajectories):
         env = env_factory()
-        obs = env.reset()
-
-        # Estado inicial del RSSM
-        stoch, deter = agent.rssm.initial(1)
-
-        act_space = env.action_space
-        n_actions = act_space.shape[0]
-        action = torch.zeros(1, n_actions, device=device)
-
-        logit = None
-        for t in range(traj_len):
-            obs_t = _preprocess_obs(obs, device)
-            is_first = torch.tensor([t == 0], dtype=torch.bool, device=device)
-
-            embed = agent.encoder(obs_t)  # (1, E)
-            stoch, deter, logit = agent.rssm.obs_step(
-                stoch,
-                deter,
-                action,
-                embed,
-                is_first,
-            )  # (1,S,K),(1,D),(1,S,K)
-
-            # Acción aleatoria one-hot
-            act_idx = np.random.randint(n_actions)
-            act_np = np.zeros(n_actions, dtype=np.float32)
-            act_np[act_idx] = 1.0
-            action = torch.as_tensor(act_np, device=device).unsqueeze(0)
-
-            obs, _, done, _ = env.step(act_np)
-            if done:
-                break
+        last = None
+        for step in posterior_rollout(agent, env, random_policy(np.random), device, traj_len - 1):
+            last = step
 
         # Guardar solo el último estado
-        last_logits.append(logit.squeeze(0))  # (S, K)
-        last_zs.append(stoch.squeeze(0))  # (S, K)
+        last_logits.append(last.logit.squeeze(0))  # (S, K)
+        last_zs.append(last.stoch.squeeze(0))  # (S, K)
 
         if (n + 1) % 10 == 0:
             print(f"  Trayectoria {n + 1}/{n_trajectories}")
@@ -83,23 +63,6 @@ def collect_final_states(
     logits = torch.stack(last_logits, dim=0)  # (N, S, K)
     zs = torch.stack(last_zs, dim=0)  # (N, S, K)
     return {"logits": logits, "zs": zs}
-
-
-def _preprocess_obs(obs: dict, device: str) -> dict:
-    """
-    Convierte el obs del env (dict de numpy) a tensores (1, ...) en `device`.
-    Solo incluye las claves que el encoder espera.
-    """
-    out = {}
-    for k, v in obs.items():
-        if isinstance(v, np.ndarray):
-            t = torch.as_tensor(v, dtype=torch.float32, device=device)
-            if v.dtype == np.uint8:
-                t = t / 255.0
-            out[k] = t.unsqueeze(0)  # (1, ...)
-        elif isinstance(v, (bool, np.bool_)):
-            out[k] = torch.tensor([[float(v)]], dtype=torch.float32, device=device)
-    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,14 +78,11 @@ def exp1_inter_traj_diversity(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
-    N = logits.shape[0]
-    probs = agent.rssm.get_dist(logits).base_dist.probs  # (N, S, K)
+    probs = posterior_probs(agent, logits)  # (N, S, K)
     modes = probs.argmax(-1)  # (N, S)
 
-    diff = (modes.unsqueeze(0) != modes.unsqueeze(1)).float()  # (N, N, S)
-    ham = diff.mean(-1)  # (N, N)
-    mask = torch.triu(torch.ones(N, N, device=logits.device), diagonal=1).bool()
-    D_inter = ham[mask].mean().item()
+    ham = pairwise_hamming(modes)  # (N, N)
+    D_inter = upper_triangular_mean(ham)
 
     return {
         "D_inter": float(D_inter),
@@ -146,18 +106,13 @@ def exp2_intra_state_variance(
     M      : muestras por estado
     """
     N = logits.shape[0]
-    device = logits.device
-
-    mask = torch.triu(torch.ones(M, M, device=device), diagonal=1).bool()
     D_intra_per_state = np.zeros(N)
 
     for i in range(N):
         l_i = logits[i].unsqueeze(0).expand(M, -1, -1)  # (M, S, K)
         samples = agent.rssm.get_dist(l_i).rsample()  # (M, S, K)
         classes = samples.argmax(-1)  # (M, S)
-        diff = (classes.unsqueeze(0) != classes.unsqueeze(1)).float()
-        ham = diff.mean(-1)  # (M, M)
-        D_intra_per_state[i] = ham[mask].mean().item()
+        D_intra_per_state[i] = upper_triangular_mean(pairwise_hamming(classes))
 
     return {
         "D_intra": float(D_intra_per_state.mean()),
@@ -173,8 +128,8 @@ def exp3_posterior_entropy(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
-    probs = agent.rssm.get_dist(logits).base_dist.probs
-    H = -(probs * (probs + 1e-8).log()).sum(-1)  # (N, S)
+    probs = posterior_probs(agent, logits)
+    H = entropy(probs)  # (N, S)
     H_np = H.cpu().numpy()
     K = logits.shape[-1]
     H_max = float(np.log(K))
@@ -198,7 +153,7 @@ def exp4_peak_probability(agent, logits: torch.Tensor) -> dict:
     """
     logits : (N, S, K)
     """
-    probs = agent.rssm.get_dist(logits).base_dist.probs
+    probs = posterior_probs(agent, logits)
     pi = probs.max(-1).values.cpu().numpy()  # (N, S)
     K = logits.shape[-1]
 
@@ -217,7 +172,7 @@ def exp5_probability_heatmaps(agent, logits: torch.Tensor, n_show: int = 4) -> n
     logits : (N, S, K)
     Devuelve (n_show, S, K) con la distribución por trayectoria (con unimix del RSSM).
     """
-    probs = agent.rssm.get_dist(logits[:n_show]).base_dist.probs
+    probs = posterior_probs(agent, logits[:n_show])
     return probs.cpu().numpy()
 
 
@@ -305,8 +260,7 @@ def run_wm_stochasticity(
             "pi_chance": r4["pi_chance"],
         },
     }
-    with open(outdir / "wm_stoch_results.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "wm_stoch_results.json")
 
     print(f"\n  Guardado en {outdir}")
     return results
@@ -315,12 +269,6 @@ def run_wm_stochasticity(
 # ─────────────────────────────────────────────────────────────────────────────
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot: {path}")
 
 
 def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
@@ -336,7 +284,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Hamming por par")
     ax.set_ylabel("Frecuencia")
     ax.legend()
-    _save(fig, outdir / "exp1_hist_inter_traj.png")
+    save_fig(fig, outdir / "exp1_hist_inter_traj.png")
 
     # ── Exp 2 — Distribución D_intra por trayectoria ─────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
@@ -347,7 +295,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("D_intra^n")
     ax.set_ylabel("Frecuencia")
     ax.legend()
-    _save(fig, outdir / "exp2_hist_intra_state.png")
+    save_fig(fig, outdir / "exp2_hist_intra_state.png")
 
     # ── Exp 3 — Boxplot H por slot ───────────────────────────────────────────
     box_w = max(14, S * 0.45)
@@ -363,7 +311,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Entropía (nats)")
     ax.legend()
-    _save(fig, outdir / "exp3_box_H_per_slot.png")
+    save_fig(fig, outdir / "exp3_box_H_per_slot.png")
 
     # ── Exp 3 — H_s media por slot (barras) ──────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
@@ -374,7 +322,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Slot s")
     ax.set_ylabel("H_s (nats)")
     ax.legend()
-    _save(fig, outdir / "exp3_bar_H_per_slot.png")
+    save_fig(fig, outdir / "exp3_bar_H_per_slot.png")
 
     # ── Exp 3 — Histograma global de H^n_s ───────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -385,7 +333,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Entropía (nats)")
     ax.set_ylabel("Frecuencia")
     ax.legend()
-    _save(fig, outdir / "exp3_hist_H_global.png")
+    save_fig(fig, outdir / "exp3_hist_H_global.png")
 
     # ── Exp 3 — Heatmap H^n_s (trayectorias × slots) ─────────────────────────
     hm_w = max(12, S * 0.4)
@@ -396,7 +344,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Trayectoria n")
     plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label="H (nats)")
-    _save(fig, outdir / "exp3_heatmap_H.png")
+    save_fig(fig, outdir / "exp3_heatmap_H.png")
 
     # ── Exp 4 — Distribución de π^n_s ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -407,7 +355,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("max_k p^n_sk")
     ax.set_ylabel("Frecuencia")
     ax.legend()
-    _save(fig, outdir / "exp4_hist_peak_prob.png")
+    save_fig(fig, outdir / "exp4_hist_peak_prob.png")
 
     # ── Exp 4 — Heatmap π^n_s ────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
@@ -416,7 +364,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
     ax.set_xlabel("Slot s")
     ax.set_ylabel("Trayectoria n")
     plt.colorbar(im, ax=ax, fraction=0.046, label="π^n_s")
-    _save(fig, outdir / "exp4_heatmap_peak_prob.png")
+    save_fig(fig, outdir / "exp4_heatmap_peak_prob.png")
 
     # ── Exp 5 — Heatmaps de probabilidad por trayectoria ─────────────────────
     n_show = r5.shape[0]
@@ -427,7 +375,7 @@ def _plot_all(r1, r2, r3, r4, r5, S, N, outdir):
         ax.set_xlabel("Clase k")
         ax.set_ylabel("Slot s")
         plt.colorbar(im, ax=ax, fraction=0.046, label="p^n_sk")
-        _save(fig, outdir / f"exp5_prob_traj_{idx}.png")
+        save_fig(fig, outdir / f"exp5_prob_traj_{idx}.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,9 +391,7 @@ if __name__ == "__main__":
         --traj_len 50 \
         --n_samples 50
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True)
-    parser.add_argument("--device", default=None)
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--n_traj", type=int, default=200, help="Número de trayectorias aleatorias")
     parser.add_argument(
         "--traj_len", type=int, default=50, help="Pasos por trayectoria (solo se guarda el último estado)"
@@ -455,45 +401,15 @@ if __name__ == "__main__":
 
     logdir = pathlib.Path(args.logdir)
 
-    # ── Config ────────────────────────────────────────────────────────────────
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = args.device or config.device
-    config.device = device
-
-    # Backfill defaults for keys added after this run was trained.
-    if "wm_only" not in config.model:
-        OmegaConf.set_struct(config.model, False)
-        config.model.wm_only = False
-
     # ── Agente ───────────────────────────────────────────────────────────────
-    reward_function = make_reward(config)
-
-    from envs import make_envs
-
-    _, eval_envs, obs_space, act_space = make_envs(config.env)
-
-    agent = Dreamer(
-        config.model,
-        obs_space,
-        act_space,
-        reward_function=reward_function,
-    ).to(device)
-
-    checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint cargado: {logdir / 'latest.pt'}")
-
-    # ── Factory de env individual ─────────────────────────────────────────────
-    def env_factory():
-        return make_env(config.env, 0)
+    agent, config, _ = load_agent(logdir, args.device)
 
     # ── Correr ───────────────────────────────────────────────────────────────
     run_wm_stochasticity(
         agent=agent,
-        env_factory=env_factory,
+        env_factory=env_factory(config),
         n_trajectories=args.n_traj,
         traj_len=args.traj_len,
         n_samples_per_state=args.n_samples,
-        outdir=logdir / "experiments" / "wm_stoch",
+        outdir=experiment_outdir(logdir, "wm_stoch"),
     )

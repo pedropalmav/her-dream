@@ -10,7 +10,7 @@ a linear logistic regression on a one-hot is already a per-category lookup
 table — it should not be beaten by an MLP on the same input. This script figures
 out what is going on for a given (--concept, --row), by default (on_goal, 27).
 
-It reuses the exact dataset collection of experiments.z_probe (same seed ⇒ same
+It reuses the exact dataset collection of experiments.probing.z_probe (same seed ⇒ same
 states/split) and reports:
   1. Class balance of the concept (how many positives, in train/test).
   2. The row's category → concept relationship: P(concept | row argmax = k) and
@@ -24,13 +24,12 @@ states/split) and reports:
 
 Usage
 ─────
-uv run python -m experiments.z_probe_row_inspect \
+uv run python -m experiments.probing.z_probe_row_inspect \
     --logdir logdir/wm_only_fixed_goal_random_mission/01 \
     --device cuda --concept on_goal --row 27
 """
 
 import argparse
-import json
 import pathlib
 
 import matplotlib.pyplot as plt
@@ -39,7 +38,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from sklearn.model_selection import GroupShuffleSplit
 
-from experiments.z_probe import CONCEPTS, ProbeConfig, TorchMLPProbe, _load_agent, collect_dataset
+from experiments.common import add_common_args, dump_json, experiment_outdir, load_agent, save_fig
+
+from .z_probe import CONCEPTS, ProbeConfig, TorchMLPProbe, collect_dataset
 
 
 def _linear(balanced: bool):
@@ -47,22 +48,20 @@ def _linear(balanced: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True)
-    parser.add_argument("--device", default=None)
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--concept", default="on_goal", choices=list(CONCEPTS))
     parser.add_argument("--row", type=int, default=27)
     parser.add_argument("--episodes", type=int, default=120)
     parser.add_argument("--max-steps", type=int, default=150)
     parser.add_argument("--test-frac", type=float, default=0.25)
-    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     concept, s = args.concept, args.row
     kind = CONCEPTS[concept]
     logdir = pathlib.Path(args.logdir)
 
-    agent, env_cfg, device = _load_agent(logdir, args.device)
+    agent, config, env_cfg = load_agent(logdir, args.device)
+    device = config.device
     print(f"\nCollecting {args.episodes} episodes (≤{args.max_steps} steps, seed {args.seed})...")
     data = collect_dataset(agent, env_cfg, args.episodes, args.max_steps, device, args.seed)
     N, S, K = data["stoch"].shape
@@ -104,7 +103,7 @@ def main():
             print(f"  {name:16s} balanced acc = {ba:.3f}   confusion={cm}")
 
     # ── Plots ────────────────────────────────────────────────────────────────
-    outdir = logdir / "experiments" / "z_probe_mlp" / f"row_inspect_{concept}_r{s}"
+    outdir = experiment_outdir(logdir, "z_probe_mlp") / f"row_inspect_{concept}_r{s}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     # (a) per-category support + positive rate
@@ -118,8 +117,7 @@ def main():
     ax2.set_ylabel(f"P({concept}=1 | category)", color="firebrick")
     ax1.set_title(f"Row {s}: which category carries '{concept}'")
     fig.legend(loc="upper right", fontsize=8)
-    fig.savefig(outdir / "category_positive_rate.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    save_fig(fig, outdir / "category_positive_rate.png")
 
     # (b) spatial: modal category of row s per cell, and concept-positive cells
     size = int(max(pos.max(), goal.max())) + 2
@@ -141,8 +139,7 @@ def main():
     axes[1].plot(goal[0], goal[1], "g*", markersize=16)
     axes[1].set_title(f"P({concept}=1) per cell")
     plt.colorbar(im1, ax=axes[1], fraction=0.046)
-    fig.savefig(outdir / "spatial_modal_category.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    save_fig(fig, outdir / "spatial_modal_category.png")
 
     # (c) probe comparison
     if results_probes:
@@ -155,8 +152,7 @@ def main():
         ax.set_ylabel("balanced accuracy")
         ax.set_title(f"'{concept}' from row {s} only: does class-balancing close the gap?")
         ax.legend()
-        fig.savefig(outdir / "probe_comparison.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        save_fig(fig, outdir / "probe_comparison.png")
 
     out = {
         "concept": concept,
@@ -166,8 +162,7 @@ def main():
         "category_positive_rate": [None if np.isnan(v) else float(v) for v in cat_pos_rate],
         "probes": results_probes,
     }
-    with open(outdir / "row_inspect.json", "w") as f:
-        json.dump(out, f, indent=2)
+    dump_json(out, outdir / "row_inspect.json")
     print(f"\nSaved to {outdir}")
 
 

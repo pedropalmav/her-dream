@@ -53,24 +53,22 @@ Probe family (`--probe`)
 
 Usage
 ─────
-uv run python -m experiments.z_probe \
+uv run python -m experiments.probing.z_probe \
     --logdir logdir/wm_only_fixed_goal_random_mission/01 \
     --device cpu
 
-uv run python -m experiments.z_probe \
+uv run python -m experiments.probing.z_probe \
     --logdir logdir/wm_only_fixed_goal_random_mission/01 \
     --probe mlp --device cuda
 """
 
 import argparse
 import dataclasses
-import json
 import pathlib
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, mean_squared_error, r2_score
@@ -80,8 +78,18 @@ from sklearn.preprocessing import StandardScaler
 from torch import nn
 
 from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    agent_pose,
+    dump_json,
+    experiment_outdir,
+    goal_pos,
+    load_agent,
+    posterior_rollout,
+    random_policy,
+    save_fig,
+    unwrap_env,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Concepts. kind ∈ {"clf", "bin", "reg"}; describes the estimator + metric.
@@ -98,41 +106,6 @@ CONCEPTS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Obs preprocessing (same convention as the other experiments)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _preprocess_obs(obs: dict, device: str) -> dict:
-    """obs dict (numpy) → (1, ...) float tensors on device. uint8 images /255."""
-    out = {}
-    for k, v in obs.items():
-        if isinstance(v, np.ndarray):
-            t = torch.as_tensor(v, dtype=torch.float32, device=device)
-            if v.dtype == np.uint8:
-                t = t / 255.0
-            out[k] = t.unsqueeze(0)
-        elif isinstance(v, (bool, np.bool_)):
-            out[k] = torch.tensor([[float(v)]], dtype=torch.float32, device=device)
-    return out
-
-
-def _unwrap(env):
-    base = env
-    while hasattr(base, "env"):
-        base = base.env
-    return base
-
-
-def _goal_pos(base_env) -> np.ndarray:
-    raw = getattr(base_env, "_goal_pos", None)
-    if raw is None:
-        raw = getattr(base_env, "goal_pos", None)
-    if raw is None:
-        raise AttributeError(f"No goal_pos / _goal_pos on {type(base_env).__name__}")
-    return np.array(raw, dtype=np.int32)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Dataset collection: on-trajectory random rollouts, one row per visited state
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -144,55 +117,28 @@ def collect_dataset(agent: Dreamer, env_cfg, episodes: int, max_steps: int, devi
     state. On-trajectory (not a single-step sweep) so `deter` accumulates
     history and the stoch/deter/feat comparison is fair.
     """
+    from envs import make_env
+
     rng = np.random.RandomState(seed)
 
     stochs, deters, feats = [], [], []
     pos, dirs = [], []
     traj_ids = []
 
+    goal = None
     for ep in range(episodes):
         env = make_env(env_cfg, 0)
-        obs = env.reset()
-        base = _unwrap(env)
-        goal = _goal_pos(base)  # constant in fixed_goal
-        n_actions = env.action_space.shape[0]
-
-        stoch, deter = agent.rssm.initial(1)
-        prev_action = torch.zeros(1, n_actions, device=device)
-
-        def _record():
-            feat = agent.rssm.get_feat(stoch, deter)
-            stochs.append(stoch.squeeze(0).cpu().numpy())  # (S, K)
-            deters.append(deter.squeeze(0).cpu().numpy())  # (D,)
+        for step in posterior_rollout(agent, env, random_policy(rng), device, max_steps):
+            feat = agent.rssm.get_feat(step.stoch, step.deter)
+            stochs.append(step.stoch.squeeze(0).cpu().numpy())  # (S, K)
+            deters.append(step.deter.squeeze(0).cpu().numpy())  # (D,)
             feats.append(feat.squeeze(0).cpu().numpy())  # (S*K + D,)
-            b = _unwrap(env)
-            ax, ay = b.agent_pos
-            pos.append((int(ax), int(ay)))
-            dirs.append(int(b.agent_dir))
+            base = unwrap_env(env)
+            (ax, ay), adir = agent_pose(base)
+            pos.append((ax, ay))
+            dirs.append(adir)
             traj_ids.append(ep)
-
-        # t = 0: process the reset observation
-        obs_t = _preprocess_obs(obs, device)
-        is_first = torch.tensor([True], dtype=torch.bool, device=device)
-        embed = agent.encoder(obs_t)
-        stoch, deter, _ = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
-        _record()
-
-        for _ in range(max_steps):
-            act_idx = rng.randint(n_actions)
-            act_np = np.zeros(n_actions, dtype=np.float32)
-            act_np[act_idx] = 1.0
-            obs, _r, done, _info = env.step(act_np)
-
-            prev_action = torch.as_tensor(act_np, device=device).unsqueeze(0)
-            obs_t = _preprocess_obs(obs, device)
-            is_first = torch.tensor([False], dtype=torch.bool, device=device)
-            embed = agent.encoder(obs_t)
-            stoch, deter, _ = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
-            _record()
-
-            if done:
-                break
+        goal = goal_pos(unwrap_env(env))  # constant in fixed_goal
 
         if (ep + 1) % 20 == 0:
             print(f"  episode {ep + 1}/{episodes}  (states so far: {len(pos)})")
@@ -467,12 +413,6 @@ def run_probes(data: dict, test_frac: float, seed: int, top_k_max: int, pcfg: Pr
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot: {path}")
-
-
 def plot_all(data: dict, results: dict, outdir: pathlib.Path):
     concepts = [c for c in CONCEPTS if c not in results["skipped"]]
     S = results["S"]
@@ -497,7 +437,7 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
     ax.set_title(f"{probe_name} decodability of each concept from the WM latent")
     ax.axhline(0, color="k", lw=0.5)
     ax.legend(ncol=2, fontsize=8)
-    _save(fig, outdir / "accuracy_by_concept_and_representation.png")
+    save_fig(fig, outdir / "accuracy_by_concept_and_representation.png")
 
     # ── Per-row heatmap: concept × row ───────────────────────────────────────
     mat = np.array([results["per_row"][c] for c in concepts])  # (C, S)
@@ -509,7 +449,7 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
     ax.set_yticklabels(concepts)
     ax.set_title("Per-row probe score (which rows encode each concept)")
     plt.colorbar(im, ax=ax, fraction=0.025, label="score")
-    _save(fig, outdir / "per_row_probe_heatmap.png")
+    save_fig(fig, outdir / "per_row_probe_heatmap.png")
 
     # ── Top-k cumulative curves ──────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
@@ -520,7 +460,7 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
     ax.set_ylabel("score")
     ax.set_title("Cumulative decodability vs. number of stoch rows")
     ax.legend(fontsize=8, ncol=2)
-    _save(fig, outdir / "top_k_rows_curve.png")
+    save_fig(fig, outdir / "top_k_rows_curve.png")
 
     # ── Confusion matrices (stoch probe) for x, y, dir ───────────────────────
     conf = results.get("_confusion", {})
@@ -544,7 +484,7 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
             ax.set_yticks(range(len(classes)))
             ax.set_yticklabels(classes)
             plt.colorbar(im, ax=ax, fraction=0.046)
-        _save(fig, outdir / "confusion_xy_dir.png")
+        save_fig(fig, outdir / "confusion_xy_dir.png")
 
     # ── Cell-visitation coverage ─────────────────────────────────────────────
     pos, goal = data["pos"], data["goal"]
@@ -559,7 +499,7 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
     ax.set_title("State (cell) visitation under random policy")
     ax.legend()
     plt.colorbar(im, ax=ax, fraction=0.046, label="# visits")
-    _save(fig, outdir / "cell_visitation.png")
+    save_fig(fig, outdir / "cell_visitation.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -567,38 +507,8 @@ def plot_all(data: dict, results: dict, outdir: pathlib.Path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _load_agent(logdir: pathlib.Path, device: str | None):
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = device or config.device
-    config.device = device
-
-    # Backfill defaults for keys added after this run was trained.
-    OmegaConf.set_struct(config.model, False)
-    if "wm_only" not in config.model:
-        config.model.wm_only = False
-    if "goal_imag_horizon" not in config.model:
-        config.model.goal_imag_horizon = int(config.model.imag_horizon)
-
-    resolved = OmegaConf.to_container(config, resolve=True)
-    resolved["env"]["device"] = device
-    env_cfg = OmegaConf.create(resolved["env"])
-
-    probe_env = make_env(env_cfg, 0)
-    obs_space, act_space = probe_env.observation_space, probe_env.action_space
-
-    reward_function = make_reward(config)
-    agent = Dreamer(config.model, obs_space, act_space, reward_function=reward_function).to(device)
-    checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint loaded: {logdir / 'latest.pt'}  (env: {env_cfg.task}, device: {device})")
-    return agent, env_cfg, device
-
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True, help="Run with .hydra/config.yaml and latest.pt")
-    parser.add_argument("--device", default=None)
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--episodes", type=int, default=200, help="Random-policy episodes to collect")
     parser.add_argument("--max-steps", type=int, default=200, help="Max steps per collected episode")
     parser.add_argument("--test-frac", type=float, default=0.25, help="Fraction of trajectories held out")
@@ -608,14 +518,14 @@ def main():
     parser.add_argument("--mlp-epochs", type=int, default=300, help="MLP training epochs (full-batch Adam)")
     parser.add_argument("--mlp-lr", type=float, default=1e-3)
     parser.add_argument("--mlp-wd", type=float, default=1e-4, help="MLP weight decay")
-    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     logdir = pathlib.Path(args.logdir)
 
-    agent, env_cfg, device = _load_agent(logdir, args.device)
+    agent, config, env_cfg = load_agent(logdir, args.device)
+    device = config.device
 
     pcfg = ProbeConfig(
         type=args.probe,
@@ -638,8 +548,7 @@ def main():
 
     # Separate folder per probe family so results never overwrite each other.
     outname = "z_probe" if pcfg.type == "linear" else "z_probe_mlp"
-    outdir = logdir / "experiments" / outname
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir = experiment_outdir(logdir, outname)
     plot_all(data, results, outdir)
 
     results.pop("_confusion", None)  # predictions are large; keep the JSON lean
@@ -655,8 +564,7 @@ def main():
         "seed": args.seed,
         "goal": data["goal"].tolist(),
     }
-    with open(outdir / "z_probe.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "z_probe.json")
     print(f"\nSaved results to {outdir}")
 
 

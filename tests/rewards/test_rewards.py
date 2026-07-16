@@ -11,6 +11,7 @@ from rewards import (
     full_goal_reward,
     log_prob_reward,
     make_reward,
+    max_cosine_reward,
     prob_reward,
     row_by_row_reward,
 )
@@ -50,6 +51,10 @@ class TestMakeReward:
     def test_prob_type(self):
         config = SimpleNamespace(goal_type="prob")
         assert make_reward(config) is prob_reward
+
+    def test_max_cosine_type(self):
+        config = SimpleNamespace(goal_type="max_cosine")
+        assert make_reward(config) is max_cosine_reward
 
     def test_invalid_type_raises(self):
         config = SimpleNamespace(goal_type="unknown")
@@ -328,3 +333,64 @@ class TestArgmaxFullReward:
         logit = torch.zeros(B, T, S, K)
         goal = F.one_hot(torch.zeros(B, S, dtype=torch.long), K).float()
         assert argmax_full_reward(logit, goal).shape == (B, T, 1)
+
+
+class TestMaxCosineReward:
+    def test_3d_output_shape(self):
+        state = torch.randn(B, S, K)
+        goal = torch.randn(S, K)
+        assert max_cosine_reward(state, goal).shape == (B, 1)
+
+    def test_4d_output_shape(self):
+        state = torch.randn(B, T, S, K)
+        goal = torch.randn(B, S, K)
+        assert max_cosine_reward(state, goal).shape == (B, T, 1)
+
+    def test_3d_identical_gives_one(self):
+        state = torch.randn(B, S, K)
+        # goal per batch element equal to the state -> reward 1.0
+        result = max_cosine_reward(state, state)
+        assert torch.allclose(result, torch.ones(B, 1), atol=1e-5)
+
+    def test_4d_identical_gives_one(self):
+        goal = torch.randn(B, S, K)
+        # state constant over time and equal to the goal -> reward 1.0
+        state = goal.unsqueeze(1).expand(B, T, S, K).contiguous()
+        result = max_cosine_reward(state, goal)
+        assert torch.allclose(result, torch.ones(B, T, 1), atol=1e-5)
+
+    def test_3d_orthogonal_gives_zero(self):
+        # Disjoint one-hot cells -> dot product is 0.
+        state = F.one_hot(torch.zeros(B, S, dtype=torch.long), K).float()
+        goal = F.one_hot(torch.ones(S, dtype=torch.long), K).float()
+        result = max_cosine_reward(state, goal)
+        assert torch.allclose(result, torch.zeros(B, 1), atol=1e-6)
+
+    def test_3d_matches_closed_form(self):
+        state = torch.randn(B, S, K)
+        goal = torch.randn(B, S, K)
+        result = max_cosine_reward(state, goal)
+        s = state.flatten(1)
+        g = goal.flatten(1)
+        dot = (s * g).sum(-1, keepdim=True)
+        m = torch.maximum(s.norm(dim=-1, keepdim=True), g.norm(dim=-1, keepdim=True))
+        expected = dot / m.pow(2)
+        assert torch.allclose(result, expected, atol=1e-6)
+
+    def test_shared_goal_3d(self):
+        # goal (S, K) broadcasts across the batch like the other rewards.
+        state = torch.randn(B, S, K)
+        goal = torch.randn(S, K)
+        result = max_cosine_reward(state, goal)
+        s = state.flatten(1)
+        g = goal.reshape(-1)
+        dot = (s * g).sum(-1, keepdim=True)
+        m = torch.maximum(s.norm(dim=-1, keepdim=True), g.norm())
+        expected = dot / m.pow(2)
+        assert torch.allclose(result, expected, atol=1e-6)
+
+    def test_invalid_dim_raises(self):
+        state = torch.zeros(B, K)
+        goal = torch.zeros(K)
+        with pytest.raises(ValueError):
+            max_cosine_reward(state, goal)

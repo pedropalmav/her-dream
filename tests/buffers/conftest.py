@@ -5,6 +5,8 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+import goals
+
 S, K, D, A = 8, 8, 16, 3
 
 
@@ -25,7 +27,10 @@ def make_her_config(**overrides):
         her_strategy="future",
         n_envs=2,
     )
-    return SimpleNamespace(**{**defaults, **overrides})
+    merged = {**defaults, **overrides}
+    for key, val in goals.default_descriptors(merged["goal_type"]).items():
+        merged.setdefault(key, val)
+    return SimpleNamespace(**merged)
 
 
 def make_transition(n_envs=2):

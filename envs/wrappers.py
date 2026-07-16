@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+import goals
 import tools
 from envs.goal_image import GoalImageGenerator
 
@@ -145,10 +146,19 @@ class GoalConditioned(gym.Wrapper):
         self.stochastic_classes = config.stochastic_classes
         self.stochastic_rows = config.stochastic_rows
         self.goal_type = config.goal_type
+        self._goal_spec = goals.make_goal_spec(config)
 
-        if self.goal_type == "first_row":
+        if self._goal_spec.scope == "first_row":
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(self.stochastic_classes)
             self.goal_index = config.get("goal_index", None)
+        elif self._goal_spec.goal_repr == "logit":
+            # Real-valued logit goals need a float Box (MultiBinary would truncate).
+            self.observation_space.spaces["goal"] = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(self.stochastic_rows, self.stochastic_classes),
+                dtype=np.float32,
+            )
         else:
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary((
                 self.stochastic_rows,
@@ -163,12 +173,15 @@ class GoalConditioned(gym.Wrapper):
 
     # TODO: Evolve this method
     def _generate_goal(self):
-        if self.goal_type == "first_row":
+        if self._goal_spec.scope == "first_row":
             if self.goal_index is not None:
                 goal = np.zeros(self.stochastic_classes, dtype=np.float32)
                 goal[self.goal_index] = 1.0
             else:
                 goal = self._generate_row()
+        elif self._goal_spec.goal_repr == "logit":
+            # Real-valued logits resembling the RSSM's obs_step/img_step output.
+            goal = np.random.randn(self.stochastic_rows, self.stochastic_classes).astype(np.float32)
         else:
             goal = np.zeros((self.stochastic_rows, self.stochastic_classes), dtype=np.float32)
             for i in range(self.stochastic_rows):

@@ -5,6 +5,7 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
+import goals
 from tests.envs.conftest import DictNamespace
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,10 @@ def make_config(task="random-goal_default", **overrides):
         eval_episode_num=1,
         device="cpu",
     )
-    return DictNamespace(**{**defaults, **overrides})
+    merged = {**defaults, **overrides}
+    for key, val in goals.default_descriptors(merged["goal_type"]).items():
+        merged.setdefault(key, val)
+    return DictNamespace(**merged)
 
 
 _SPACES = {
@@ -201,9 +205,7 @@ class TestMakeEnvSuites:
         with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
             from envs import make_env
 
-            config = make_config(
-                task="random-goal_default", mission_text=False, agent_start_random=True
-            )
+            config = make_config(task="random-goal_default", mission_text=False, agent_start_random=True)
             make_env(config, 0)
 
         assert mock_make.call_args.kwargs["agent_start_pos"] is None

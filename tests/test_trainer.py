@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
+import goals
 from buffers.her_buffer import HERBuffer
 from trainer import OnlineTrainer
 
@@ -76,6 +77,9 @@ def make_config(**overrides):
         train_text_only=False,
     )
     defaults.update(overrides)
+    # Fill goal-type descriptors from the config group unless explicitly overridden.
+    for key, val in goals.default_descriptors(defaults["goal_type"]).items():
+        defaults.setdefault(key, val)
     return SimpleNamespace(**defaults)
 
 
@@ -235,14 +239,15 @@ class TestApplyReward:
         t._apply_reward(trans, rssm)
         rssm.get_dist.assert_called_once()
 
-    def test_other_goal_type_uses_logit_if_present(self):
+    def test_logit_goal_type_uses_logit(self):
         captured = {}
 
         def reward_fn(state, goal):
             captured["state"] = state
             return torch.zeros(B, 1)
 
-        t = make_trainer(make_config(goal_type="full"), reward=reward_fn)
+        # argmax_full has state_repr="logit": the reward compares against the raw logit.
+        t = make_trainer(make_config(goal_type="argmax_full"), reward=reward_fn)
         trans = make_trans()
         logit = torch.ones(B, S, K) * 7.0
         trans["logit"] = logit

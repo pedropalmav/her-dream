@@ -16,6 +16,7 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+import goals
 from dreamer import Dreamer
 from rssm import RSSM
 
@@ -63,6 +64,9 @@ class StubDreamer:
         self._frozen_rssm = rssm
         self.goal_imag_horizon = goal_imag_horizon
         self.goal_type = goal_type
+        self._goal_spec = goals.make_goal_spec(
+            SimpleNamespace(goal_type=goal_type, **goals.default_descriptors(goal_type))
+        )
         self.act_dim = act_dim
         self.device = torch.device(device)
         self._embed_size = embed_size

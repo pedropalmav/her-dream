@@ -12,7 +12,7 @@ from .io import dump_json, experiment_outdir, save_fig
 from .loading import env_factory, load_agent
 from .metrics import entropy, pairwise_hamming, posterior_probs, sym_kl, upper_triangular_mean
 from .obs import onehot_action, preprocess_obs, stack_obs
-from .rollout import Step, posterior_rollout, random_policy, scripted_policy
+from .rollout import Step, actor_policy, posterior_rollout, random_policy, scripted_policy
 
 __all__ = [
     "add_common_args",
@@ -33,6 +33,7 @@ __all__ = [
     "preprocess_obs",
     "stack_obs",
     "Step",
+    "actor_policy",
     "posterior_rollout",
     "random_policy",
     "scripted_policy",

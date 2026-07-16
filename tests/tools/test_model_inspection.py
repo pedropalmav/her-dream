@@ -3,7 +3,7 @@ import io
 
 import torch.nn as nn
 
-from tools.model_inspection import build_module_tree, print_module_tree, print_param_stats
+from her_dream.tools.model_inspection import build_module_tree, print_module_tree, print_param_stats
 
 
 def _capture(fn, *args, **kwargs):

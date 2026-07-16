@@ -1,18 +1,15 @@
 import argparse
 import pathlib
-import sys
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
-sys.path.append(str(pathlib.Path(__file__).parent))
-
-from dreamer import Dreamer
-from envs import make_envs
-from envs.random_goal import RandomGoal
-from envs.wrappers import encode_mission
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_envs
+from her_dream.envs.random_goal import RandomGoal
+from her_dream.envs.wrappers import encode_mission
 from train import reward_function
 
 

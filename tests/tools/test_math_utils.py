@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from tools.math_utils import compute_global_norm, compute_rms
+from her_dream.tools.math_utils import compute_global_norm, compute_rms
 
 
 class TestComputeRms:

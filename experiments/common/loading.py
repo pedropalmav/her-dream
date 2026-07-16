@@ -5,9 +5,9 @@ import pathlib
 import torch
 from omegaconf import OmegaConf
 
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_env
+from her_dream.rewards import make_reward
 
 
 def load_agent(

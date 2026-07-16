@@ -5,7 +5,7 @@ import torch.distributions as torchd
 from torch.nn import functional as F
 from torch.types import _size
 
-from tools import to_f32, to_i32
+from her_dream.tools import to_f32, to_i32
 
 from .functional import symexp, symlog
 

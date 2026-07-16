@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from rssm import RSSM
+from her_dream.rssm import RSSM
 
 B, T = 2, 3
 S, K = 8, 8  # stoch groups, categories per group → flat_stoch = 64

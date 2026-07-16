@@ -2,9 +2,9 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-import goals
-import tools
-from envs.goal_image import GoalImageGenerator
+import her_dream.goals as goals
+import her_dream.tools as tools
+from her_dream.envs.goal_image import GoalImageGenerator
 
 
 def get_wrapper(env, wrapper_type):

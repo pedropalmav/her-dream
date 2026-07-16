@@ -4,7 +4,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-import distributions as dists
+import her_dream.distributions as dists
 
 from .conv_decoder import ConvDecoder
 from .mlp_head import MLPHead

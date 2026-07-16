@@ -3,8 +3,8 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-import distributions as dists
-from tools import weight_init_
+import her_dream.distributions as dists
+from her_dream.tools import weight_init_
 
 from .mlp import MLP
 

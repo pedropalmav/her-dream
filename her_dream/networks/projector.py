@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from tools import weight_init_
+from her_dream.tools import weight_init_
 
 
 class Projector(nn.Module):

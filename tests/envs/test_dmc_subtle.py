@@ -5,7 +5,7 @@ import pytest
 # dmc_subtle uses top-level imports from dm_control + lxml.
 # dm_control is installed, so we import the module directly and patch
 # the specific Physics/Environment constructors to skip actual physics.
-import envs.dmc_subtle as subtle
+import her_dream.envs.dmc_subtle as subtle
 
 # ---------------------------------------------------------------------------
 # Minimal XML snippets for _modify_xml_element_size

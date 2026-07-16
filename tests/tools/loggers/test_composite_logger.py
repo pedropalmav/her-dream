@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.loggers.composite_logger import CompositeLogger
+from her_dream.tools.loggers.composite_logger import CompositeLogger
 
 
 class TestCompositeLoggerDelegation:
@@ -104,14 +104,14 @@ class TestCompositeLoggerComputeFps:
 
     def test_subsequent_call_returns_rate(self):
         cl = CompositeLogger([])
-        with patch("tools.loggers.composite_logger.time.time", side_effect=[0.0, 1.0]):
+        with patch("her_dream.tools.loggers.composite_logger.time.time", side_effect=[0.0, 1.0]):
             cl._compute_fps(0)
             fps = cl._compute_fps(10)
         assert fps == pytest.approx(10.0)
 
     def test_subsequent_call_updates_last_step(self):
         cl = CompositeLogger([])
-        with patch("tools.loggers.composite_logger.time.time", side_effect=[0.0, 1.0]):
+        with patch("her_dream.tools.loggers.composite_logger.time.time", side_effect=[0.0, 1.0]):
             cl._compute_fps(0)
             cl._compute_fps(10)
         assert cl._last_step == 10

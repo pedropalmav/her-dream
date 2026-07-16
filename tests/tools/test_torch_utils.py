@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from tools.torch_utils import rpad, to_f32, to_i32, to_np
+from her_dream.tools.torch_utils import rpad, to_f32, to_i32, to_np
 
 
 class TestToNp:

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from networks import BlockLinear
+from her_dream.networks import BlockLinear
 
 """
 This is the RNN defined in the _core method of the original Dreamer implementation.

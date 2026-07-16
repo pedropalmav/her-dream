@@ -1,7 +1,7 @@
 import torch
 
-import distributions as dists
-from networks.mlp import MLP
+import her_dream.distributions as dists
+from her_dream.networks.mlp import MLP
 
 from .conftest import B, T, make_mlp_config
 

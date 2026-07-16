@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from envs import make_envs
 from experiments.common import (
     add_common_args,
     dump_json,
@@ -16,6 +15,7 @@ from experiments.common import (
     posterior_probs,
     save_fig,
 )
+from her_dream.envs import make_envs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades compartidas

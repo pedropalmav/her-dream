@@ -9,14 +9,14 @@ from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
 
-import distributions as dists
-import goals
-import networks
-import rssm
-import tools
-from networks import Projector
-from optim import LaProp, clip_grad_agc_
-from tools import to_f32
+import her_dream.distributions as dists
+import her_dream.goals as goals
+import her_dream.networks as networks
+import her_dream.rssm as rssm
+import her_dream.tools as tools
+from her_dream.networks import Projector
+from her_dream.optim import LaProp, clip_grad_agc_
+from her_dream.tools import to_f32
 
 
 class Dreamer(nn.Module):

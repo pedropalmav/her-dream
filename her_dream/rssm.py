@@ -2,10 +2,10 @@ import torch
 from torch import distributions as torchd
 from torch import nn
 
-import distributions as dists
-from deter import Deter
-from networks import LambdaLayer
-from tools import rpad, weight_init_
+import her_dream.distributions as dists
+from her_dream.deter import Deter
+from her_dream.networks import LambdaLayer
+from her_dream.tools import rpad, weight_init_
 
 
 class RSSM(nn.Module):

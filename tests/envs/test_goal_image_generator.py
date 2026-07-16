@@ -11,8 +11,8 @@ the goal position, agent placement, and lazy reuse of the auxiliary env.
 import numpy as np
 import pytest
 
-from envs.fixed_goal import FixedGoal, make_fixed_goal_env
-from envs.wrappers import GoalImageObservation
+from her_dream.envs.fixed_goal import FixedGoal, make_fixed_goal_env
+from her_dream.envs.wrappers import GoalImageObservation
 from tests.envs.conftest import SIZE
 
 

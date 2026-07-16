@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from networks.block_linear import BlockLinear
+from her_dream.networks.block_linear import BlockLinear
 
 
 class TestBlockLinear:

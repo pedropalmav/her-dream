@@ -3,7 +3,7 @@ from enum import Enum
 import numpy as np
 from tensordict import TensorDict
 
-import goals
+import her_dream.goals as goals
 
 from .buffer import Buffer
 

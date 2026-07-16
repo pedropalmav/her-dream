@@ -9,13 +9,22 @@ A PyTorch implementation of **R2-Dreamer** (ICLR 2026) extended with goal-condit
 - A `TextEncoderGRU` that maps textual mission descriptions to RSSM-compatible `z` logits, trained via KL divergence against the posterior.
 - A family of goal-conditioned reward functions in `rewards.py`, selected by the top-level `goal_type` config.
 
+## Repository layout & installation
+
+The reusable library lives in an **installable package, `her_dream/`** (distribution name `her-dream`, defined in `pyproject.toml`). Install it editable with **`uv pip install -e .`**; this replaces the old `sys.path`/CWD-based imports, so `import her_dream` (and `from her_dream.dreamer import Dreamer`, `from her_dream.envs import make_envs`, …) works from any directory.
+
+- **Package** (`her_dream/`): the core modules `dreamer.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
+- **Repo-root scripts** (kept out of the package, but they `import her_dream`): `train.py`, `evaluate.py`, `eval_text_goal.py`, `export.py`, `visualization.py`, and the `experiments/`, `viz/`, `zflow/`, `scripts/`, `tests/` directories.
+- **Convention for this doc**: paths naming a library module (e.g. `dreamer.py`, `envs/wrappers.py`, `configs/goal_type/full.yaml`) are relative to `her_dream/` — i.e. `her_dream/dreamer.py`, `her_dream/configs/…`. Root-level things (`train.py`, `experiments/`, `scripts/`, `docs/`) are named as-is.
+- Because `configs/` now ships inside the package, the Hydra entry points (`train.py`, `evaluate.py`) resolve it via `pathlib.Path(her_dream.__file__).parent / "configs"` rather than a path relative to the script.
+
 ## Commands
 
 **Always run Python / project code through `uv`** (e.g. `uv run python3 train.py ...`, `uv run python3 -c "..."`), not bare `python3`. The commands below are written with bare `python3` for brevity but should be invoked via `uv run`.
 
 ```bash
-# Install dependencies (Python 3.11, Ubuntu 24.04)
-pip install -r requirements.txt
+# Install dependencies + the her_dream package, editable (Python 3.11, Ubuntu 24.04)
+uv pip install -e .
 
 # Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer)
 python3 train.py logdir=./logdir/test

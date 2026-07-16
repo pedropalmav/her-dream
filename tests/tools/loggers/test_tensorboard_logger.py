@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from tools.loggers.tensorboard_logger import TensorboardLogger
+from her_dream.tools.loggers.tensorboard_logger import TensorboardLogger
 
 
 class TestTensorboardLoggerBuffer:

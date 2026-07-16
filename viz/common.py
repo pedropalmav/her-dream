@@ -19,10 +19,10 @@ from dash import html
 from gymnasium.utils import seeding
 from omegaconf import OmegaConf
 
-import goals
-from dreamer import Dreamer
-from envs import make_env, make_envs
-from rewards import make_reward
+import her_dream.goals as goals
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_env, make_envs
+from her_dream.rewards import make_reward
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Acción constants
@@ -822,7 +822,7 @@ def load_agent(logdir, device: str | None = None):
     loadable = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
     agent.load_state_dict(loadable, strict=False)
 
-    wm_missing = [k for k in own if (k.startswith("encoder.") or k.startswith("rssm.")) and k not in loadable]
+    wm_missing = [k for k in own if (k.startswith("encoder.") or k.startswith("her_dream.rssm.")) and k not in loadable]
     if wm_missing:
         print(f"[warn] {len(wm_missing)} claves del world model NO se cargaron, p.ej. {wm_missing[:3]}")
     agent.eval()

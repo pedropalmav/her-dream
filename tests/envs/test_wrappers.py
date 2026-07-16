@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import torch
 
-from envs.wrappers import (
+from her_dream.envs.wrappers import (
     Dtype,
     GoalConditioned,
     MiniGridWrapper,

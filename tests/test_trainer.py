@@ -11,9 +11,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
-import goals
-from buffers.her_buffer import HERBuffer
-from trainer import OnlineTrainer
+import her_dream.goals as goals
+from her_dream.buffers.her_buffer import HERBuffer
+from her_dream.trainer import OnlineTrainer
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -765,8 +765,8 @@ class TestEval:
         envs.step.return_value = (make_trans(B, (S, K)), torch.ones(B, dtype=torch.bool))
 
         with (
-            patch("trainer.torch.stack", return_value=stacked),
-            patch("trainer.tools.to_np", return_value=np.zeros((1, 5, 3, 64, 64))),
+            patch("her_dream.trainer.torch.stack", return_value=stacked),
+            patch("her_dream.trainer.tools.to_np", return_value=np.zeros((1, 5, 3, 64, 64))),
         ):
             t.eval(agent, train_step=0)
 
@@ -786,8 +786,8 @@ class TestEval:
         envs.step.return_value = (make_trans(B, (S, K)), torch.ones(B, dtype=torch.bool))
 
         with (
-            patch("trainer.torch.stack", return_value=stacked),
-            patch("trainer.tools.to_np", return_value=np.zeros((1,))),
+            patch("her_dream.trainer.torch.stack", return_value=stacked),
+            patch("her_dream.trainer.tools.to_np", return_value=np.zeros((1,))),
         ):
             t.eval(agent, train_step=0)
 
@@ -902,8 +902,8 @@ class TestBegin:
             (trans_with_image, torch.ones(1, dtype=torch.bool)),
         ]
         with (
-            patch("trainer.torch.stack", return_value=torch.zeros(1, 3, 64, 64)),
-            patch("trainer.tools.to_np", return_value=np.zeros((1, 1, 3, 64, 64))),
+            patch("her_dream.trainer.torch.stack", return_value=torch.zeros(1, 3, 64, 64)),
+            patch("her_dream.trainer.tools.to_np", return_value=np.zeros((1, 1, 3, 64, 64))),
         ):
             t.begin(agent)
         logger.video.assert_called()
@@ -1058,7 +1058,7 @@ class TestBegin:
         agent = make_mock_agent()
         agent.update.return_value = {"loss": torch.tensor(0.0)}
         envs.step.side_effect = lambda act, d: (make_trans(1), torch.zeros(1, dtype=torch.bool))
-        with patch("trainer.tools.to_np", return_value=np.zeros((1,))):
+        with patch("her_dream.trainer.tools.to_np", return_value=np.zeros((1,))):
             t.begin(agent)
         agent.video_pred.assert_called()
 
@@ -1071,7 +1071,7 @@ class TestBegin:
         agent.update.return_value = {"loss": torch.tensor(0.0)}
         agent._named_params = {"w": torch.zeros(3)}
         envs.step.side_effect = lambda act, d: (make_trans(1), torch.zeros(1, dtype=torch.bool))
-        with patch("trainer.tools.to_np", return_value=np.zeros((3,))):
+        with patch("her_dream.trainer.tools.to_np", return_value=np.zeros((3,))):
             t.begin(agent)
         logger.histogram.assert_called()
 

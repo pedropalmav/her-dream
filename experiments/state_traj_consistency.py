@@ -236,7 +236,7 @@ def _kl_pairwise(agent, logits: torch.Tensor) -> torch.Tensor:
     logits: (N, S, K)
     Devuelve KL simétrica (N, N) promediada sobre slots S.
     """
-    import distributions as dists
+    import her_dream.distributions as dists
 
     N = logits.shape[0]
     out = torch.zeros(N, N)

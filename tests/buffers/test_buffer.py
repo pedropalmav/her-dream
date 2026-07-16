@@ -54,7 +54,7 @@ class TestMoveToDevice:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cpu_to_cuda_moves_data(self, buf_config):
-        from buffers.buffer import Buffer
+        from her_dream.buffers.buffer import Buffer
 
         config = make_buffer_config(device="cuda", storage_device="cpu")
         buf = Buffer(config)
@@ -73,23 +73,23 @@ class TestMakeBuffer:
         return SimpleNamespace(buffer=buffer_ns)
 
     def test_normal_type_returns_buffer(self):
-        from buffers import make_buffer
-        from buffers.buffer import Buffer
+        from her_dream.buffers import make_buffer
+        from her_dream.buffers.buffer import Buffer
 
         config = self._make_config("normal")
         buf = make_buffer(config, reward_function=None)
         assert isinstance(buf, Buffer)
 
     def test_her_type_returns_her_buffer(self):
-        from buffers import make_buffer
-        from buffers.her_buffer import HERBuffer
+        from her_dream.buffers import make_buffer
+        from her_dream.buffers.her_buffer import HERBuffer
 
         config = self._make_config("her")
         buf = make_buffer(config, reward_function=lambda a, d: torch.zeros(a.shape[0]))
         assert isinstance(buf, HERBuffer)
 
     def test_invalid_type_raises_value_error(self):
-        from buffers import make_buffer
+        from her_dream.buffers import make_buffer
 
         config = self._make_config("unknown")
         with pytest.raises(ValueError):

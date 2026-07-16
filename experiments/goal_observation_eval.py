@@ -91,7 +91,6 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from minigrid.core.constants import DIR_TO_VEC  # noqa: E402
 
-from envs import make_env  # noqa: E402
 from experiments.common import (  # noqa: E402
     actor_policy,
     add_common_args,
@@ -105,6 +104,8 @@ from experiments.common import (  # noqa: E402
     scripted_policy,
     unwrap_env,
 )
+from her_dream import goals  # noqa: E402
+from her_dream.envs import make_env  # noqa: E402
 
 # MiniGrid action indices (minigrid.core.actions.Actions).
 TURN_LEFT, TURN_RIGHT, FORWARD = 0, 1, 2
@@ -180,7 +181,12 @@ def _target_state(mode: str, base, rng):
 
 @torch.no_grad()
 def _goal_z(agent, env, target_pos, target_dir) -> torch.Tensor:
-    """Render the target state and encode it into a (1, S, K) one-hot goal z."""
+    """Render the target state and encode it into the (1, S, K) goal for this run.
+
+    `encode_observation` routes through `goals.goal_from_latent`, so the goal comes
+    back in whatever representation the run's goal_type asks for (a stoch sample,
+    an argmax one-hot, or the raw logit) — no branching needed here.
+    """
     # TimeLimit/Dtype wrap GoalImageObservation and gymnasium wrappers no longer
     # forward attribute access, so reach the method explicitly.
     render_goal = env.get_wrapper_attr("goal_observation")
@@ -192,14 +198,15 @@ def _goal_z(agent, env, target_pos, target_dir) -> torch.Tensor:
     return agent.encode_observation(batch)
 
 
-def _reward_of(agent, stoch, logit, goal) -> float:
-    """The run's own reward for this state/goal pair (`Dreamer._cal_grad` convention)."""
-    if agent.goal_type in ("log_prob", "prob"):
-        state = agent.rssm.get_dist(logit)
-    elif agent.goal_type == "argmax_full":
-        state = logit
-    else:
-        state = stoch
+def _reward_of(agent, spec, stoch, logit, goal) -> float:
+    """The run's own reward for this state/goal pair.
+
+    `goals.reward_state` picks the state argument the run's goal_type expects
+    (`stoch` / `logit` / `dist`), which is the same routing `Dreamer._cal_grad`
+    uses — so this stays correct for goal types added later (e.g. max_cosine,
+    which compares logits) without a branch here.
+    """
+    state = goals.reward_state(spec, stoch=stoch, logit=logit, rssm=agent.rssm)
     return float(agent.reward_function(state, goal).reshape(-1)[0])
 
 
@@ -211,7 +218,7 @@ def _groups_matched(z: torch.Tensor, goal: torch.Tensor) -> int:
 # --------------------------------------------------------------- the layers
 
 
-def _oracle(agent, env, seed, goal, target_pos, target_dir, plan, device):
+def _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device):
     """Layer 1: drive the BFS plan for real; measure the z at arrival vs the goal z."""
     last = None
     for step in posterior_rollout(agent, env, scripted_policy(plan), device, max_steps=len(plan), seed=seed):
@@ -229,13 +236,13 @@ def _oracle(agent, env, seed, goal, target_pos, target_dir, plan, device):
         "arrived": pose == (target_pos, target_dir),
         "groups": matched,
         "full": matched == S,
-        "reward": _reward_of(agent, last.stoch, last.logit, goal),
+        "reward": _reward_of(agent, spec, last.stoch, last.logit, goal),
         "floor_groups": _groups_matched(last.stoch, resample),
         "floor_full": _groups_matched(last.stoch, resample) == S,
     }
 
 
-def _drive(agent, env, seed, policy, target_pos, target_dir, goal, device, max_steps):
+def _drive(agent, spec, env, seed, policy, target_pos, target_dir, goal, device, max_steps):
     """Layers 2+3: run `policy` on the goal z, recording ground truth and z match."""
     base = unwrap_env(env)
     S = goal.shape[1]
@@ -254,7 +261,7 @@ def _drive(agent, env, seed, policy, target_pos, target_dir, goal, device, max_s
 
         matched = _groups_matched(step.stoch, goal)
         groups_seen.append(matched)
-        rewards.append(_reward_of(agent, step.stoch, step.logit, goal))
+        rewards.append(_reward_of(agent, spec, step.stoch, step.logit, goal))
         z_match = matched == S
         state_match = (pos, direction) == (target_pos, target_dir)
         conf["tp" if (z_match and state_match) else "fp" if z_match else "fn" if state_match else "tn"] += 1
@@ -271,7 +278,7 @@ def _drive(agent, env, seed, policy, target_pos, target_dir, goal, device, max_s
     }
 
 
-def run_episode(agent, env, mode, seed, rng, max_steps, device):
+def run_episode(agent, spec, env, mode, seed, rng, max_steps, device):
     """One episode: build the goal from a rendered state, then run all three layers."""
     # max_steps=0 yields only the reset state: it seeds and resets the env so the
     # layout can be read before any action is taken (the policy is never called).
@@ -290,9 +297,11 @@ def run_episode(agent, env, mode, seed, rng, max_steps, device):
         "spawn": [list(spawn_pos), spawn_dir],
         "target": [list(target_pos), target_dir],
         "green_square": [int(v) for v in goal_pos(base)],
-        "oracle": _oracle(agent, env, seed, goal, target_pos, target_dir, plan, device),
-        "policy": _drive(agent, env, seed, actor_policy(agent, goal), target_pos, target_dir, goal, device, max_steps),
-        "random": _drive(agent, env, seed, random_policy(rng), target_pos, target_dir, goal, device, max_steps),
+        "oracle": _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device),
+        "policy": _drive(
+            agent, spec, env, seed, actor_policy(agent, goal), target_pos, target_dir, goal, device, max_steps
+        ),
+        "random": _drive(agent, spec, env, seed, random_policy(rng), target_pos, target_dir, goal, device, max_steps),
     }
 
 
@@ -342,13 +351,16 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
     """Run every mode for one checkpoint."""
     agent, config, env_cfg = load_agent(logdir, device)
     env = make_env(env_cfg, 0)
+    # Same sub-config Dreamer builds its own spec from, so the eval routes states
+    # and goals exactly as the run did while training.
+    spec = goals.make_goal_spec(config.model)
     S = agent.rssm._stoch
     results = {}
     for mode in modes:
         rng = np.random.default_rng(seed)
         records = []
         for i in range(episodes):
-            record = run_episode(agent, env, mode, seed + i, rng, max_steps, device)
+            record = run_episode(agent, spec, env, mode, seed + i, rng, max_steps, device)
             if record is not None:
                 records.append(record)
         if not records:

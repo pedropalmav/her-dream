@@ -472,6 +472,20 @@ class _DummyEnv(gym.Env):
         return obs, 1.0, False, {}
 
 
+# `ParallelEnv.step` pins the CPU TensorDict it returns, to allow the caller an
+# async H2D copy. `pin_memory()` is CUDA-only: on a host without CUDA it buys
+# nothing, and on macOS torch routes the pinning to the MPS allocator, whose
+# storage then mismatches the CPU tensor ("Attempted to set the storage of a
+# tensor on device cpu to a storage on different device mps:0"). So the stepping
+# tests below can only run where CUDA exists. The production path is unaffected:
+# training always runs on a CUDA host. Only `step` is skipped — the rest of the
+# ParallelEnv surface still runs everywhere.
+requires_cuda_pinning = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="ParallelEnv.step pins memory, which requires CUDA (fails on macOS/MPS)",
+)
+
+
 class TestParallelEnv:
     @pytest.fixture(scope="class")
     def penv(self):
@@ -491,17 +505,20 @@ class TestParallelEnv:
         space = penv.action_space
         assert isinstance(space, gym.spaces.Discrete)
 
+    @requires_cuda_pinning
     def test_step_done_false_calls_step(self, penv):
         action = torch.zeros(1, 3)
         td, done = penv.step(action, [False])
         assert "obs" in td
         assert td["obs"].shape == (1, 2)
 
+    @requires_cuda_pinning
     def test_step_done_true_calls_reset(self, penv):
         action = torch.zeros(1, 3)
         td, done = penv.step(action, [True])
         assert "obs" in td
 
+    @requires_cuda_pinning
     def test_step_all_done_flags(self, penv):
         action = torch.zeros(1, 3)
         td, done = penv.step(action, [True])
@@ -521,6 +538,7 @@ class TestParallelEnv:
         result = penv.lift_dim(td)
         assert result["x"].shape == (1, 3)
 
+    @requires_cuda_pinning
     def test_reward_tensor_on_cpu(self, penv):
         action = torch.zeros(1, 3)
         td, done = penv.step(action, [False])

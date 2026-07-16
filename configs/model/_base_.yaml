@@ -64,6 +64,7 @@ rssm:
   discrete: ${model.discrete}
   img_layers: 2
   obs_layers: 1
+  obs_use_deter: True
   dyn_layers: 1
   blocks: 8
   act: ${model.act}

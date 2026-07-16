@@ -188,4 +188,14 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     env=random_goal seed=1 mission_text=False \
     env.goal_sample=imagination buffer=normal model.goal_imag_horizon=30 \
     env.steps=500000 trainer.update_log_every=1000
-``` 
+```
+
+22. **Posterior sin h (`model.rssm.obs_use_deter=False`) — WM only en random_goal.** Requiere la branch `feat/posterior-z-no-deter` checkouteada en el servidor. Pre-entrena el WM con el posterior condicionado SOLO en el embed de la observación (z puramente observacional; el prior y la transición determinista no cambian). Espejo del item 17 para comparar contra el WM con h; los post-trains de los items 18-20 sirven igual apuntando `load_from` a este logdir, pero OJO: `load_from` solo carga el state_dict (el modelo se construye con la config actual), así que hay que repetir `model.rssm.obs_use_deter=False` también en el post-train — si se omite, `load_state_dict` falla por mismatch de dimensiones en `_obs_net`:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/random_goal/wm_only_randomgoal_no_deter/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=random buffer=normal wm_only=True \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```

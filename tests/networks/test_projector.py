@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from networks.projector import Projector
+from her_dream.networks.projector import Projector
 
 from .conftest import B, T
 

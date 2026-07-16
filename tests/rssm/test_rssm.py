@@ -1,7 +1,7 @@
 import torch
 from torch import distributions as torchd
 
-from rssm import RSSM
+from her_dream.rssm import RSSM
 
 from .conftest import A, B, D, E, K, S, T, make_rssm_config
 

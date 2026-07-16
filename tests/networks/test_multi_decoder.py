@@ -1,7 +1,7 @@
 import pytest
 
-from distributions.distributions import MSEDist, SymlogDist
-from networks.multi_decoder import MultiDecoder
+from her_dream.distributions.distributions import MSEDist, SymlogDist
+from her_dream.networks.multi_decoder import MultiDecoder
 
 from .conftest import FLAT_STOCH, B, C, D, H, T, W, make_multi_decoder_config
 

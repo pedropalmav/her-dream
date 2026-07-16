@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import torch
 
-from envs.wrappers import (
+from her_dream.envs.wrappers import (
     Dtype,
     GoalConditioned,
     MiniGridWrapper,
@@ -342,7 +342,7 @@ class TestGoalConditioned:
         assert obs["goal"].sum() == 1.0
 
     def test_multi_row_goal_shape(self):
-        wrapped, _ = self._make(goal_type="multi_row")
+        wrapped, _ = self._make(goal_type="row_by_row")
         obs = wrapped.reset()
         assert obs["goal"].shape == (N_ROWS, N_CLASSES)
         for row in obs["goal"]:
@@ -367,7 +367,7 @@ class TestGoalConditioned:
         assert wrapped.observation_space.spaces["goal"].shape == (N_CLASSES,)
 
     def test_goal_type_multi_row_adds_2d_space(self):
-        wrapped, _ = self._make(goal_type="multi_row")
+        wrapped, _ = self._make(goal_type="row_by_row")
         assert wrapped.observation_space.spaces["goal"].shape == (N_ROWS, N_CLASSES)
 
 

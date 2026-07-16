@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from networks.block_linear import BlockLinear
-from networks.conv_decoder import ConvDecoder
+from her_dream.networks.block_linear import BlockLinear
+from her_dream.networks.conv_decoder import ConvDecoder
 
 from .conftest import FLAT_STOCH, B, D, K, S, T, make_cnn_dec_config
 

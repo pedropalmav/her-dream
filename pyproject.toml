@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "r2dreamer"
+name = "her-dream"
 version = "0.1.0"
-description = "Add your description here"
+description = "Goal-conditioned R2-Dreamer (HER buffer + Dreamer world model)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -58,8 +62,14 @@ filterwarnings = [
     "ignore:.*precision lowered.*:UserWarning:gymnasium",
 ]
 
+[tool.setuptools.packages.find]
+include = ["her_dream*"]
+
+[tool.setuptools.package-data]
+her_dream = ["configs/**/*.yaml"]
+
 [tool.coverage.run]
-source = ["envs", "tools"]
+source = ["her_dream"]
 
 [tool.coverage.report]
 exclude_lines = [

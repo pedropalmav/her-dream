@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from tools.training import Every, Once, enable_deterministic_run, set_seed_everywhere
+from her_dream.tools.training import Every, Once, enable_deterministic_run, set_seed_everywhere
 
 
 class TestEvery:
@@ -75,17 +75,17 @@ class TestOnce:
 
 class TestSetSeedEverywhere:
     def test_sets_torch_seed(self):
-        with patch("tools.training.torch.manual_seed") as m:
+        with patch("her_dream.tools.training.torch.manual_seed") as m:
             set_seed_everywhere(42)
         m.assert_called_once_with(42)
 
     def test_sets_numpy_seed(self):
-        with patch("tools.training.np.random.seed") as m:
+        with patch("her_dream.tools.training.np.random.seed") as m:
             set_seed_everywhere(42)
         m.assert_called_once_with(42)
 
     def test_sets_random_seed(self):
-        with patch("tools.training.random.seed") as m:
+        with patch("her_dream.tools.training.random.seed") as m:
             set_seed_everywhere(42)
         m.assert_called_once_with(42)
 
@@ -93,18 +93,18 @@ class TestSetSeedEverywhere:
         # Patch manual_seed too: torch.manual_seed internally calls manual_seed_all in PyTorch 2.x,
         # which would cause a double-call on the mock.
         with (
-            patch("tools.training.torch.manual_seed"),
-            patch("tools.training.torch.cuda.is_available", return_value=True),
-            patch("tools.training.torch.cuda.manual_seed_all") as m,
+            patch("her_dream.tools.training.torch.manual_seed"),
+            patch("her_dream.tools.training.torch.cuda.is_available", return_value=True),
+            patch("her_dream.tools.training.torch.cuda.manual_seed_all") as m,
         ):
             set_seed_everywhere(42)
         m.assert_called_once_with(42)
 
     def test_no_cuda_seed_when_unavailable(self):
         with (
-            patch("tools.training.torch.manual_seed"),
-            patch("tools.training.torch.cuda.is_available", return_value=False),
-            patch("tools.training.torch.cuda.manual_seed_all") as m,
+            patch("her_dream.tools.training.torch.manual_seed"),
+            patch("her_dream.tools.training.torch.cuda.is_available", return_value=False),
+            patch("her_dream.tools.training.torch.cuda.manual_seed_all") as m,
         ):
             set_seed_everywhere(42)
         m.assert_not_called()

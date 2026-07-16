@@ -23,25 +23,23 @@ Usage:
 
 import argparse
 import pathlib
-import sys
 import warnings
 
 import numpy as np
 import torch
 import uvicorn
+from clustering import ClusterStore, collect_random_states, compute_row_stats, run_clustering
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from omegaconf import OmegaConf
+from serve_utils import encode_image, make_trans
 from tensordict import TensorDict
 
-sys.path.append(str(pathlib.Path(__file__).parent.parent))  # repo root: tools, dreamer, envs, rewards
-from clustering import ClusterStore, collect_random_states, compute_row_stats, run_clustering
-from serve_utils import encode_image, make_trans
-
-import tools
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+import her_dream.goals as goals
+import her_dream.tools as tools
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_env
+from her_dream.rewards import make_reward
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision("high")
@@ -50,16 +48,15 @@ torch.set_float32_matmul_precision("high")
 def _reward_input(agent_state: TensorDict, agent):
     """Return the correct first argument for reward_function given the goal type.
 
-    log_prob / prob  → Independent(OneHotCategorical) distribution built from logits
-    argmax_full      → raw logit tensor
-    others           → sampled stoch tensor
+    Routes through the shared `goals.reward_state`: stoch sample / OneHotCategorical
+    distribution / raw logit, depending on the goal type's `state_repr`.
     """
-    goal_type = agent.goal_type
-    if goal_type in ("log_prob", "prob"):
-        return agent._frozen_rssm.get_dist(agent_state["logit"])
-    if goal_type == "argmax_full":
-        return agent_state["logit"]
-    return agent_state["stoch"]
+    return goals.reward_state(
+        agent._goal_spec,
+        stoch=agent_state["stoch"],
+        logit=agent_state.get("logit"),
+        rssm=agent._frozen_rssm,
+    )
 
 
 def _backfill_config(config, force_wm_only=False):
@@ -94,7 +91,12 @@ def _backfill_config(config, force_wm_only=False):
         # Deep-merge: preserves the model.goal_imag_horizon backfill above.
         updates = OmegaConf.merge(updates, {**top, "model": model_missing})
 
-    return (OmegaConf.merge(config, updates) if updates else config, wm_only)
+    config = OmegaConf.merge(config, updates) if updates else config
+
+    if "goal_type" in config.model and "state_repr" not in config.model:
+        # Goal-type descriptors were added later; load them from the config group.
+        config = OmegaConf.merge(config, {"model": goals.default_descriptors(config.model.goal_type)})
+    return config, wm_only
 
 
 # state_dict prefixes that make up the world model — identical in keys and

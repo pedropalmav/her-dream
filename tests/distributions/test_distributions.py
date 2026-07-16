@@ -2,8 +2,8 @@ import pytest
 import torch
 import torch.distributions as torchd
 
-from distributions.distributions import Bound, MSEDist, MultiOneHotDist, OneHotDist, SymlogDist, TwoHot
-from distributions.functional import symexp, symlog
+from her_dream.distributions.distributions import Bound, MSEDist, MultiOneHotDist, OneHotDist, SymlogDist, TwoHot
+from her_dream.distributions.functional import symexp, symlog
 
 from .conftest import B, K, T
 

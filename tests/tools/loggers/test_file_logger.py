@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from tools.loggers.file_logger import FileLogger
+from her_dream.tools.loggers.file_logger import FileLogger
 
 
 class TestFileLoggerNoOps:
@@ -43,14 +43,14 @@ class TestFileLoggerWrite:
     def test_writes_json_to_file(self, tmp_path):
         lg = FileLogger(tmp_path)
         lg.scalar("loss", 1.5)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video"):
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video"):
             lg.write(step=1)
         data = json.loads((tmp_path / "metrics.jsonl").read_text())
         assert data == {"step": 1, "loss": pytest.approx(1.5)}
 
     def test_appends_multiple_steps(self, tmp_path):
         lg = FileLogger(tmp_path)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video"):
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video"):
             lg.scalar("loss", 1.0)
             lg.write(step=1)
             lg.scalar("loss", 0.5)
@@ -61,21 +61,21 @@ class TestFileLoggerWrite:
     def test_resets_scalars_after_write(self, tmp_path):
         lg = FileLogger(tmp_path)
         lg.scalar("loss", 1.0)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video"):
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video"):
             lg.write(step=1)
         assert lg._scalars == {}
 
     def test_resets_videos_after_write(self, tmp_path):
         lg = FileLogger(tmp_path)
         lg.video("v", np.zeros((1, 2, 4, 4, 3), dtype=np.uint8))
-        with patch("tools.loggers.file_logger.torchvision.io.write_video"):
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video"):
             lg.write(step=1)
         assert lg._videos == {}
 
     def test_video_bytes_name_decoded(self, tmp_path):
         lg = FileLogger(tmp_path)
         lg.video(b"my_vid", np.zeros((1, 2, 4, 4, 3), dtype=np.uint8))
-        with patch("tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
             lg.write(step=1)
         call_path = str(mock_wv.call_args[0][0])
         assert "my_vid" in call_path
@@ -84,7 +84,7 @@ class TestFileLoggerWrite:
         lg = FileLogger(tmp_path)
         vid = np.ones((1, 2, 4, 4, 3), dtype=np.float32) * 0.5
         lg.video("v", vid)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
             lg.write(step=1)
         passed_tensor = mock_wv.call_args[0][1]
         assert passed_tensor.dtype == torch.uint8
@@ -93,7 +93,7 @@ class TestFileLoggerWrite:
         lg = FileLogger(tmp_path)
         vid = np.full((1, 2, 4, 4, 3), 200, dtype=np.uint8)
         lg.video("v", vid)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
             lg.write(step=1)
         passed_tensor = mock_wv.call_args[0][1]
         assert passed_tensor.max().item() == 200
@@ -101,7 +101,7 @@ class TestFileLoggerWrite:
     def test_video_slash_in_name_replaced(self, tmp_path):
         lg = FileLogger(tmp_path)
         lg.video("a/b", np.zeros((1, 2, 4, 4, 3), dtype=np.uint8))
-        with patch("tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video") as mock_wv:
             lg.write(step=1)
         call_path = str(mock_wv.call_args[0][0])
         assert "a_b" in call_path
@@ -110,6 +110,6 @@ class TestFileLoggerWrite:
     def test_custom_filename(self, tmp_path):
         lg = FileLogger(tmp_path, filename="custom.jsonl")
         lg.scalar("x", 1.0)
-        with patch("tools.loggers.file_logger.torchvision.io.write_video"):
+        with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video"):
             lg.write(step=1)
         assert (tmp_path / "custom.jsonl").exists()

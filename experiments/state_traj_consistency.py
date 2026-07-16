@@ -41,19 +41,28 @@ Plots y JSON en {logdir}/experiments/state_traj_consistency/.
 """
 
 import argparse
-import json
 import pathlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from gymnasium.utils import seeding
-from omegaconf import OmegaConf
 
-from dreamer import Dreamer
-from envs import make_env, make_envs
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    agent_pose,
+    dump_json,
+    entropy,
+    env_factory,
+    experiment_outdir,
+    goal_pos,
+    load_agent,
+    posterior_probs,
+    posterior_rollout,
+    save_fig,
+    scripted_policy,
+    unwrap_env,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Acciones MiniGrid (índices en el espacio Discrete(7))
@@ -148,37 +157,9 @@ def build_trajectories(
 
 def _read_start_pose(env_factory) -> tuple[tuple[int, int], int, int]:
     """Devuelve (start_pos, start_dir, size) leyendo el env base sin avanzar el RNG."""
-    env = env_factory()
-    base = env
-    while hasattr(base, "env"):
-        base = base.env
+    base = unwrap_env(env_factory())
     pos = tuple(int(c) for c in base.agent_start_pos)
     return pos, int(base.agent_start_dir), int(base.size)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Preprocesado obs -> tensor batch=1
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _preprocess_obs(obs: dict, device: str) -> dict:
-    """obs dict (numpy) -> tensores (1, ...) en device. uint8 imágenes se normalizan."""
-    out = {}
-    for k, v in obs.items():
-        if isinstance(v, np.ndarray):
-            t = torch.as_tensor(v, dtype=torch.float32, device=device)
-            if v.dtype == np.uint8:
-                t = t / 255.0
-            out[k] = t.unsqueeze(0)
-        elif isinstance(v, (bool, np.bool_)):
-            out[k] = torch.tensor([[float(v)]], dtype=torch.float32, device=device)
-    return out
-
-
-def _onehot_action(idx: int, n_actions: int) -> np.ndarray:
-    a = np.zeros(n_actions, dtype=np.float32)
-    a[idx] = 1.0
-    return a
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,7 +169,7 @@ def _onehot_action(idx: int, n_actions: int) -> np.ndarray:
 
 @torch.no_grad()
 def run_trajectory(
-    agent: Dreamer,
+    agent,
     env_factory,
     action_indices: list[int],
     device: str,
@@ -212,73 +193,26 @@ def run_trajectory(
     }
     """
     env = env_factory()
-    # Reset reproducible: los wrappers de este repo no aceptan `seed=` en reset(),
-    # pero gymnasium consume seed sólo cuando es != None. Pre-inicializamos el
-    # np_random del env base para que el reset() encadenado sea determinista
-    # (misma posición de goal en cada trayectoria) sin tocar los wrappers.
-    base = env
-    while hasattr(base, "env"):
-        base = base.env
-    base._np_random, _ = seeding.np_random(seed)
-
-    # Reset oficial vía la pipeline completa (Dtype / TimeLimit / GoalConditioned)
-    obs = env.reset()
-
-    n_actions = env.action_space.shape[0]
-
-    stoch, deter = agent.rssm.initial(1)
-    prev_action = torch.zeros(1, n_actions, device=device)
 
     logits, zs, deters, poses, dirs, images = [], [], [], [], [], []
+    last_image = None
 
-    def _record(stoch_, deter_, logit_):
-        logits.append(logit_.squeeze(0).cpu())
-        zs.append(stoch_.squeeze(0).cpu())
-        deters.append(deter_.squeeze(0).cpu())
-        base_env = env
-        while hasattr(base_env, "env"):
-            base_env = base_env.env
-        ax, ay = base_env.agent_pos
-        poses.append((int(ax), int(ay)))
-        dirs.append(int(base_env.agent_dir))
-
-    # t = 0: procesar obs del reset
-    obs_t = _preprocess_obs(obs, device)
-    is_first = torch.tensor([True], dtype=torch.bool, device=device)
-    embed = agent.encoder(obs_t)
-    stoch, deter, logit = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
-    _record(stoch, deter, logit)
-
-    last_image = obs["image"]
-    images.append(np.array(last_image))
-
-    for act_idx in action_indices:
-        act_np = _onehot_action(act_idx, n_actions)
-        obs, _r, done, _info = env.step(act_np)
-        last_image = obs["image"]
-        prev_action = torch.as_tensor(act_np, device=device).unsqueeze(0)
-
-        obs_t = _preprocess_obs(obs, device)
-        is_first = torch.tensor([False], dtype=torch.bool, device=device)
-        embed = agent.encoder(obs_t)
-        stoch, deter, logit = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
-        _record(stoch, deter, logit)
+    # `posterior_rollout` pre-siembra el np_random del env base con `seed`, de modo
+    # que el reset (y la posición del goal) es idéntico entre trayectorias.
+    policy = scripted_policy(action_indices)
+    for step in posterior_rollout(agent, env, policy, device, len(action_indices), seed=seed):
+        logits.append(step.logit.squeeze(0).cpu())
+        zs.append(step.stoch.squeeze(0).cpu())
+        deters.append(step.deter.squeeze(0).cpu())
+        (ax, ay), adir = agent_pose(unwrap_env(env))
+        poses.append((ax, ay))
+        dirs.append(adir)
+        last_image = step.obs["image"]
         images.append(np.array(last_image))
+        if step.done and step.t < len(action_indices):
+            print(f"  [warn] episodio terminó tempranamente en paso {step.t}")
 
-        if done:
-            print(f"  [warn] episodio terminó tempranamente en paso {len(logits) - 1}")
-            break
-
-    base_env = env
-    while hasattr(base_env, "env"):
-        base_env = base_env.env
-    # RandomGoal expone `_goal_pos` (asignado en place_obj), FixedGoal usa `goal_pos`.
-    raw_goal = getattr(base_env, "_goal_pos", None)
-    if raw_goal is None:
-        raw_goal = getattr(base_env, "goal_pos", None)
-    if raw_goal is None:
-        raise AttributeError(f"No encuentro goal_pos ni _goal_pos en {type(base_env).__name__}")
-    goal_pos = np.array(raw_goal, dtype=np.int32)
+    goal = goal_pos(unwrap_env(env))
 
     return {
         "logits": torch.stack(logits, dim=0),  # (T+1, S, K)
@@ -286,7 +220,7 @@ def run_trajectory(
         "deter": torch.stack(deters, dim=0),  # (T+1, D)
         "pos": np.array(poses, dtype=np.int32),
         "dir": np.array(dirs, dtype=np.int32),
-        "goal_pos": goal_pos,
+        "goal_pos": goal,
         "images": np.stack(images, axis=0),  # (T+1, H, W, 3)
         "last_image": np.array(last_image),
     }
@@ -302,7 +236,7 @@ def _kl_pairwise(agent, logits: torch.Tensor) -> torch.Tensor:
     logits: (N, S, K)
     Devuelve KL simétrica (N, N) promediada sobre slots S.
     """
-    import distributions as dists
+    import her_dream.distributions as dists
 
     N = logits.shape[0]
     out = torch.zeros(N, N)
@@ -345,7 +279,7 @@ def _intra_state_hamming(agent, logit: torch.Tensor, M: int) -> float:
 
 @torch.no_grad()
 def run_state_traj_consistency(
-    agent: Dreamer,
+    agent,
     env_factory,
     trajectories: dict[str, list[int]],
     n_samples_intra: int = 50,
@@ -397,7 +331,7 @@ def run_state_traj_consistency(
     S, K = last_logits.shape[1], last_logits.shape[2]
     print(f"\n  Logits finales: shape=({N}, {S}, {K})")
 
-    probs = agent.rssm.get_dist(last_logits).base_dist.probs  # (N, S, K)
+    probs = posterior_probs(agent, last_logits)  # (N, S, K)
     modes = probs.argmax(-1)  # (N, S)
     feat = torch.cat([last_zs.reshape(N, -1), last_deter], dim=-1)  # (N, S*K + D)
 
@@ -408,7 +342,7 @@ def run_state_traj_consistency(
     cos_feat = _cosine_pairwise(feat)  # (N, N)
 
     mask = torch.triu(torch.ones(N, N), diagonal=1).bool()
-    H_per_traj = -(probs * (probs + 1e-8).log()).sum(-1).mean(-1).cpu().numpy()  # (N,)
+    H_per_traj = entropy(probs).mean(-1).cpu().numpy()  # (N,)
     pi_per_traj = probs.max(-1).values.mean(-1).cpu().numpy()  # (N,)
     H_max = float(np.log(K))
 
@@ -477,8 +411,7 @@ def run_state_traj_consistency(
         "pi_per_traj": pi_per_traj.tolist(),
         "traj_lengths": {n: len(trajectories[n]) for n in names},
     }
-    with open(outdir / "state_traj_consistency.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "state_traj_consistency.json")
 
     print(f"\n  Guardado en {outdir}")
     return results
@@ -487,12 +420,6 @@ def run_state_traj_consistency(
 # ─────────────────────────────────────────────────────────────────────────────
 # Plots
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot: {path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -534,7 +461,7 @@ def _make_trajectory_gif(agent, name, run, outdir, fps=2):
     import imageio.v2 as imageio
 
     logits_t = run["logits"]  # (T+1, S, K)
-    probs_t = agent.rssm.get_dist(logits_t.to(agent.device)).base_dist.probs.cpu().numpy()  # (T+1, S, K)
+    probs_t = posterior_probs(agent, logits_t.to(agent.device)).cpu().numpy()  # (T+1, S, K)
     z_t = run["zs"].cpu().numpy()  # (T+1, S, K)  one-hot
     images = run["images"]  # (T+1, H, W, 3)
     n_steps = len(images) - 1
@@ -597,7 +524,7 @@ def _plot_all(
     ax.set_yticklabels(names, fontsize=8)
     ax.set_title("Hamming inter-trayectoria (sobre argmax_k logit)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="Hamming")
-    _save(fig, outdir / "pairwise_hamming_modes.png")
+    save_fig(fig, outdir / "pairwise_hamming_modes.png")
 
     # ── Heatmap pairwise: KL simétrica ───────────────────────────────────────
     fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3), constrained_layout=True)
@@ -608,7 +535,7 @@ def _plot_all(
     ax.set_yticklabels(names, fontsize=8)
     ax.set_title("KL simétrica inter-trayectoria (logits posteriores)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="KL (nats)")
-    _save(fig, outdir / "pairwise_kl.png")
+    save_fig(fig, outdir / "pairwise_kl.png")
 
     # ── Heatmap pairwise: cos(feat) ──────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(0.6 * N + 4, 0.55 * N + 3), constrained_layout=True)
@@ -619,7 +546,7 @@ def _plot_all(
     ax.set_yticklabels(names, fontsize=8)
     ax.set_title("Cos(feat) inter-trayectoria  (z ‖ deter)")
     plt.colorbar(im, ax=ax, fraction=0.046, label="cos")
-    _save(fig, outdir / "pairwise_cosine_feat.png")
+    save_fig(fig, outdir / "pairwise_cosine_feat.png")
 
     # ── Comparativa inter vs intra Hamming ───────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
@@ -635,7 +562,7 @@ def _plot_all(
     ax.set_ylabel("Frecuencia")
     ax.set_title("Variabilidad inter-trayectoria vs intra-estado")
     ax.legend()
-    _save(fig, outdir / "inter_vs_intra_hamming.png")
+    save_fig(fig, outdir / "inter_vs_intra_hamming.png")
 
     # ── Entropía media por trayectoria ───────────────────────────────────────
     fig, ax = plt.subplots(figsize=(max(8, 0.5 * N + 2), 5), constrained_layout=True)
@@ -646,7 +573,7 @@ def _plot_all(
     ax.set_ylabel("H media (nats)")
     ax.set_title("Entropía media del logit final por trayectoria")
     ax.legend()
-    _save(fig, outdir / "entropy_per_trajectory.png")
+    save_fig(fig, outdir / "entropy_per_trajectory.png")
 
     # ── Heatmap de probs por trayectoria (S × K) ─────────────────────────────
     probs_np = probs.cpu().numpy()
@@ -657,21 +584,21 @@ def _plot_all(
         ax.set_xlabel("Clase k")
         ax.set_ylabel("Slot s")
         plt.colorbar(im, ax=ax, fraction=0.046, label="p_sk")
-        _save(fig, outdir / f"probs_{name}.png")
+        save_fig(fig, outdir / f"probs_{name}.png")
 
     # ── Evolución de entropía durante cada trayectoria ───────────────────────
     fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
     for name in names:
         logits_t = runs[name]["logits"]  # (T+1, S, K)
         p = torch.softmax(logits_t, dim=-1)
-        H_t = -(p * (p + 1e-8).log()).sum(-1).mean(-1).numpy()
+        H_t = entropy(p).mean(-1).numpy()
         ax.plot(H_t, label=name, alpha=0.85)
     ax.axhline(H_max, color="r", linestyle="--", alpha=0.6, label=f"H_max={H_max:.2f}")
     ax.set_xlabel("Paso de la trayectoria")
     ax.set_ylabel("H media del logit posterior")
     ax.set_title("Entropía posterior a lo largo de cada trayectoria")
     ax.legend(fontsize=7, loc="best", ncol=2)
-    _save(fig, outdir / "entropy_over_time.png")
+    save_fig(fig, outdir / "entropy_over_time.png")
 
     # ── Mapa de modos: para cada slot s, qué clase k es la moda en cada traj ─
     modes_np = modes.cpu().numpy()  # (N, S)
@@ -683,7 +610,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_title("Clase modal por slot (filas = trayectorias)")
     plt.colorbar(im, ax=ax, fraction=0.025, label="argmax_k")
-    _save(fig, outdir / "modes_per_trajectory.png")
+    save_fig(fig, outdir / "modes_per_trajectory.png")
 
     # ── Mapa del z muestreado: clase one-hot del stoch real en cada slot ─────
     zs_np = last_zs.argmax(-1).cpu().numpy()  # (N, S)
@@ -694,7 +621,7 @@ def _plot_all(
     ax.set_xlabel("Slot s")
     ax.set_title("z muestreado por slot (filas = trayectorias)")
     plt.colorbar(im, ax=ax, fraction=0.025, label="argmax_k z")
-    _save(fig, outdir / "zs_per_trajectory.png")
+    save_fig(fig, outdir / "zs_per_trajectory.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -709,10 +636,7 @@ if __name__ == "__main__":
         --seed 0 \
         --n_samples 50
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True)
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--seed", type=int, default=0, help="Seed para el reset del env (fija la posición del goal)")
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument(
         "--n_samples", type=int, default=50, help="Muestras por estado para la variabilidad intra-state"
     )
@@ -727,36 +651,13 @@ if __name__ == "__main__":
 
     logdir = pathlib.Path(args.logdir)
 
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = args.device or config.device
-    config.device = device
+    agent, config, _ = load_agent(logdir, args.device)
 
-    # Backfill defaults for keys added after this run was trained.
-    if "wm_only" not in config.model:
-        OmegaConf.set_struct(config.model, False)
-        config.model.wm_only = False
+    # El factory de cada trayectoria crea un env independiente para que cada
+    # trayectoria empiece desde un reset limpio.
+    factory = env_factory(config)
 
-    reward_function = make_reward(config)
-    _, eval_envs, obs_space, act_space = make_envs(config.env)
-
-    agent = Dreamer(
-        config.model,
-        obs_space,
-        act_space,
-        reward_function=reward_function,
-    ).to(device)
-
-    checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint cargado: {logdir / 'latest.pt'}")
-
-    # El env_factory de cada trayectoria crea un env independiente para que
-    # cada trayectoria empiece desde un reset limpio.
-    def env_factory():
-        return make_env(config.env, 0)
-
-    start_pos, start_dir, size = _read_start_pose(env_factory)
+    start_pos, start_dir, size = _read_start_pose(factory)
     dir_name = {0: "east", 1: "south", 2: "west", 3: "north"}[start_dir]
     print(f"Pose inicial del env: pos={start_pos}, dir={start_dir} ({dir_name}), interior={size - 2}x{size - 2}")
 
@@ -769,10 +670,10 @@ if __name__ == "__main__":
 
     run_state_traj_consistency(
         agent=agent,
-        env_factory=env_factory,
+        env_factory=factory,
         trajectories=trajectories,
         n_samples_intra=args.n_samples,
         seed=args.seed,
-        outdir=logdir / "experiments" / "state_traj_consistency",
+        outdir=experiment_outdir(logdir, "state_traj_consistency"),
         gif_fps=args.gif_fps,
     )

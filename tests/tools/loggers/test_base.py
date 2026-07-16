@@ -1,6 +1,6 @@
 import pytest
 
-from tools.loggers.base import BaseLogger
+from her_dream.tools.loggers.base import BaseLogger
 
 
 class TestBaseLogger:

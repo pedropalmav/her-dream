@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from tools.logging import Logger, Tee, make_logger, setup_console_log
+from her_dream.tools.logging import Logger, Tee, make_logger, setup_console_log
 
 
 class TestTee:
@@ -140,7 +140,7 @@ class TestLogger:
 
     def test_write_fps_true_appends_fps_scalar(self, tmp_path, mock_summary_writer_logging):
         lg = Logger(tmp_path)
-        with patch("tools.logging.time.time", return_value=0.0):
+        with patch("her_dream.tools.logging.time.time", return_value=0.0):
             lg.write(step=0, fps=True)
         data = json.loads((tmp_path / "metrics.jsonl").read_text())
         assert "fps/fps" in data
@@ -229,13 +229,13 @@ class TestLogger:
 
     def test_compute_fps_first_call_returns_zero(self, tmp_path, mock_summary_writer_logging):
         lg = Logger(tmp_path)
-        with patch("tools.logging.time.time", return_value=0.0):
+        with patch("her_dream.tools.logging.time.time", return_value=0.0):
             fps = lg._compute_fps(0)
         assert fps == 0
 
     def test_compute_fps_subsequent_returns_rate(self, tmp_path, mock_summary_writer_logging):
         lg = Logger(tmp_path)
-        with patch("tools.logging.time.time", side_effect=[0.0, 1.0]):
+        with patch("her_dream.tools.logging.time.time", side_effect=[0.0, 1.0]):
             lg._compute_fps(0)  # first call: _last_step=0, _last_time=0.0
             fps = lg._compute_fps(10)  # steps=10, duration=1.0
         assert fps == pytest.approx(10.0)
@@ -338,7 +338,7 @@ class TestLoggerLogHydraConfig:
 
 class TestMakeLogger:
     def test_file_backend_creates_file_logger(self, tmp_path):
-        from tools.loggers import CompositeLogger, FileLogger
+        from her_dream.tools.loggers import CompositeLogger, FileLogger
 
         cfg = SimpleNamespace(backends=["file"])
         result = make_logger(cfg, tmp_path)
@@ -346,7 +346,7 @@ class TestMakeLogger:
         assert isinstance(result._loggers[0], FileLogger)
 
     def test_tensorboard_backend_creates_tb_logger(self, tmp_path, mock_summary_writer_tb):
-        from tools.loggers import CompositeLogger, TensorboardLogger
+        from her_dream.tools.loggers import CompositeLogger, TensorboardLogger
 
         cfg = SimpleNamespace(backends=["tensorboard"])
         result = make_logger(cfg, tmp_path)
@@ -354,18 +354,21 @@ class TestMakeLogger:
         assert isinstance(result._loggers[0], TensorboardLogger)
 
     def test_wandb_backend_creates_composite(self, tmp_path):
-        from tools.loggers import CompositeLogger
+        from her_dream.tools.loggers import CompositeLogger
 
         cfg = SimpleNamespace(backends=["wandb"], project="test")
         mock_wandb = MagicMock()
-        with patch.dict("sys.modules", {"wandb": mock_wandb}), patch("tools.logging.atexit.register"):
+        with patch.dict("sys.modules", {"wandb": mock_wandb}), patch("her_dream.tools.logging.atexit.register"):
             result = make_logger(cfg, tmp_path)
         assert isinstance(result, CompositeLogger)
 
     def test_wandb_backend_registers_atexit(self, tmp_path):
         cfg = SimpleNamespace(backends=["wandb"], project="test")
         mock_wandb = MagicMock()
-        with patch.dict("sys.modules", {"wandb": mock_wandb}), patch("tools.logging.atexit.register") as mock_at:
+        with (
+            patch.dict("sys.modules", {"wandb": mock_wandb}),
+            patch("her_dream.tools.logging.atexit.register") as mock_at,
+        ):
             make_logger(cfg, tmp_path)
         mock_at.assert_called_once()
 
@@ -375,7 +378,7 @@ class TestMakeLogger:
             make_logger(cfg, tmp_path)
 
     def test_multiple_backends_creates_composite_with_all(self, tmp_path, mock_summary_writer_tb):
-        from tools.loggers import CompositeLogger
+        from her_dream.tools.loggers import CompositeLogger
 
         cfg = SimpleNamespace(backends=["file", "tensorboard"])
         result = make_logger(cfg, tmp_path)

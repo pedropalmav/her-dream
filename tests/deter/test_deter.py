@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch import nn
 
-from networks import BlockLinear
+from her_dream.networks import BlockLinear
 
 from .conftest import ACT_DIM, BLOCKS, DETER, DYNLAYERS, B, K, S, make_deter
 

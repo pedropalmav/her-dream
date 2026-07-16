@@ -1,7 +1,7 @@
 import numpy as np
 from minigrid.wrappers import RGBImgObsWrapper
 
-from envs.fixed_goal import DIRECTIONS, FixedGoal, make_fixed_goal_env
+from her_dream.envs.fixed_goal import DIRECTIONS, FixedGoal, make_fixed_goal_env
 
 
 class TestFixedGoalInit:

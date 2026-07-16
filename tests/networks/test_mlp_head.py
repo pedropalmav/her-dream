@@ -4,8 +4,8 @@ import pytest
 import torch
 import torch.distributions as torchd
 
-from distributions.distributions import MultiOneHotDist, OneHotDist, TwoHot
-from networks.mlp_head import MLPHead
+from her_dream.distributions.distributions import MultiOneHotDist, OneHotDist, TwoHot
+from her_dream.networks.mlp_head import MLPHead
 
 from .conftest import B, T, make_mlphead_config
 

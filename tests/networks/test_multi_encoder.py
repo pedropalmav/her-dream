@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from networks.multi_encoder import MultiEncoder
+from her_dream.networks.multi_encoder import MultiEncoder
 
 from .conftest import B, C, H, T, W, make_multi_encoder_config
 

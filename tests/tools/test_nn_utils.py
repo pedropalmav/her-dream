@@ -3,7 +3,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from tools.nn_utils import convert, tensorstats, weight_init_
+from her_dream.tools.nn_utils import convert, tensorstats, weight_init_
 
 
 class _EmptyWeightModule(nn.Module):

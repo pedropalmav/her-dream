@@ -1,9 +1,9 @@
 from enum import Enum
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 from tensordict import TensorDict
+
+import her_dream.goals as goals
 
 from .buffer import Buffer
 
@@ -20,6 +20,7 @@ class HERBuffer(Buffer):
 
         self.reward_function = reward_function
         self.goal_type = config.goal_type
+        self._goal_spec = goals.make_goal_spec(config)
         self.rssm = None
         self.her_ratio = float(config.her_ratio)
         self.her_strategy = HERStrategy[config.her_strategy.upper()]
@@ -99,10 +100,13 @@ class HERBuffer(Buffer):
             new_goal = self._sample_goal(envs[batch_idx], steps[batch_idx])
             sample_td["goal"][batch_idx] = new_goal
 
-            if self.goal_type in ("log_prob", "prob") and self.rssm is not None:
-                achieved = self.rssm.get_dist(sample_td["logit"][batch_idx])
-            else:
-                achieved = sample_td["stoch"][batch_idx]
+            logit_all = sample_td.get("logit")
+            achieved = goals.reward_state(
+                self._goal_spec,
+                stoch=sample_td["stoch"][batch_idx],
+                logit=None if logit_all is None else logit_all[batch_idx],
+                rssm=self.rssm,
+            )
             desired = new_goal.to(self.device)
             new_reward = self.reward_function(achieved, desired)
             sample_td["reward"][batch_idx] = new_reward
@@ -123,12 +127,6 @@ class HERBuffer(Buffer):
                 raise ValueError(f"Invalid HER strategy: {self.her_strategy}")
 
         transition_indices = (ep_start + transition_indices_in_episode) % self.max_columns
-        new_goal = self._buffer[env_indices, transition_indices]
-        if self.goal_type == "argmax_full":
-            new_goal = new_goal["logit"]
-            K = new_goal.shape[-1]
-            new_goal = torch.argmax(new_goal, dim=-1)
-            new_goal = F.one_hot(new_goal, num_classes=K).float()
-        else:
-            new_goal = new_goal["stoch"]
-        return new_goal[:, 0] if self.goal_type == "first_row" else new_goal
+        latent = self._buffer[env_indices, transition_indices]
+        new_goal = goals.goal_from_latent(self._goal_spec, stoch=latent["stoch"], logit=latent.get("logit"))
+        return new_goal[:, 0] if self._goal_spec.scope == "first_row" else new_goal

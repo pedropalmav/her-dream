@@ -39,20 +39,20 @@ def patch_crafter():
 class TestCrafterInit:
     def test_task_reward(self, patch_crafter):
         mock_crafter, _ = patch_crafter
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         Crafter("reward", size=(64, 64), seed=0)
         mock_crafter.Env.assert_called_with(size=(64, 64), reward=True, seed=0)
 
     def test_task_noreward(self, patch_crafter):
         mock_crafter, _ = patch_crafter
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         Crafter("noreward", size=(64, 64), seed=1)
         mock_crafter.Env.assert_called_with(size=(64, 64), reward=False, seed=1)
 
     def test_invalid_task_raises(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         with pytest.raises(AssertionError):
             Crafter("invalid_task")
@@ -60,13 +60,13 @@ class TestCrafterInit:
 
 class TestCrafterObsAndActionSpace:
     def test_observation_space_has_image_key(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         assert "image" in c.observation_space.spaces
 
     def test_observation_space_has_log_keys(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         spaces = c.observation_space.spaces
@@ -74,7 +74,7 @@ class TestCrafterObsAndActionSpace:
         assert "log_make_table" in spaces
 
     def test_action_space_is_discrete(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         assert isinstance(c.action_space, gym.spaces.Discrete)
@@ -83,7 +83,7 @@ class TestCrafterObsAndActionSpace:
 
 class TestCrafterStep:
     def test_step_includes_log_keys(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs, reward, done, info = c.step(0)
@@ -91,7 +91,7 @@ class TestCrafterStep:
         assert "log_make_table" in obs
 
     def test_step_reward_converted_to_float32(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         _, reward, _, _ = c.step(0)
@@ -105,14 +105,14 @@ class TestCrafterStep:
             True,
             {"achievements": {"collect_wood": 0, "make_table": 0}, "discount": 0},
         )
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs, _, _, _ = c.step(0)
         assert obs["is_terminal"] is True
 
     def test_step_not_terminal_when_discount_nonzero(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs, _, _, _ = c.step(0)
@@ -126,7 +126,7 @@ class TestCrafterStep:
             True,
             {"achievements": {"collect_wood": 0, "make_table": 0}, "discount": 1},
         )
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs, _, done, _ = c.step(0)
@@ -134,7 +134,7 @@ class TestCrafterStep:
         assert done is True
 
     def test_step_is_first_always_false(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs, _, _, _ = c.step(0)
@@ -143,7 +143,7 @@ class TestCrafterStep:
 
 class TestCrafterReset:
     def test_reset_is_first(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs = c.reset()
@@ -152,7 +152,7 @@ class TestCrafterReset:
         assert obs["is_terminal"] is False
 
     def test_reset_log_keys_zeroed(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs = c.reset()
@@ -160,7 +160,7 @@ class TestCrafterReset:
         assert obs["log_make_table"] == 0.0
 
     def test_reset_has_image(self, patch_crafter):
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         obs = c.reset()
@@ -170,7 +170,7 @@ class TestCrafterReset:
 class TestCrafterRender:
     def test_render_delegates_to_inner(self, patch_crafter):
         mock_crafter, mock_env = patch_crafter
-        from envs.crafter import Crafter
+        from her_dream.envs.crafter import Crafter
 
         c = Crafter("reward")
         c.render()

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from tools.checkpoint import (
+from her_dream.tools.checkpoint import (
     recursively_collect_optim_state_dict,
     recursively_load_optim_state_dict,
 )

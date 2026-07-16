@@ -17,26 +17,27 @@ unreachable in z-space by construction, regardless of green-square fidelity.
 
 import argparse
 import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-
-import matplotlib  # noqa: E402
+import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-from hydra import compose, initialize  # noqa: E402
+from hydra import compose, initialize_config_dir  # noqa: E402
 from tensordict.base import TensorDictBase  # noqa: E402
 
 # MPS pin_memory stub (harmless on CPU), kept for parity with local smoke tests.
 TensorDictBase.pin_memory = lambda self, *a, **k: self
 
-from dreamer import Dreamer  # noqa: E402
-from envs import make_env  # noqa: E402
+import her_dream.goals as goals  # noqa: E402
 from experiments.common import onehot_action  # noqa: E402
-from rewards import make_reward  # noqa: E402
+from her_dream.dreamer import Dreamer  # noqa: E402
+from her_dream.envs import make_env  # noqa: E402
+from her_dream.rewards import make_reward  # noqa: E402
+
+# Hydra configs now ship inside the her_dream package (next to goals.py).
+_CONFIG_DIR = str(pathlib.Path(goals.__file__).parent / "configs")
 
 CKPT = "logdir/random_goal/wm_only_randomgoal/01/latest.pt"
 OUT = pathlib.Path("experiments/out")
@@ -44,7 +45,7 @@ OUT = pathlib.Path("experiments/out")
 
 def build(env_name, device="cpu"):
     """Build env + Dreamer and load the frozen random_goal world model."""
-    with initialize(version_base=None, config_path="../configs"):
+    with initialize_config_dir(version_base=None, config_dir=_CONFIG_DIR):
         config = compose(
             config_name="configs",
             overrides=[

@@ -1,7 +1,7 @@
 import torch
 import torch.distributions as torchd
 
-from tools import to_f32
+from her_dream.tools import to_f32
 
 from .distributions import (
     Bound,

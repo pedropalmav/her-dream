@@ -77,7 +77,6 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from torch import nn
 
-from dreamer import Dreamer
 from experiments.common import (
     add_common_args,
     agent_pose,
@@ -90,6 +89,7 @@ from experiments.common import (
     save_fig,
     unwrap_env,
 )
+from her_dream.dreamer import Dreamer
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Concepts. kind ∈ {"clf", "bin", "reg"}; describes the estimator + metric.
@@ -117,7 +117,7 @@ def collect_dataset(agent: Dreamer, env_cfg, episodes: int, max_steps: int, devi
     state. On-trajectory (not a single-step sweep) so `deter` accumulates
     history and the stoch/deter/feat comparison is fair.
     """
-    from envs import make_env
+    from her_dream.envs import make_env
 
     rng = np.random.RandomState(seed)
 

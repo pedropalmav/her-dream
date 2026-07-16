@@ -36,23 +36,25 @@ logdir.
 
 import atexit
 import pathlib
-import sys
 import warnings
 
 import hydra
 import torch
 
-import tools
-from buffers import make_buffer
-from dreamer import Dreamer
-from envs import make_envs
-from rewards import make_reward
-from trainer import OnlineTrainer
+import her_dream
+import her_dream.tools as tools
+from her_dream.buffers import make_buffer
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_envs
+from her_dream.rewards import make_reward
+from her_dream.trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
-sys.path.append(str(pathlib.Path(__file__).parent))
 # torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision("high")
+
+# Hydra configs ship inside the installed her_dream package.
+_CONFIG_DIR = str(pathlib.Path(her_dream.__file__).parent / "configs")
 
 
 def validate_config(config):
@@ -108,7 +110,7 @@ def load_checkpoint(agent, config):
     print(f"Trainable params after load: {trainable:,} / {total:,}")
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="configs")
+@hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="configs")
 def main(config):
     validate_config(config)
 

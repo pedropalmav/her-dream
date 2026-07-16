@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from envs.parallel import Future, Message, Parallel, ParallelEnv, PMessage, ProcessPipeWorker, Worker
+from her_dream.envs.parallel import Future, Message, Parallel, ParallelEnv, PMessage, ProcessPipeWorker, Worker
 
 # ---------------------------------------------------------------------------
 # Future
@@ -256,7 +256,7 @@ class TestWorker:
         def fn(s, *a, **kw):
             return (s, "ok")
 
-        with patch("envs.parallel.ProcessPipeWorker") as mock_ppw:
+        with patch("her_dream.envs.parallel.ProcessPipeWorker") as mock_ppw:
             mock_impl = MagicMock()
             mock_ppw.return_value = mock_impl
             w = Worker(fn, strategy="process", state=state)
@@ -300,7 +300,7 @@ class TestWorker:
             call_log.append(args)
             return "value"
 
-        with patch("envs.parallel.ProcessPipeWorker") as mock_ppw:
+        with patch("her_dream.envs.parallel.ProcessPipeWorker") as mock_ppw:
             mock_ppw.return_value = MagicMock()
             Worker(fn, strategy="process", state=False)
         # The fn is wrapped but we just verify the Worker was constructed
@@ -329,7 +329,7 @@ class TestWorker:
             def close(self):
                 pass
 
-        with patch("envs.parallel.ProcessPipeWorker", _FakePPW):
+        with patch("her_dream.envs.parallel.ProcessPipeWorker", _FakePPW):
             Worker(original, strategy="process", state=False)
 
         # Executing fn_wrapper covers line 130; the fn rebinding causes a recursive call

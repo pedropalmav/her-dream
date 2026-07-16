@@ -1,7 +1,7 @@
 import numpy as np
 from minigrid.wrappers import RGBImgObsWrapper
 
-from envs.random_goal import DIRECTIONS, RandomGoal, make_random_goal_env
+from her_dream.envs.random_goal import DIRECTIONS, RandomGoal, make_random_goal_env
 
 
 class TestRandomGoalInit:

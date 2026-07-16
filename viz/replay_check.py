@@ -31,7 +31,7 @@ from gymnasium.utils import seeding
 from omegaconf import OmegaConf
 from PIL import Image, ImageDraw
 
-from envs import make_env
+from her_dream.envs import make_env
 from viz.common import _onehot
 
 # Layout del GIF

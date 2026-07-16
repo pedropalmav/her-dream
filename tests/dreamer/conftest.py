@@ -16,8 +16,9 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-from dreamer import Dreamer
-from rssm import RSSM
+import her_dream.goals as goals
+from her_dream.dreamer import Dreamer
+from her_dream.rssm import RSSM
 
 N = 3  # number of envs needing a fresh goal
 S, K = 8, 8  # stoch groups, categories per group
@@ -63,6 +64,9 @@ class StubDreamer:
         self._frozen_rssm = rssm
         self.goal_imag_horizon = goal_imag_horizon
         self.goal_type = goal_type
+        self._goal_spec = goals.make_goal_spec(
+            SimpleNamespace(goal_type=goal_type, **goals.default_descriptors(goal_type))
+        )
         self.act_dim = act_dim
         self.device = torch.device(device)
         self._embed_size = embed_size
@@ -124,7 +128,7 @@ import pathlib  # noqa: E402
 
 from hydra import compose, initialize_config_dir  # noqa: E402
 
-from rewards import make_reward  # noqa: E402
+from her_dream.rewards import make_reward  # noqa: E402
 
 # Small real-build dims. IMG must survive the 4-stage CNN downsample (minres=4).
 IMG = 64
@@ -133,7 +137,8 @@ RDETER = 32  # rssm deter dim (divisible by blocks=4)
 ACT = 5  # discrete action dim
 RB, RT = 2, 4  # batch, time for a sampled chunk
 
-_CONFIG_DIR = str(pathlib.Path(__file__).resolve().parents[2] / "configs")
+# Hydra configs now ship inside the her_dream package (next to goals.py).
+_CONFIG_DIR = str(pathlib.Path(goals.__file__).parent / "configs")
 
 # Overrides shrinking every size knob so a real update() is fast on CPU.
 _SMALL_OVERRIDES = [

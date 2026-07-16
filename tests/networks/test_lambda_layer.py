@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from networks.lambda_layer import LambdaLayer
+from her_dream.networks.lambda_layer import LambdaLayer
 
 
 class TestLambdaLayer:

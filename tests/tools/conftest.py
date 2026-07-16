@@ -5,23 +5,23 @@ import pytest
 
 @pytest.fixture
 def mock_summary_writer_logging():
-    with patch("tools.logging.SummaryWriter") as m:
+    with patch("her_dream.tools.logging.SummaryWriter") as m:
         yield m
 
 
 @pytest.fixture
 def mock_summary_writer_tb():
-    with patch("tools.loggers.tensorboard_logger.SummaryWriter") as m:
+    with patch("her_dream.tools.loggers.tensorboard_logger.SummaryWriter") as m:
         yield m
 
 
 @pytest.fixture
 def mock_write_video_logging():
-    with patch("tools.logging.torchvision.io.write_video") as m:
+    with patch("her_dream.tools.logging.torchvision.io.write_video") as m:
         yield m
 
 
 @pytest.fixture
 def mock_write_video_file():
-    with patch("tools.loggers.file_logger.torchvision.io.write_video") as m:
+    with patch("her_dream.tools.loggers.file_logger.torchvision.io.write_video") as m:
         yield m

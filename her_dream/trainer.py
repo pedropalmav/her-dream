@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
 
-import tools
-from buffers.her_buffer import HERBuffer
+import her_dream.tools as tools
+from her_dream.buffers.her_buffer import HERBuffer
+from her_dream.goals import goal_from_latent, make_goal_spec, reward_state
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
@@ -34,6 +34,7 @@ class OnlineTrainer:
         self._action_repeat = config.action_repeat
         self._goal_sample = config.goal_sample
         self._goal_type = config.goal_type
+        self._goal_spec = make_goal_spec(config)
         self._wm_only = bool(config.wm_only)
         self._train_text_only = bool(getattr(config, "train_text_only", False))
         # The policy is irrelevant for both world-model pretraining and
@@ -62,17 +63,15 @@ class OnlineTrainer:
         missions = np.stack([p() for p in promises])  # (N, L) int8 token ids
         mission_t = torch.as_tensor(missions, device=agent.device)
         logits = agent.text_encoder(mission_t.unsqueeze(1))[:, 0]  # (N, S, K)
-        if self._goal_type == "argmax_full":
-            # Mode of the text encoder's categorical, to match the argmax'd
-            # imag_logit used on the state side of argmax_full_reward.
-            K = logits.shape[-1]
-            one_hot = F.one_hot(torch.argmax(logits, dim=-1), num_classes=K).float()
-        else:
-            one_hot = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
+        # Same OneHotDist (unimix_ratio) as the RSSM posterior, so a sampled goal
+        # matches how the world model draws its z. goal_from_latent then selects
+        # sample / argmax one-hot / raw logit per the goal type.
+        stoch = agent.rssm.get_dist(logits).rsample()  # (N, S, K)
+        goal = goal_from_latent(self._goal_spec, stoch=stoch, logit=logits)
         goal_shape = envs.observation_space["goal"].shape
         if len(goal_shape) == 1:
-            return one_hot[:, 0, :]
-        return one_hot
+            return goal[:, 0, :]
+        return goal
 
     @torch.no_grad()
     def _image_goal(self, agent, envs, indices):
@@ -326,10 +325,7 @@ class OnlineTrainer:
 
     def _apply_reward(self, trans, rssm=None):
         if self.reward_function:
-            if self._goal_type in ("log_prob", "prob") and rssm is not None:
-                state = rssm.get_dist(trans["logit"])
-            else:
-                state = trans["logit"] if "logit" in trans else trans["stoch"]
+            state = reward_state(self._goal_spec, stoch=trans["stoch"], logit=trans.get("logit"), rssm=rssm)
             trans["reward"] = self.reward_function(state, trans["goal"])
 
     def _relabel_goal(self, envs, goals, trans):
@@ -361,14 +357,9 @@ class OnlineTrainer:
             if self.replay_buffer.count() == 0:
                 return
             data, _, _ = self.replay_buffer.sample()
-            if self._goal_type == "argmax_full":
-                raw = data["logit"]
-                K = raw.shape[-1]
-                goal_sample = F.one_hot(torch.argmax(raw, dim=-1), num_classes=K).float()
-            else:
-                goal_sample = data["stoch"]
-                if self._goal_type == "first_row":
-                    goal_sample = goal_sample[..., 0, :]
+            goal_sample = goal_from_latent(self._goal_spec, stoch=data.get("stoch"), logit=data.get("logit"))
+            if self._goal_spec.scope == "first_row":
+                goal_sample = goal_sample[..., 0, :]
             goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
             for i in range(envs.env_num):
                 if mask[i]:

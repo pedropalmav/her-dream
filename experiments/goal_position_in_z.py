@@ -54,7 +54,6 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from envs import make_env
 from experiments.common import (
     add_common_args,
     agent_pose,
@@ -66,6 +65,7 @@ from experiments.common import (
     stack_obs,
     unwrap_env,
 )
+from her_dream.envs import make_env
 
 ACT_LEFT = 0
 

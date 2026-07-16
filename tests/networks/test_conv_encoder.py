@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from networks.conv_encoder import ConvEncoder
-from networks.rmsnorm_2d import RMSNorm2D
+from her_dream.networks.conv_encoder import ConvEncoder
+from her_dream.networks.rmsnorm_2d import RMSNorm2D
 
 from .conftest import B, C, H, T, W, make_cnn_enc_config
 

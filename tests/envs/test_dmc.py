@@ -61,7 +61,7 @@ def _make_dmc(name, **kwargs):
     ):
         import importlib
 
-        import envs.dmc as dmc_module
+        import her_dream.envs.dmc as dmc_module
 
         importlib.reload(dmc_module)
         with patch.object(dmc_module, "DeepMindControl"):
@@ -69,7 +69,7 @@ def _make_dmc(name, **kwargs):
 
     # Direct import without reload to avoid side effects
     with patch("dm_control.suite", mock_suite, create=True):
-        from envs.dmc import DeepMindControl
+        from her_dream.envs.dmc import DeepMindControl
 
         env = DeepMindControl.__new__(DeepMindControl)
         env._env = mock_env
@@ -86,7 +86,7 @@ class TestDeepMindControlNameParsing:
         mock_suite = MagicMock()
         mock_suite.load.return_value = mock_env
         with patch("dm_control.suite", mock_suite, create=True):
-            from envs.dmc import DeepMindControl
+            from her_dream.envs.dmc import DeepMindControl
 
             with patch("dm_control.suite", mock_suite):
                 env = DeepMindControl.__new__(DeepMindControl)
@@ -105,10 +105,10 @@ class TestDeepMindControlNameParsing:
         with patch.dict("sys.modules", {"dm_control.suite": mock_suite}):
             import importlib
 
-            import envs.dmc
+            import her_dream.envs.dmc
 
-            importlib.reload(envs.dmc)
-            from envs.dmc import DeepMindControl
+            importlib.reload(her_dream.envs.dmc)
+            from her_dream.envs.dmc import DeepMindControl
 
             env = DeepMindControl.__new__(DeepMindControl)
             env._env = mock_env
@@ -123,7 +123,7 @@ class TestDeepMindControlNameParsing:
         mock_suite.load.return_value = mock_env
         with (
             patch.dict("sys.modules", {"dm_control.suite": mock_suite}),
-            patch("envs.dmc.suite", mock_suite, create=True),
+            patch("her_dream.envs.dmc.suite", mock_suite, create=True),
         ):
             # Manually simulate the init logic for plain name
             is_subtle = "walker_walk".endswith("_subtle")
@@ -169,7 +169,7 @@ class TestDeepMindControlNameParsing:
         mock_dm_ctrl.suite = mock_suite
 
         with patch.dict(sys.modules, {"dm_control": mock_dm_ctrl}):
-            from envs.dmc import DeepMindControl
+            from her_dream.envs.dmc import DeepMindControl
 
             DeepMindControl("reacher_hard_sparse")
 
@@ -179,12 +179,12 @@ class TestDeepMindControlNameParsing:
         """Lines 19-22: subtle name loads env via dmc_subtle module."""
         from unittest.mock import patch
 
-        import envs.dmc_subtle as subtle_module
+        import her_dream.envs.dmc_subtle as subtle_module
 
         mock_subtle_env = _make_dm_env()
 
         with patch.object(subtle_module, "reacher_subtle", return_value=mock_subtle_env):
-            from envs.dmc import DeepMindControl
+            from her_dream.envs.dmc import DeepMindControl
 
             env = DeepMindControl("reacher_subtle")
 
@@ -193,7 +193,7 @@ class TestDeepMindControlNameParsing:
 
 class TestDeepMindControlCameraDefaults:
     def _init_with_name(self, domain, camera=None):
-        from envs.dmc import DeepMindControl
+        from her_dream.envs.dmc import DeepMindControl
 
         env = DeepMindControl.__new__(DeepMindControl)
         env._action_repeat = 1

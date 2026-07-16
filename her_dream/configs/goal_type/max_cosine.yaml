@@ -1,0 +1,6 @@
+# @package _global_
+goal_type: max_cosine
+state_repr: logit # stoch | dist | logit   (reward fn's state arg)
+goal_repr: logit # sample | argmax | logit (the goal tensor)
+scope: full # first_row | full          (actor/critic goal input)
+uses_threshold: false

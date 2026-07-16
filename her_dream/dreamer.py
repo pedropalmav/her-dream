@@ -9,13 +9,14 @@ from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
 
-import distributions as dists
-import networks
-import rssm
-import tools
-from networks import Projector
-from optim import LaProp, clip_grad_agc_
-from tools import to_f32
+import her_dream.distributions as dists
+import her_dream.goals as goals
+import her_dream.networks as networks
+import her_dream.rssm as rssm
+import her_dream.tools as tools
+from her_dream.networks import Projector
+from her_dream.optim import LaProp, clip_grad_agc_
+from her_dream.tools import to_f32
 
 
 class Dreamer(nn.Module):
@@ -32,6 +33,7 @@ class Dreamer(nn.Module):
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         self.goal_type = str(config.goal_type)
+        self._goal_spec = goals.make_goal_spec(config)
         self.mission_text = config.mission_text
         self.wm_only = bool(config.wm_only)
         self.freeze_wm = bool(getattr(config, "freeze_wm", False))
@@ -79,8 +81,8 @@ class Dreamer(nn.Module):
             config.actor.dist = config.actor.dist.cont
 
         # Actor-critic components
-        goal_shape = self.rssm._discrete if config.goal_type == "first_row" else self.rssm.flat_stoch
-        threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if config.goal_type == "log_prob" else 0
+        goal_shape = goals.goal_size(self._goal_spec, self.rssm)
+        threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if self._goal_spec.uses_threshold else 0
         self.threshold_bins = threshold_bins
         self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape + threshold_bins)
         self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape + threshold_bins)
@@ -361,7 +363,7 @@ class Dreamer(nn.Module):
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
-        if self.goal_type in ("argmax_full", "log_prob", "prob"):
+        if goals.stashes_logit(self._goal_spec):
             state_dict["logit"] = logit
         return (
             action,
@@ -406,12 +408,9 @@ class Dreamer(nn.Module):
             action = self._random_action(N)
             stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
 
-        if self.goal_type == "argmax_full":
-            # Mode of the final prior, to match the argmax'd imag_logit used
-            # on the state side of argmax_full_reward.
-            K = logit.shape[-1]
-            return F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
-        return stoch
+        # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit, so the
+        # goal matches whatever the reward function compares against.
+        return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
 
     @torch.no_grad()
     def encode_observation(self, obs):
@@ -439,12 +438,8 @@ class Dreamer(nn.Module):
         is_first = torch.ones(N, dtype=torch.bool, device=self.device)
         # (N, S, K), (N, D), (N, S, K)
         stoch, _, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, is_first)
-        if self.goal_type == "argmax_full":
-            # Mode of the posterior, to match the argmax'd imag_logit used
-            # on the state side of argmax_full_reward.
-            K = logit.shape[-1]
-            return F.one_hot(torch.argmax(logit, dim=-1), num_classes=K).float()
-        return stoch
+        # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit.
+        return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
 
     @torch.no_grad()
     def _random_action(self, B):
@@ -696,12 +691,7 @@ class Dreamer(nn.Module):
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)  # noqa: E731
         imag_stoch = get_stoch_from_feat(imag_feat)
-        if self.goal_type in ("log_prob", "prob"):
-            reward_input = self.rssm.get_dist(imag_logit)
-        elif self.goal_type == "argmax_full":
-            reward_input = imag_logit
-        else:
-            reward_input = imag_stoch
+        reward_input = goals.reward_state(self._goal_spec, stoch=imag_stoch, logit=imag_logit, rssm=self.rssm)
         imag_reward = self.reward_function(reward_input, goal)
 
         # (B*T, T_imag, 1)  probability of continuation

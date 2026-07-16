@@ -11,7 +11,7 @@ run an optimization step.
 import pytest
 import torch
 
-from dreamer import Dreamer
+from her_dream.dreamer import Dreamer
 from tests.dreamer.conftest import (
     ACT,
     act_multi,
@@ -124,7 +124,7 @@ class TestCompile:
 class TestModeGuards:
     def _build_raw(self, **model_overrides):
         cfg = build_model_config(**model_overrides)
-        from rewards import make_reward
+        from her_dream.rewards import make_reward
 
         return Dreamer(
             cfg.model,

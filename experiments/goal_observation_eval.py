@@ -40,9 +40,40 @@ Three layers, each answering a different question:
      (arrived, no reward) say there was no signal to learn from. This is the direct
      test of the random-goal position-in-z hypothesis.
 
-Usage:
-    python3 experiments/goal_observation_eval.py --logdir <run> [<run> ...] \
+Usage — the six frozen-WM runs of the current investigation, on the GPU box:
+
+    uv run python3 experiments/goal_observation_eval.py \
+        --logdir logdir/post_train_from_wm_only/her_buffer_goals \
+                 logdir/post_train_from_wm_only/normal_buffer_goals \
+                 logdir/random_goal/posttrain_frozenwm_herbuf_goalbuf/01 \
+                 logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01 \
+                 logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/02 \
+                 logdir/random_goal/posttrain_randomstart_goalimag_rowbyrow/03 \
         --episodes 50 --target both --device cuda
+
+Those six are three contrasts. The first two (fixed_goal, `full` + buffer goals) are
+the positive control: post-training works there, score ≈ -430/-500. The next two are
+that same recipe on random_goal, where it never leaves the -1001 floor. The last two
+are the `row_by_row` + imagination recipe that does learn, plateauing at ≈ -290 while
+the videos show the agent ignoring the green square — the contradiction this script
+exists to settle.
+
+NOT `.../posttrain_randomstart_goalimag_rowbyrow/01`, despite the name: that run
+predates the argmax reward fix and trained against a dead gradient (its `train/rew`
+has 4 distinct values, all ≈ -1). The third healthy seed is
+`posttrain_randomstart_goalimag_rowbyrow_fixedrew/01`, which has logs but no
+`latest.pt` synced locally — add it if you fetch its checkpoint.
+
+Since every run above freezes its WM, layer 1 (the oracle) really measures the three
+underlying WMs (`wm_only_random_mission/01`, `wm_only_randomgoal/01`,
+`wm_only_randomstart/01`), not six independent things; runs sharing a WM should give
+the same layer-1 numbers, which doubles as a sanity check on the eval itself.
+
+Local smoke test (CPU, no CUDA needed, ~1 min):
+
+    uv run python3 experiments/goal_observation_eval.py \
+        --logdir logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01 \
+        --episodes 2 --target square --max-steps 40 --device cpu
 """
 
 import argparse

@@ -24,6 +24,36 @@ class TestRSSMInit:
         assert len(list(rssm_2._img_net.children())) > len(list(rssm_1._img_net.children()))
 
 
+class TestObsUseDeter:
+    def test_default_input_includes_deter(self, rssm):
+        first_linear = list(rssm._obs_net.children())[0]
+        assert first_linear.in_features == D + E
+
+    def test_flag_off_input_is_embed_only(self):
+        rssm = RSSM(make_rssm_config(obs_use_deter=False), embed_size=E, act_dim=A)
+        first_linear = list(rssm._obs_net.children())[0]
+        assert first_linear.in_features == E
+
+    def test_flag_off_obs_step_shapes(self, stoch, deter, action, embed, reset):
+        rssm = RSSM(make_rssm_config(obs_use_deter=False), embed_size=E, act_dim=A)
+        stoch_out, deter_out, logit_out = rssm.obs_step(stoch, deter, action, embed, reset)
+        assert stoch_out.shape == (B, S, K)
+        assert deter_out.shape == (B, D)
+        assert logit_out.shape == (B, S, K)
+
+    def test_flag_off_logit_ignores_deter(self, stoch, deter, action, embed):
+        # With obs_use_deter=False the posterior logits must depend on embed only:
+        # a step from a completely different (stoch, deter, action) gives the same logits.
+        rssm = RSSM(make_rssm_config(obs_use_deter=False), embed_size=E, act_dim=A)
+        no_reset = torch.zeros(B, dtype=torch.bool)
+        with torch.no_grad():
+            _, _, logit_a = rssm.obs_step(stoch, deter, action, embed, no_reset)
+            _, _, logit_b = rssm.obs_step(
+                torch.randn_like(stoch), torch.randn_like(deter), torch.randn_like(action), embed, no_reset
+            )
+        assert torch.allclose(logit_a, logit_b)
+
+
 class TestInitial:
     def test_stoch_shape(self, rssm):
         stoch, _ = rssm.initial(B)

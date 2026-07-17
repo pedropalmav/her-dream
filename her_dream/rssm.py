@@ -22,6 +22,7 @@ class RSSM(nn.Module):
         self._device = torch.device(config.device)
         self._act_dim = act_dim
         self._obs_layers = int(config.obs_layers)
+        self._obs_use_deter = bool(getattr(config, "obs_use_deter", True))
         self._img_layers = int(config.img_layers)
         self._dyn_layers = int(config.dyn_layers)
         self._blocks = int(config.blocks)
@@ -38,7 +39,7 @@ class RSSM(nn.Module):
         )
 
         self._obs_net = nn.Sequential()
-        inp_dim = self._deter + embed_size
+        inp_dim = (self._deter if self._obs_use_deter else 0) + embed_size
         for i in range(self._obs_layers):
             self._obs_net.add_module(f"obs_net_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
             self._obs_net.add_module(f"obs_net_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
@@ -98,11 +99,12 @@ class RSSM(nn.Module):
             rpad(reset, prev_action.dim() - int(reset.dim())), torch.zeros_like(prev_action), prev_action
         )
 
-        # Deterministic transition then posterior logits conditioned on embed.
+        # Deterministic transition then posterior logits conditioned on embed
+        # (and on deter unless obs_use_deter=False).
         # (B, D)
         deter = self._deter_net(stoch, deter, prev_action)
-        # (B, D + E)
-        x = torch.cat([deter, embed], dim=-1)
+        # (B, D + E) or (B, E)
+        x = torch.cat([deter, embed], dim=-1) if self._obs_use_deter else embed
         # (B, S, K)
         logit = self._obs_net(x)
 

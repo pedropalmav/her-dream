@@ -96,10 +96,13 @@ from experiments.common import (  # noqa: E402
     add_common_args,
     agent_pose,
     dump_json,
-    goal_pos,
+    encode_goal_image,
+    fixed_goal_cfg,
+    groups_matched,
     load_agent,
     posterior_rollout,
     random_policy,
+    reward_of,
     save_fig,
     scripted_policy,
     unwrap_env,
@@ -116,24 +119,25 @@ OUT = pathlib.Path(__file__).resolve().parent / "out"
 # ---------------------------------------------------------------- BFS oracle
 
 
-def _walkable(base, x: int, y: int) -> bool:
-    """Can the agent stand on cell (x, y)? (Goal tiles are overlappable.)"""
-    cell = base.grid.get(x, y)
-    return cell is None or cell.can_overlap()
+def _walkable(size: int, x: int, y: int) -> bool:
+    """Can the agent stand on cell (x, y)? The goal-grid rooms are a bordered box
+    with a single overlappable goal tile and no interior walls, so every interior
+    cell is walkable — no grid read (hence no env reset) needed."""
+    return 1 <= x <= size - 2 and 1 <= y <= size - 2
 
 
-def _successors(base, state):
+def _successors(size: int, state):
     """(action, next_state) for the three navigation actions from `state`."""
     x, y, d = state
     yield TURN_LEFT, (x, y, (d - 1) % 4)
     yield TURN_RIGHT, (x, y, (d + 1) % 4)
     dx, dy = DIR_TO_VEC[d]
     nx, ny = x + int(dx), y + int(dy)
-    if _walkable(base, nx, ny):
+    if _walkable(size, nx, ny):
         yield FORWARD, (nx, ny, d)
 
 
-def bfs_plan(base, start_pos, start_dir, target_pos, target_dir):
+def bfs_plan(size, start_pos, start_dir, target_pos, target_dir):
     """Shortest action sequence from the start pose to the target pose.
 
     BFS over `(x, y, dir)` rather than over cells: the target direction is part
@@ -157,7 +161,7 @@ def bfs_plan(base, start_pos, start_dir, target_pos, target_dir):
                 state, action = parent[state]
                 plan.append(action)
             return plan[::-1]
-        for action, nxt in _successors(base, state):
+        for action, nxt in _successors(size, state):
             if nxt not in parent:
                 parent[nxt] = (state, action)
                 queue.append(nxt)
@@ -167,52 +171,33 @@ def bfs_plan(base, start_pos, start_dir, target_pos, target_dir):
 # ------------------------------------------------------------ goal machinery
 
 
-def _target_state(mode: str, base, rng):
-    """Ground-truth `(pos, dir)` the goal image will depict."""
+def _sample_cell(size: int, rng) -> tuple:
+    """A uniformly random interior cell `(x, y)`."""
+    interior = np.arange(1, size - 1)
+    return int(rng.choice(interior)), int(rng.choice(interior))
+
+
+def _episode_layout(mode: str, env_cfg, rng):
+    """Read this episode's layout off the config and pick the goal-image target.
+
+    `evaluate` has already sampled the spawn and green-square positions into
+    `env_cfg` and built the env from it, so here we just read them back and choose
+    the target the goal image depicts: the green square (`square` mode, the real
+    task) or an arbitrary interior cell (`random` mode). Returns `(size, spawn_pos,
+    spawn_dir, square, target_pos, target_dir)`.
+    """
+    size = int(env_cfg.env_size)
+    spawn_pos = (int(env_cfg.agent_start_pos_x), int(env_cfg.agent_start_pos_y))
+    spawn_dir = int(env_cfg.agent_start_dir)
+    square = (int(env_cfg.goal_pos_x), int(env_cfg.goal_pos_y))
+
     if mode == "square":
-        pos = tuple(int(v) for v in goal_pos(base))
+        target_pos = square
     elif mode == "random":
-        interior = np.arange(1, base.size - 1)
-        pos = (int(rng.choice(interior)), int(rng.choice(interior)))
+        target_pos = _sample_cell(size, rng)
     else:
         raise ValueError(f"unknown target mode: {mode}")
-    return pos, int(rng.integers(4))
-
-
-@torch.no_grad()
-def _goal_z(agent, env, target_pos, target_dir) -> torch.Tensor:
-    """Render the target state and encode it into the (1, S, K) goal for this run.
-
-    `encode_observation` routes through `goals.goal_from_latent`, so the goal comes
-    back in whatever representation the run's goal_type asks for (a stoch sample,
-    an argmax one-hot, or the raw logit) — no branching needed here.
-    """
-    # TimeLimit/Dtype wrap GoalImageObservation and gymnasium wrappers no longer
-    # forward attribute access, so reach the method explicitly.
-    render_goal = env.get_wrapper_attr("goal_observation")
-    obs = render_goal(agent_pos=target_pos, agent_dir=target_dir)
-    batch = {
-        "image": torch.as_tensor(obs["image"][None], device=agent.device),
-        "direction": torch.as_tensor(obs["direction"][None], device=agent.device),
-    }
-    return agent.encode_observation(batch)
-
-
-def _reward_of(agent, spec, stoch, logit, goal) -> float:
-    """The run's own reward for this state/goal pair.
-
-    `goals.reward_state` picks the state argument the run's goal_type expects
-    (`stoch` / `logit` / `dist`), which is the same routing `Dreamer._cal_grad`
-    uses — so this stays correct for goal types added later (e.g. max_cosine,
-    which compares logits) without a branch here.
-    """
-    state = goals.reward_state(spec, stoch=stoch, logit=logit, rssm=agent.rssm)
-    return float(agent.reward_function(state, goal).reshape(-1)[0])
-
-
-def _groups_matched(z: torch.Tensor, goal: torch.Tensor) -> int:
-    """How many of the S groups share the goal's argmax category."""
-    return int((z.argmax(-1) == goal.argmax(-1)).sum().item())
+    return size, spawn_pos, spawn_dir, square, target_pos, int(rng.integers(4))
 
 
 # --------------------------------------------------------------- the layers
@@ -220,14 +205,12 @@ def _groups_matched(z: torch.Tensor, goal: torch.Tensor) -> int:
 
 def _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device):
     """Layer 1: drive the BFS plan for real; measure the z at arrival vs the goal z."""
-    last = None
-    for step in posterior_rollout(agent, env, scripted_policy(plan), device, max_steps=len(plan), seed=seed):
-        last = step
+    last = list(posterior_rollout(agent, env, scripted_policy(plan), device, max_steps=len(plan), seed=seed))[-1]
     base = unwrap_env(env)
     pose = agent_pose(base)
     S = goal.shape[1]
 
-    matched = _groups_matched(last.stoch, goal)
+    matched = groups_matched(last.stoch, goal)
     # Sampling floor: a second draw from the SAME posterior logits. Any exact-match
     # rate above this is signal; at or below it, the metric is measuring Gumbel noise.
     resample = agent.rssm.get_dist(last.logit).rsample()
@@ -236,9 +219,9 @@ def _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device):
         "arrived": pose == (target_pos, target_dir),
         "groups": matched,
         "full": matched == S,
-        "reward": _reward_of(agent, spec, last.stoch, last.logit, goal),
-        "floor_groups": _groups_matched(last.stoch, resample),
-        "floor_full": _groups_matched(last.stoch, resample) == S,
+        "reward": reward_of(agent, spec, last.stoch, last.logit, goal),
+        "floor_groups": groups_matched(last.stoch, resample),
+        "floor_full": groups_matched(last.stoch, resample) == S,
     }
 
 
@@ -259,9 +242,9 @@ def _drive(agent, spec, env, seed, policy, target_pos, target_dir, goal, device,
         if (pos, direction) == (target_pos, target_dir) and steps_to_pose is None:
             steps_to_pose = step.t
 
-        matched = _groups_matched(step.stoch, goal)
+        matched = groups_matched(step.stoch, goal)
         groups_seen.append(matched)
-        rewards.append(_reward_of(agent, spec, step.stoch, step.logit, goal))
+        rewards.append(reward_of(agent, spec, step.stoch, step.logit, goal))
         z_match = matched == S
         state_match = (pos, direction) == (target_pos, target_dir)
         conf["tp" if (z_match and state_match) else "fp" if z_match else "fn" if state_match else "tn"] += 1
@@ -278,25 +261,21 @@ def _drive(agent, spec, env, seed, policy, target_pos, target_dir, goal, device,
     }
 
 
-def run_episode(agent, spec, env, mode, seed, rng, max_steps, device):
-    """One episode: build the goal from a rendered state, then run all three layers."""
-    # max_steps=0 yields only the reset state: it seeds and resets the env so the
-    # layout can be read before any action is taken (the policy is never called).
-    next(posterior_rollout(agent, env, random_policy(rng), device, max_steps=0, seed=seed))
-    base = unwrap_env(env)
-    spawn_pos, spawn_dir = agent_pose(base)
+def run_episode(agent, spec, env, task, env_cfg, mode, seed, rng, max_steps, device):
+    """One episode: read the chosen layout off the config, build the goal, run the layers."""
+    size, spawn_pos, spawn_dir, square, target_pos, target_dir = _episode_layout(mode, env_cfg, rng)
 
-    target_pos, target_dir = _target_state(mode, base, rng)
-    goal = _goal_z(agent, env, target_pos, target_dir)
-    plan = bfs_plan(base, spawn_pos, spawn_dir, target_pos, target_dir)
+    plan = bfs_plan(size, spawn_pos, spawn_dir, target_pos, target_dir)
     if plan is None:
         return None
+    goal = encode_goal_image(agent, env, target_pos, target_dir)
 
     return {
         "seed": seed,
+        "task": task,
         "spawn": [list(spawn_pos), spawn_dir],
         "target": [list(target_pos), target_dir],
-        "green_square": [int(v) for v in goal_pos(base)],
+        "green_square": [int(v) for v in square],
         "oracle": _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device),
         "policy": _drive(
             agent, spec, env, seed, actor_policy(agent, goal), target_pos, target_dir, goal, device, max_steps
@@ -350,7 +329,13 @@ def summarize(episodes, S):
 def evaluate(logdir, modes, episodes, max_steps, device, seed):
     """Run every mode for one checkpoint."""
     agent, config, env_cfg = load_agent(logdir, device)
-    env = make_env(env_cfg, 0)
+    # 1. Was the run fixed-goal or random-goal? The eval always drives a
+    #    controllable FixedGoal (it can dictate both the spawn and the green
+    #    square), so remember the real task and reproduce the run's distribution by
+    #    how we sample the layout below.
+    task = env_cfg.task
+    random_goal = "fixed" not in task
+    size = int(env_cfg.env_size)
     # Same sub-config Dreamer builds its own spec from, so the eval routes states
     # and goals exactly as the run did while training.
     spec = goals.make_goal_spec(config.model)
@@ -360,7 +345,18 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
         rng = np.random.default_rng(seed)
         records = []
         for i in range(episodes):
-            record = run_episode(agent, spec, env, mode, seed + i, rng, max_steps, device)
+            # 2.1 Sample the layout: the agent (pos, dir) always, plus the green
+            #     square for random-goal runs (fixed-goal keeps its own goal_pos).
+            spawn_pos = _sample_cell(size, rng)
+            spawn_dir = int(rng.integers(4))
+            square = _sample_cell(size, rng) if random_goal else None
+            # 2.2 Build a fixed-goal env carrying this episode's layout.
+            episode_cfg = fixed_goal_cfg(
+                env_cfg, goal_pos=square, agent_start_pos=spawn_pos, agent_start_dir=spawn_dir
+            )
+            env = make_env(episode_cfg, 0)
+            # 2.3 run_episode reads the layout back off episode_cfg.
+            record = run_episode(agent, spec, env, task, episode_cfg, mode, seed + i, rng, max_steps, device)
             if record is not None:
                 records.append(record)
         if not records:
@@ -374,46 +370,72 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
             f"{100 * s['policy']['reach_pos_rate']:.0f}% vs random "
             f"{100 * s['random']['reach_pos_rate']:.0f}%"
         )
-    return results, {"goal_type": config.goal_type, "goal_sample": config.env.goal_sample, "task": env_cfg.task}
+    return results, {"goal_type": config.goal_type, "goal_sample": config.env.goal_sample, "task": task}
 
 
 # ------------------------------------------------------------------ plotting
 
 
+def _env_kind(meta) -> str:
+    """Which goal-grid env a run trained on: 'fixed_goal' or 'random_goal'."""
+    return "fixed_goal" if "fixed" in meta["task"] else "random_goal"
+
+
+def _run_label(name: str) -> str:
+    """A short axis label for a run dir (the seed-parent when the leaf is a digit)."""
+    return name.split("/")[-2] if name.split("/")[-1].isdigit() else name.split("/")[-1]
+
+
+def _panel_oracle(ax, summaries, x, S):
+    """Layer 1: how close the z at the target is to the goal z, vs the sampling floor."""
+    ax.bar(x - 0.2, [s["oracle"]["mean_groups"] for s in summaries], 0.4, label="oracle at target")
+    ax.bar(x + 0.2, [s["oracle"]["floor_mean_groups"] for s in summaries], 0.4, label="sampling floor")
+    ax.axhline(S, color="gray", ls="--", lw=1, label=f"{S} = full match")
+    ax.set_ylabel(f"groups matched / {S}")
+    ax.set_title("Is the goal-z attainable?\n(BFS oracle standing on the target)")
+
+
+def _panel_policy(ax, summaries, x):
+    """Layer 2: how often the trained policy reaches the target cell, vs random actions."""
+    ax.bar(x - 0.2, [100 * s["policy"]["reach_pos_rate"] for s in summaries], 0.4, label="trained policy")
+    ax.bar(x + 0.2, [100 * s["random"]["reach_pos_rate"] for s in summaries], 0.4, label="random actions")
+    ax.set_ylabel("episodes reaching the target cell (%)")
+    ax.set_title("Does the policy arrive?\n(ground truth, vs random baseline)")
+
+
 def plot(all_results, mode, path):
-    """Three panels: can the goal be hit, does the policy arrive, does z mean the state."""
+    """Two rows — fixed_goal (top) vs random_goal (bottom) — each with two panels:
+    is the goal-z attainable, and does the policy arrive."""
     names = [n for n in all_results if mode in all_results[n]["results"]]
     if not names:
         return
-    summaries = [all_results[n]["results"][mode]["summary"] for n in names]
-    x = np.arange(len(names))
-    labels = [n.split("/")[-2] if n.split("/")[-1].isdigit() else n.split("/")[-1] for n in names]
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(17, 5))
+    rows = [
+        ("fixed_goal", "fixed goal (green square fixed)"),
+        ("random_goal", "random goal (green square moves)"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10), squeeze=False)
 
-    S = summaries[0]["oracle"]["groups_total"]
-    ax1.bar(x - 0.2, [s["oracle"]["mean_groups"] for s in summaries], 0.4, label="oracle at target")
-    ax1.bar(x + 0.2, [s["oracle"]["floor_mean_groups"] for s in summaries], 0.4, label="sampling floor")
-    ax1.axhline(S, color="gray", ls="--", lw=1, label=f"{S} = full match")
-    ax1.set_ylabel(f"groups matched / {S}")
-    ax1.set_title("1. Is the goal-z attainable?\n(BFS oracle standing on the target)")
+    for (kind, kind_label), (ax_oracle, ax_policy) in zip(rows, axes):
+        group = [n for n in names if _env_kind(all_results[n]["meta"]) == kind]
+        if not group:
+            for ax in (ax_oracle, ax_policy):
+                ax.text(0.5, 0.5, f"no {kind} runs", ha="center", va="center", transform=ax.transAxes)
+                ax.set_axis_off()
+            continue
 
-    ax2.bar(x - 0.2, [100 * s["policy"]["reach_pos_rate"] for s in summaries], 0.4, label="trained policy")
-    ax2.bar(x + 0.2, [100 * s["random"]["reach_pos_rate"] for s in summaries], 0.4, label="random actions")
-    ax2.set_ylabel("episodes reaching the target cell (%)")
-    ax2.set_title("2. Does the policy arrive?\n(ground truth, vs random baseline)")
+        summaries = [all_results[n]["results"][mode]["summary"] for n in group]
+        x = np.arange(len(group))
+        labels = [_run_label(n) for n in group]
+        S = summaries[0]["oracle"]["groups_total"]
 
-    fp = [100 * (s["confusion"]["false_positive_rate"] or 0) for s in summaries]
-    fn = [100 * (s["confusion"]["false_negative_rate"] or 0) for s in summaries]
-    ax3.bar(x - 0.2, fp, 0.4, label="false positive (reward, wrong cell)")
-    ax3.bar(x + 0.2, fn, 0.4, label="false negative (at cell, no reward)")
-    ax3.set_ylabel("% of steps")
-    ax3.set_title("3. Does the z mean the state?\n(reward firing vs ground truth)")
-
-    for ax in (ax1, ax2, ax3):
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
-        ax.legend(fontsize=8)
+        _panel_oracle(ax_oracle, summaries, x, S)
+        _panel_policy(ax_policy, summaries, x)
+        for ax in (ax_oracle, ax_policy):
+            ax.set_ylabel(f"{kind_label}\n{ax.get_ylabel()}")
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
+            ax.legend(fontsize=8)
 
     fig.suptitle(f"Observation-goal evaluation — target: {mode}")
     fig.tight_layout()

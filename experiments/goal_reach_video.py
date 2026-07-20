@@ -66,10 +66,12 @@ from experiments.common import (  # noqa: E402
     actor_policy,
     add_common_args,
     agent_pose,
+    encode_goal_image,
     goal_pos,
     load_agent,
     posterior_rollout,
     random_policy,
+    reward_of,
     save_fig,
     unwrap_env,
 )
@@ -105,32 +107,18 @@ def pin_layout(base, goal_cell, agent_cell):
     base._gen_grid = _gen_grid
 
 
-@torch.no_grad()
 def build_goal(agent, env, target_pos, target_dir):
-    """Render `(target_pos, target_dir)` and encode it into this run's goal z.
+    """Encode `(target_pos, target_dir)` into this run's goal z, keeping the image.
 
-    Returns `(goal, goal_img)`: the (1, S, K) goal `encode_observation` produces
-    (raw logit for max_cosine) and the uint8 RGB image it was encoded from, kept
-    for the reference panel. `get_wrapper_attr` reaches the method through the
-    TimeLimit/Dtype wrappers that no longer forward attribute access.
+    The goal tensor is produced by the shared `encode_goal_image` (raw logit for
+    max_cosine, via `goals.goal_from_latent`); we re-render the same deterministic
+    state once more only to keep the uint8 RGB image for the reference panel.
+    `get_wrapper_attr` reaches `goal_observation` through the TimeLimit/Dtype
+    wrappers that no longer forward attribute access.
     """
-    render_goal = env.get_wrapper_attr("goal_observation")
-    obs = render_goal(agent_pos=target_pos, agent_dir=target_dir)
-    batch = {
-        "image": torch.as_tensor(obs["image"][None], device=agent.device),
-        "direction": torch.as_tensor(obs["direction"][None], device=agent.device),
-    }
-    return agent.encode_observation(batch), obs["image"]
-
-
-def reward_of(agent, spec, stoch, logit, goal):
-    """The run's own reward for this state/goal pair (max_cosine here).
-
-    Routes the state arg through `goals.reward_state` exactly as
-    `Dreamer._cal_grad` does, so it stays correct for the run's goal_type.
-    """
-    state = goals.reward_state(spec, stoch=stoch, logit=logit, rssm=agent.rssm)
-    return float(agent.reward_function(state, goal).reshape(-1)[0])
+    goal = encode_goal_image(agent, env, target_pos, target_dir)
+    goal_img = env.get_wrapper_attr("goal_observation")(agent_pos=target_pos, agent_dir=target_dir)["image"]
+    return goal, goal_img
 
 
 def compose_frame(live_img, goal_img, title):

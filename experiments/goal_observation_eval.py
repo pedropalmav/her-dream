@@ -89,6 +89,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 from minigrid.core.constants import DIR_TO_VEC  # noqa: E402
 
 from experiments.common import (  # noqa: E402
@@ -386,35 +388,64 @@ def _run_label(name: str) -> str:
     return name.split("/")[-2] if name.split("/")[-1].isdigit() else name.split("/")[-1]
 
 
-def _panel_oracle(ax, summaries, x, S):
-    """Layer 1: how close the z at the target is to the goal z, vs the sampling floor."""
-    ax.bar(x - 0.2, [s["oracle"]["mean_groups"] for s in summaries], 0.4, label="oracle at target")
-    ax.bar(x + 0.2, [s["oracle"]["floor_mean_groups"] for s in summaries], 0.4, label="sampling floor")
-    ax.axhline(S, color="gray", ls="--", lw=1, label=f"{S} = full match")
+# Primary series (trained agent / oracle) vs its baseline (sampling floor / random).
+_PRIMARY, _BASELINE = "#4C72B0", "#DD8452"
+
+
+def _paired_dist(ax, x, series_primary, series_baseline, width=0.35):
+    """Per run, a box + jittered per-episode points for the primary and baseline
+    series side by side, so the spread across episodes (not just the mean) shows."""
+    jitter = np.random.default_rng(0)
+    for sign, series, color in ((-1, series_primary, _PRIMARY), (1, series_baseline, _BASELINE)):
+        pos = x + sign * (width / 2 + 0.03)
+        bp = ax.boxplot(series, positions=pos, widths=width, patch_artist=True,
+                        showfliers=False, medianprops=dict(color="black"))
+        for box in bp["boxes"]:
+            box.set(facecolor=color, alpha=0.55)
+        for xi, vals in zip(pos, series):
+            ax.scatter(xi + (jitter.random(len(vals)) - 0.5) * width, vals,
+                       s=7, color=color, alpha=0.45, edgecolors="none", zorder=3)
+
+
+def _panel_oracle(ax, x, eps, S):
+    """Layer 1: per-episode distribution of the z-match at the target vs the floor."""
+    _paired_dist(ax, x, [[e["oracle"]["groups"] for e in ep] for ep in eps],
+                 [[e["oracle"]["floor_groups"] for e in ep] for ep in eps])
+    ax.axhline(S, color="gray", ls="--", lw=1)
     ax.set_ylabel(f"groups matched / {S}")
     ax.set_title("Is the goal-z attainable?\n(BFS oracle standing on the target)")
+    ax.legend(handles=[
+        Patch(facecolor=_PRIMARY, alpha=0.55, label="oracle at target"),
+        Patch(facecolor=_BASELINE, alpha=0.55, label="sampling floor"),
+        Line2D([0], [0], color="gray", ls="--", lw=1, label=f"{S} = full match"),
+    ], fontsize=8)
 
 
-def _panel_policy(ax, summaries, x):
-    """Layer 2: how often the trained policy reaches the target cell, vs random actions."""
-    ax.bar(x - 0.2, [100 * s["policy"]["reach_pos_rate"] for s in summaries], 0.4, label="trained policy")
-    ax.bar(x + 0.2, [100 * s["random"]["reach_pos_rate"] for s in summaries], 0.4, label="random actions")
-    ax.set_ylabel("episodes reaching the target cell (%)")
-    ax.set_title("Does the policy arrive?\n(ground truth, vs random baseline)")
+def _panel_policy(ax, x, eps):
+    """Layer 2: per-episode distribution of the closest approach, policy vs random."""
+    _paired_dist(ax, x, [[e["policy"]["min_dist"] for e in ep] for ep in eps],
+                 [[e["random"]["min_dist"] for e in ep] for ep in eps])
+    ax.set_ylabel("closest distance to target (cells)")
+    ax.set_title("Does the policy get closer?\n(closest approach, vs random baseline)")
+    ax.legend(handles=[
+        Patch(facecolor=_PRIMARY, alpha=0.55, label="trained policy"),
+        Patch(facecolor=_BASELINE, alpha=0.55, label="random actions"),
+    ], fontsize=8)
 
 
 def plot(all_results, mode, path):
     """Two rows — fixed_goal (top) vs random_goal (bottom) — each with two panels:
-    is the goal-z attainable, and does the policy arrive."""
+    the per-episode distribution of goal-z attainability and of policy closest approach."""
     names = [n for n in all_results if mode in all_results[n]["results"]]
     if not names:
         return
 
+    n_ep = all_results[names[0]]["results"][mode]["summary"]["episodes"]
     rows = [
         ("fixed_goal", "fixed goal (green square fixed)"),
         ("random_goal", "random goal (green square moves)"),
     ]
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), squeeze=False)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), squeeze=False)
 
     for (kind, kind_label), (ax_oracle, ax_policy) in zip(rows, axes):
         group = [n for n in names if _env_kind(all_results[n]["meta"]) == kind]
@@ -424,20 +455,19 @@ def plot(all_results, mode, path):
                 ax.set_axis_off()
             continue
 
-        summaries = [all_results[n]["results"][mode]["summary"] for n in group]
+        eps = [all_results[n]["results"][mode]["episodes"] for n in group]
         x = np.arange(len(group))
         labels = [_run_label(n) for n in group]
-        S = summaries[0]["oracle"]["groups_total"]
+        S = all_results[group[0]]["results"][mode]["summary"]["oracle"]["groups_total"]
 
-        _panel_oracle(ax_oracle, summaries, x, S)
-        _panel_policy(ax_policy, summaries, x)
+        _panel_oracle(ax_oracle, x, eps, S)
+        _panel_policy(ax_policy, x, eps)
         for ax in (ax_oracle, ax_policy):
             ax.set_ylabel(f"{kind_label}\n{ax.get_ylabel()}")
             ax.set_xticks(x)
             ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
-            ax.legend(fontsize=8)
 
-    fig.suptitle(f"Observation-goal evaluation — target: {mode}")
+    fig.suptitle(f"Per-episode distribution ({n_ep} episodes) — target: {mode}")
     fig.tight_layout()
     save_fig(fig, path)
 

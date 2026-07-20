@@ -59,6 +59,7 @@ from experiments.common import (
     agent_pose,
     dump_json,
     experiment_outdir,
+    fixed_goal_cfg,
     load_agent,
     posterior_probs,
     save_fig,
@@ -75,16 +76,6 @@ ACT_LEFT = 0
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def make_fixed_goal_cfg(env_cfg_resolved: dict, goal_pos: tuple[int, int]):
-    """Config de env fixed-goal con el cuadrado en `goal_pos`, resto idéntico."""
-    cfg = OmegaConf.create(dict(env_cfg_resolved))
-    OmegaConf.set_struct(cfg, False)
-    cfg.task = "fixed-goal_"
-    cfg.goal_pos_x = int(goal_pos[0])
-    cfg.goal_pos_y = int(goal_pos[1])
-    return cfg
-
-
 def collect_obs_sequence(env_cfg_resolved: dict, goal_pos: tuple[int, int], action_indices: list[int]) -> dict:
     """
     Corre `action_indices` en un FixedGoal con el cuadrado en `goal_pos` y
@@ -92,7 +83,7 @@ def collect_obs_sequence(env_cfg_resolved: dict, goal_pos: tuple[int, int], acti
     El env es determinista dado el plan de acciones, así que una sola pasada
     basta para todas las repeticiones.
     """
-    env = make_env(make_fixed_goal_cfg(env_cfg_resolved, goal_pos), 0)
+    env = make_env(fixed_goal_cfg(env_cfg_resolved, goal_pos=goal_pos), 0)
     obs = env.reset()
     n_actions = env.action_space.shape[0]
 

@@ -49,3 +49,22 @@ def onehot_action(idx: int, n_actions: int) -> np.ndarray:
     act = np.zeros(n_actions, dtype=np.float32)
     act[idx] = 1.0
     return act
+
+
+@torch.no_grad()
+def encode_goal_image(agent, env, target_pos, target_dir) -> torch.Tensor:
+    """Render the target state and encode it into the (1, S, K) goal for this run.
+
+    `encode_observation` routes through `goals.goal_from_latent`, so the goal comes
+    back in whatever representation the run's goal_type asks for (a stoch sample,
+    an argmax one-hot, or the raw logit) — no branching needed here.
+    """
+    # TimeLimit/Dtype wrap GoalImageObservation and gymnasium wrappers no longer
+    # forward attribute access, so reach the method explicitly.
+    render_goal = env.get_wrapper_attr("goal_observation")
+    obs = render_goal(agent_pos=target_pos, agent_dir=target_dir)
+    batch = {
+        "image": torch.as_tensor(obs["image"][None], device=agent.device),
+        "direction": torch.as_tensor(obs["direction"][None], device=agent.device),
+    }
+    return agent.encode_observation(batch)

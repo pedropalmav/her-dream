@@ -19,7 +19,7 @@ from dash import html
 from gymnasium.utils import seeding
 from omegaconf import OmegaConf
 
-import her_dream.goals as goals
+import her_dream.tools as tools
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_env, make_envs
 from her_dream.rewards import make_reward
@@ -784,26 +784,13 @@ def load_agent(logdir, device: str | None = None):
     config.env.device = device
 
     # Detecta un checkpoint sin objetivo (Crafter vanilla, etc.): le faltan las
-    # claves de goal que `Dreamer` espera. Rellena defaults inocuos para que el
-    # constructor no falle; el reward goal-conditioned no se usa en el viz.
-    has_goal = "goal_type" in config.model
-    model_defaults = {
-        "wm_only": False,
-        "goal_type": "first_row",
-        "mission_text": False,
-        "prob_threshold": 0.5,
-        "prob_threshold_step": 0.05,
-    }
-    for key, val in model_defaults.items():
-        if key not in config.model:
-            config.model[key] = val
-    # Goal-type descriptors were added later; backfill from the config group so the
-    # Dreamer constructor (make_goal_spec) does not fail on older checkpoints.
-    if "state_repr" not in config.model:
-        for key, val in goals.default_descriptors(config.model.goal_type).items():
-            config.model[key] = val
+    # claves de goal que `Dreamer` espera. `backfill_config` rellena defaults
+    # inocuos para que el constructor no falle (el reward goal-conditioned no se
+    # usa en el viz) y reporta `wm_only=True` para esos checkpoints sin goal.
+    config, wm_only = tools.backfill_config(config)
+    has_goal = not wm_only
 
-    reward_fn = make_reward(config) if "goal_type" in config else None
+    reward_fn = None if wm_only else make_reward(config)
     _, _, obs_space, act_space = make_envs(config.env)
 
     agent = Dreamer(

@@ -78,8 +78,7 @@ def make_config(**overrides):
     )
     defaults.update(overrides)
     # Fill goal-type descriptors from the config group unless explicitly overridden.
-    for key, val in goals.default_descriptors(defaults["goal_type"]).items():
-        defaults.setdefault(key, val)
+    goals.with_default_descriptors(defaults)
     return SimpleNamespace(**defaults)
 
 

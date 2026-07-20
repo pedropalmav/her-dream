@@ -3,6 +3,7 @@ from .checkpoint import (
     recursively_collect_optim_state_dict,
     recursively_load_optim_state_dict,
 )
+from .config_compat import backfill_config
 from .logging import Logger, Tee, make_logger, setup_console_log
 from .math_utils import compute_global_norm, compute_rms
 from .model_inspection import build_module_tree, print_module_tree, print_param_stats
@@ -28,6 +29,7 @@ __all__ = [
     "tensorstats",
     "recursively_collect_optim_state_dict",
     "recursively_load_optim_state_dict",
+    "backfill_config",
     "build_module_tree",
     "print_module_tree",
     "print_param_stats",

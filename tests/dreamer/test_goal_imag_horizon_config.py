@@ -6,13 +6,18 @@ goals for `imag_horizon` steps. These tests pin that contract: the default
 follows `imag_horizon`, and an explicit override decouples the two.
 """
 
-import pytest
-from hydra import compose, initialize
+import pathlib
+
+from hydra import compose, initialize_config_dir
+
+import her_dream.goals as goals
+
+# Hydra configs now ship inside the her_dream package (next to goals.py).
+_CONFIG_DIR = str(pathlib.Path(goals.__file__).parent / "configs")
 
 
 def _compose(*overrides):
-    # config_path is relative to this test file's directory.
-    with initialize(version_base=None, config_path="../../configs"):
+    with initialize_config_dir(version_base=None, config_dir=_CONFIG_DIR):
         return compose(config_name="configs", overrides=list(overrides))
 
 

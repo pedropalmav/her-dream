@@ -46,7 +46,6 @@ uv run python -m experiments.goal_position_in_z \
 """
 
 import argparse
-import json
 import pathlib
 from pathlib import Path
 
@@ -55,9 +54,18 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+from experiments.common import (
+    add_common_args,
+    agent_pose,
+    dump_json,
+    experiment_outdir,
+    load_agent,
+    posterior_probs,
+    save_fig,
+    stack_obs,
+    unwrap_env,
+)
+from her_dream.envs import make_env
 
 ACT_LEFT = 0
 
@@ -97,34 +105,14 @@ def collect_obs_sequence(env_cfg_resolved: dict, goal_pos: tuple[int, int], acti
         if done:
             raise RuntimeError(f"Episodio terminó tempranamente con goal en {goal_pos}")
 
-    base = env
-    while hasattr(base, "env"):
-        base = base.env
+    (ax, ay), adir = agent_pose(unwrap_env(env))
     return {
         "obs_seq": obs_seq,
         "n_actions": n_actions,
-        "agent_pos": tuple(int(c) for c in base.agent_pos),
-        "agent_dir": int(base.agent_dir),
+        "agent_pos": (ax, ay),
+        "agent_dir": adir,
         "image0": np.array(obs_seq[0]["image"]),
     }
-
-
-def _stack_obs(per_pos_seqs: list[list[dict]], t: int, repeats: int, device: str) -> dict:
-    """Apila la obs del paso `t` de cada posición y repite R veces → (P·R, ...)."""
-    keys = per_pos_seqs[0][t].keys()
-    out = {}
-    for k in keys:
-        vals = [seq[t][k] for seq in per_pos_seqs]
-        if isinstance(vals[0], np.ndarray):
-            arr = np.stack(vals, axis=0)
-            tens = torch.as_tensor(arr, dtype=torch.float32, device=device)
-            if arr.dtype == np.uint8:
-                tens = tens / 255.0
-            out[k] = tens.repeat_interleave(repeats, dim=0)
-        elif isinstance(vals[0], (bool, np.bool_)):
-            tens = torch.tensor([[float(v)] for v in vals], dtype=torch.float32, device=device)
-            out[k] = tens.repeat_interleave(repeats, dim=0)
-    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +122,7 @@ def _stack_obs(per_pos_seqs: list[list[dict]], t: int, repeats: int, device: str
 
 @torch.no_grad()
 def batched_posterior(
-    agent: Dreamer,
+    agent,
     per_pos_seqs: list[list[dict]],
     action_indices: list[int],
     n_actions: int,
@@ -158,7 +146,7 @@ def batched_posterior(
 
     logits_t0 = None
     for t in range(T + 1):
-        obs_t = _stack_obs(per_pos_seqs, t, repeats, device)
+        obs_t = stack_obs(per_pos_seqs, t, repeats, device)
         embed = agent.encoder(obs_t)
         is_first = torch.full((B,), t == 0, dtype=torch.bool, device=device)
         stoch, deter, logit = agent.rssm.obs_step(stoch, deter, prev_action, embed, is_first)
@@ -244,12 +232,6 @@ def match_probability(probs: torch.Tensor) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _save(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Plot: {path}")
-
-
 def plot_all(
     *,
     positions: list[tuple[int, int]],
@@ -275,7 +257,7 @@ def plot_all(
     ax.set_title("¿Qué slots cambian cuando solo se mueve el cuadrado verde?")
     ax.set_xticks(x)
     ax.legend()
-    _save(fig, outdir / "inter_vs_intra_variation_per_slot.png")
+    save_fig(fig, outdir / "inter_vs_intra_variation_per_slot.png")
 
     # ── Consenso (posiciones × slots) ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(min(20, 0.3 * S + 2), max(6, 0.12 * P)), constrained_layout=True)
@@ -284,7 +266,7 @@ def plot_all(
     ax.set_ylabel("Posición del cuadrado (orden y,x)")
     ax.set_title("Clase modal de consenso por slot, una fila por posición del cuadrado")
     plt.colorbar(im, ax=ax, fraction=0.03, label="argmax_k")
-    _save(fig, outdir / "consensus_modes_positions_x_slots.png")
+    save_fig(fig, outdir / "consensus_modes_positions_x_slots.png")
 
     # ── Mapas espaciales de los slots más sensibles ──────────────────────────
     top = order[:8]
@@ -300,7 +282,7 @@ def plot_all(
         ax.set_yticks([])
     fig.suptitle("Clase modal del slot según la celda del cuadrado verde (★ = agente)", fontsize=13)
     fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.02, label="argmax_k")
-    _save(fig, outdir / "spatial_maps_top_slots.png")
+    save_fig(fig, outdir / "spatial_maps_top_slots.png")
 
     # ── Colisión por slot: misma posición vs cruzada ─────────────────────────
     fig, ax = plt.subplots(figsize=(max(10, 0.3 * S), 5), constrained_layout=True)
@@ -313,7 +295,7 @@ def plot_all(
     ax.set_title("Prob. de que el slot coincida entre dos muestras (escala log)")
     ax.set_xticks(x)
     ax.legend()
-    _save(fig, outdir / "collision_per_slot_same_vs_cross.png")
+    save_fig(fig, outdir / "collision_per_slot_same_vs_cross.png")
 
     # ── Matriz log10 P(match z-full) ─────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 8), constrained_layout=True)
@@ -322,7 +304,7 @@ def plot_all(
     ax.set_ylabel("Posición del cuadrado (episodio actual)")
     ax.set_title("log10 P(match z-full, 32 slots) entre posiciones")
     plt.colorbar(im, ax=ax, fraction=0.046, label="log10 P")
-    _save(fig, outdir / "log10_match_matrix.png")
+    save_fig(fig, outdir / "log10_match_matrix.png")
 
     # ── Histograma same vs cross ─────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
@@ -344,7 +326,7 @@ def plot_all(
     ax.set_ylabel("Frecuencia (pares)")
     ax.set_title("Alcanzabilidad del reward `full`: goal del mismo episodio vs de otro")
     ax.legend()
-    _save(fig, outdir / "hist_log10_match.png")
+    save_fig(fig, outdir / "hist_log10_match.png")
 
     # ── Observaciones de muestra ─────────────────────────────────────────────
     n_show = min(6, len(images0))
@@ -355,7 +337,7 @@ def plot_all(
         ax.set_title(f"goal={positions[i]}", fontsize=9)
         ax.axis("off")
     fig.suptitle("Misma pose del agente, solo se mueve el cuadrado verde")
-    _save(fig, outdir / "sample_observations.png")
+    save_fig(fig, outdir / "sample_observations.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -365,7 +347,7 @@ def plot_all(
 
 @torch.no_grad()
 def run_goal_position_in_z(
-    agent: Dreamer,
+    agent,
     env_cfg_resolved: dict,
     action_indices: list[int],
     repeats: int,
@@ -378,7 +360,10 @@ def run_goal_position_in_z(
     agent_start = (int(env_cfg_resolved["agent_start_pos_x"]), int(env_cfg_resolved["agent_start_pos_y"]))
     positions = [(x, y) for y in range(1, size - 1) for x in range(1, size - 1) if (x, y) != agent_start]
 
-    print(f"\nBarrido de {len(positions)} posiciones del cuadrado verde (interior {size - 2}x{size - 2}, agente fijo en {agent_start})")
+    print(
+        f"\nBarrido de {len(positions)} posiciones del cuadrado verde "
+        f"(interior {size - 2}x{size - 2}, agente fijo en {agent_start})"
+    )
     print(f"Trayectoria por posición: {len(action_indices)} acciones, {repeats} repeticiones (Gumbel)")
 
     # ── Observaciones por posición (env determinista, una pasada) ────────────
@@ -390,8 +375,8 @@ def run_goal_position_in_z(
 
     # ── Posterior batcheado ──────────────────────────────────────────────────
     out = batched_posterior(agent, [d["obs_seq"] for d in per_pos], action_indices, n_actions, repeats, device)
-    probs_last = agent.rssm.get_dist(out["logits_last"].to(device)).base_dist.probs.cpu()  # (P, R, S, K)
-    probs_t0 = agent.rssm.get_dist(out["logits_t0"].to(device)).base_dist.probs.cpu()
+    probs_last = posterior_probs(agent, out["logits_last"].to(device)).cpu()  # (P, R, S, K)
+    probs_t0 = posterior_probs(agent, out["logits_t0"].to(device)).cpu()
 
     P, R, S, K = probs_last.shape
 
@@ -454,8 +439,7 @@ def run_goal_position_in_z(
         "log10_match_cross_mean": float(mp["log10_match_cross"].mean()),
         "consensus_modes": sm["consensus"].tolist(),
     }
-    with open(outdir / "goal_position_in_z.json", "w") as f:
-        json.dump(results, f, indent=2)
+    dump_json(results, outdir / "goal_position_in_z.json")
 
     print(f"\n  Guardado en {outdir}")
     return results
@@ -466,42 +450,19 @@ def run_goal_position_in_z(
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", required=True, help="Run con .hydra/config.yaml y latest.pt (WM a inspeccionar)")
-    parser.add_argument("--device", default=None)
+    parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument("--repeats", type=int, default=8, help="Repeticiones por posición (ruido Gumbel)")
     parser.add_argument(
         "--spin", type=int, default=4, help="Giros a la izquierda antes de medir (múltiplo de 4 = misma pose)"
     )
-    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     logdir = pathlib.Path(args.logdir)
 
-    config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
-    device = args.device or config.device
-    config.device = device
-
-    # Backfill defaults for keys added after this run was trained.
-    if "wm_only" not in config.model:
-        OmegaConf.set_struct(config.model, False)
-        config.model.wm_only = False
-
-    resolved = OmegaConf.to_container(config, resolve=True)
-    resolved["env"]["device"] = device
-    env_cfg_resolved = resolved["env"]
-
-    # Espacios de obs/acción desde un env igual al de entrenamiento.
-    probe_env = make_env(OmegaConf.create(env_cfg_resolved), 0)
-    obs_space, act_space = probe_env.observation_space, probe_env.action_space
-
-    reward_function = make_reward(config)
-    agent = Dreamer(config.model, obs_space, act_space, reward_function=reward_function).to(device)
-    checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"])
-    agent.eval()
-    print(f"Checkpoint cargado: {logdir / 'latest.pt'}")
+    agent, config, env_cfg = load_agent(logdir, args.device)
+    device = config.device
+    env_cfg_resolved = OmegaConf.to_container(env_cfg, resolve=True)
 
     run_goal_position_in_z(
         agent=agent,
@@ -509,5 +470,5 @@ if __name__ == "__main__":
         action_indices=[ACT_LEFT] * args.spin,
         repeats=args.repeats,
         device=device,
-        outdir=logdir / "experiments" / "goal_position_in_z",
+        outdir=experiment_outdir(logdir, "goal_position_in_z"),
     )

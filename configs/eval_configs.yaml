@@ -1,8 +1,0 @@
-defaults:
-  - logger: tensorboard
-  - _self_
-
-experiment_dir: ???     # path to experiment dir (contains .hydra/config.yaml and latest.pt)
-num_episodes: 6
-eval_time_limit: 300
-manual_control: false

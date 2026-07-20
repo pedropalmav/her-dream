@@ -5,6 +5,7 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
+import her_dream.goals as goals
 from tests.envs.conftest import DictNamespace
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,10 @@ def make_config(task="random-goal_default", **overrides):
         eval_episode_num=1,
         device="cpu",
     )
-    return DictNamespace(**{**defaults, **overrides})
+    merged = {**defaults, **overrides}
+    for key, val in goals.default_descriptors(merged["goal_type"]).items():
+        merged.setdefault(key, val)
+    return DictNamespace(**merged)
 
 
 _SPACES = {
@@ -97,7 +101,7 @@ def _make_dummy_gym_env(n_actions=4):
 
 class TestMakeEnvSuites:
     def test_invalid_suite_raises_not_implemented(self):
-        from envs import make_env
+        from her_dream.envs import make_env
 
         config = make_config(task="unknown_task")
         with pytest.raises(NotImplementedError):
@@ -108,12 +112,12 @@ class TestMakeEnvSuites:
         dummy_env = _DummyBoxEnv()
         dummy.DeepMindControl.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.dmc": dummy}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.dmc": dummy}):
+            from her_dream.envs import make_env
 
             config = make_config(task="dmc_walker_walk")
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -124,12 +128,12 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(18)
         dummy_atari.Atari.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.atari": dummy_atari}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.atari": dummy_atari}):
+            from her_dream.envs import make_env
 
             config = make_config(task="atari_pong")
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -139,12 +143,12 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(5)
         dummy_mem.MemoryMaze.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.memorymaze": dummy_mem}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.memorymaze": dummy_mem}):
+            from her_dream.envs import make_env
 
             config = make_config(task="memorymaze_9x9")
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -154,12 +158,12 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.crafter": dummy_crafter}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+            from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward")
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -168,12 +172,12 @@ class TestMakeEnvSuites:
         dummy_env = _DummyBoxEnv()
         dummy_mw.MetaWorld.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.metaworld": dummy_mw}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.metaworld": dummy_mw}):
+            from her_dream.envs import make_env
 
             config = make_config(task="metaworld_reach")
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -183,12 +187,12 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(7)
         dummy_rg.make_random_goal_env.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.random_goal": dummy_rg}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.random_goal": dummy_rg}):
+            from her_dream.envs import make_env
 
             config = make_config(task="random-goal_default", mission_text=False)
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
@@ -196,14 +200,12 @@ class TestMakeEnvSuites:
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        import envs.random_goal as rg_module
+        import her_dream.envs.random_goal as rg_module
 
         with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
-            from envs import make_env
+            from her_dream.envs import make_env
 
-            config = make_config(
-                task="random-goal_default", mission_text=False, agent_start_random=True
-            )
+            config = make_config(task="random-goal_default", mission_text=False, agent_start_random=True)
             make_env(config, 0)
 
         assert mock_make.call_args.kwargs["agent_start_pos"] is None
@@ -212,10 +214,10 @@ class TestMakeEnvSuites:
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        import envs.random_goal as rg_module
+        import her_dream.envs.random_goal as rg_module
 
         with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
-            from envs import make_env
+            from her_dream.envs import make_env
 
             # agent_start_random absent → getattr default False → use configured pos
             config = make_config(task="random-goal_default", mission_text=False)
@@ -227,12 +229,12 @@ class TestMakeEnvSuites:
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        import envs.random_goal as rg_module
+        import her_dream.envs.random_goal as rg_module
 
         with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env):
-            with patch("envs.wrappers.MissionGridWrapper") as mock_mgw:
+            with patch("her_dream.envs.wrappers.MissionGridWrapper") as mock_mgw:
                 mock_mgw.return_value = dummy_env
-                from envs import make_env
+                from her_dream.envs import make_env
 
                 config = make_config(task="random-goal_default", mission_text=True)
                 make_env(config, 0)
@@ -244,24 +246,24 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(7)
         dummy_fg.make_fixed_goal_env.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.fixed_goal": dummy_fg}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.fixed_goal": dummy_fg}):
+            from her_dream.envs import make_env
 
             config = make_config(task="fixed-goal_default", goal_pos_x=8, goal_pos_y=1, mission_text=False)
             env = make_env(config, 0)
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
     def test_fixed_goal_with_mission_text(self):
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
-        import envs.fixed_goal as fg_module
+        import her_dream.envs.fixed_goal as fg_module
 
         with patch.object(fg_module, "make_fixed_goal_env", return_value=dummy_env):
-            with patch("envs.wrappers.MissionGridWrapper") as mock_mgw:
+            with patch("her_dream.envs.wrappers.MissionGridWrapper") as mock_mgw:
                 mock_mgw.return_value = dummy_env
-                from envs import make_env
+                from her_dream.envs import make_env
 
                 config = make_config(task="fixed-goal_default", mission_text=True)
                 make_env(config, 0)
@@ -270,34 +272,34 @@ class TestMakeEnvSuites:
 
 class TestMakeEnvWrapperStack:
     def test_all_paths_end_with_dtype_wrapper(self):
-        from envs.wrappers import Dtype
+        from her_dream.envs.wrappers import Dtype
 
         dummy_crafter = MagicMock()
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.crafter": dummy_crafter}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+            from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward")
             env = make_env(config, 0)
         assert isinstance(env, Dtype)
 
     def test_all_paths_include_time_limit(self):
-        from envs.wrappers import TimeLimit
+        from her_dream.envs.wrappers import TimeLimit
 
         dummy_crafter = MagicMock()
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"envs.crafter": dummy_crafter}):
-            from envs import make_env
+        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+            from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward", time_limit=50, action_repeat=1)
             env = make_env(config, 0)
-        from envs.wrappers import get_wrapper
+        from her_dream.envs.wrappers import get_wrapper
 
         assert get_wrapper(env, TimeLimit) is not None
 
@@ -315,15 +317,15 @@ class TestMakeEnvs:
         dummy_crafter.Crafter.return_value = dummy_env
 
         with (
-            patch.dict(sys.modules, {"envs.crafter": dummy_crafter}),
-            patch("envs.parallel.ParallelEnv") as mock_penv,
+            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch("her_dream.envs.parallel.ParallelEnv") as mock_penv,
         ):
             penv_instance = MagicMock()
             penv_instance.observation_space = dummy_env.observation_space
             penv_instance.action_space = dummy_env.action_space
             mock_penv.return_value = penv_instance
 
-            from envs import make_envs
+            from her_dream.envs import make_envs
 
             config = make_config(task="crafter_reward", env_num=2, eval_episode_num=1)
             train_envs, eval_envs, obs_space, act_space = make_envs(config)
@@ -349,10 +351,10 @@ class TestMakeEnvs:
             return instance
 
         with (
-            patch.dict(sys.modules, {"envs.crafter": dummy_crafter}),
-            patch("envs.parallel.ParallelEnv", side_effect=fake_penv),
+            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch("her_dream.envs.parallel.ParallelEnv", side_effect=fake_penv),
         ):
-            from envs import make_envs
+            from her_dream.envs import make_envs
 
             config = make_config(task="crafter_reward", env_num=1, eval_episode_num=1)
             make_envs(config)
@@ -368,15 +370,15 @@ class TestMakeEnvs:
         dummy_crafter.Crafter.return_value = dummy_env
 
         with (
-            patch.dict(sys.modules, {"envs.crafter": dummy_crafter}),
-            patch("envs.parallel.ParallelEnv") as mock_penv,
+            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch("her_dream.envs.parallel.ParallelEnv") as mock_penv,
         ):
             penv_instance = MagicMock()
             penv_instance.observation_space = dummy_env.observation_space
             penv_instance.action_space = dummy_env.action_space
             mock_penv.return_value = penv_instance
 
-            from envs import make_envs
+            from her_dream.envs import make_envs
 
             config = make_config(task="crafter_reward", env_num=4, eval_episode_num=2)
             make_envs(config)

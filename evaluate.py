@@ -1,6 +1,5 @@
 import math
 import pathlib
-import sys
 import warnings
 from datetime import datetime
 
@@ -8,18 +7,21 @@ import hydra
 import torch
 from tensordict import TensorDict
 
-import tools
-from dreamer import Dreamer
-from envs import make_env
-from rewards import make_reward
+import her_dream
+import her_dream.tools as tools
+from her_dream.dreamer import Dreamer
+from her_dream.envs import make_env
+from her_dream.rewards import make_reward
 
 warnings.filterwarnings("ignore")
-sys.path.append(str(pathlib.Path(__file__).parent))
 # torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision("high")
 
+# Hydra configs ship inside the installed her_dream package.
+_CONFIG_DIR = str(pathlib.Path(her_dream.__file__).parent / "configs")
 
-@hydra.main(version_base=None, config_path="configs", config_name="eval_configs")
+
+@hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="eval_configs")
 def main(eval_cfg):
     from omegaconf import OmegaConf
 

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from optim import LaProp
+from her_dream.optim import LaProp
 
 
 class TestLaPropValidation:

@@ -14,28 +14,31 @@ to the imagined goal z, under three lenses:
 If even the oracle plan can't reproduce the goal z (A), no policy can: the goal is
 unreachable in z-space by construction, regardless of green-square fidelity.
 """
+
 import argparse
 import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-
-import matplotlib  # noqa: E402
+import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.ticker as mticker  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-from hydra import compose, initialize  # noqa: E402
+from hydra import compose, initialize_config_dir  # noqa: E402
 from tensordict.base import TensorDictBase  # noqa: E402
 
 # MPS pin_memory stub (harmless on CPU), kept for parity with local smoke tests.
 TensorDictBase.pin_memory = lambda self, *a, **k: self
 
-from dreamer import Dreamer  # noqa: E402
-from envs import make_env  # noqa: E402
-from rewards import make_reward  # noqa: E402
+import her_dream.goals as goals  # noqa: E402
+from experiments.common import onehot_action  # noqa: E402
+from her_dream.dreamer import Dreamer  # noqa: E402
+from her_dream.envs import make_env  # noqa: E402
+from her_dream.rewards import make_reward  # noqa: E402
+
+# Hydra configs now ship inside the her_dream package (next to goals.py).
+_CONFIG_DIR = str(pathlib.Path(goals.__file__).parent / "configs")
 
 CKPT = "logdir/random_goal/wm_only_randomgoal/01/latest.pt"
 OUT = pathlib.Path("experiments/out")
@@ -43,7 +46,7 @@ OUT = pathlib.Path("experiments/out")
 
 def build(env_name, device="cpu"):
     """Build env + Dreamer and load the frozen random_goal world model."""
-    with initialize(version_base=None, config_path="../configs"):
+    with initialize_config_dir(version_base=None, config_dir=_CONFIG_DIR):
         config = compose(
             config_name="configs",
             overrides=[
@@ -67,9 +70,7 @@ def build(env_name, device="cpu"):
 
 
 def rand_action(n, rng):
-    a = np.zeros(n, dtype=np.float32)
-    a[rng.integers(n)] = 1.0
-    return a
+    return onehot_action(rng.integers(n), n)
 
 
 def embed_of(agent, image_np, dir_np):
@@ -87,7 +88,9 @@ def dual_rollout(agent, env, H, rng):
     obs = env.reset()
     z, h = rssm.initial(1)
     pa = torch.zeros(1, A, device=dev)
-    z, h, lg = rssm.obs_step(z, h, pa, embed_of(agent, obs["image"], obs["direction"]), torch.ones(1, dtype=torch.bool, device=dev))
+    z, h, lg = rssm.obs_step(
+        z, h, pa, embed_of(agent, obs["image"], obs["direction"]), torch.ones(1, dtype=torch.bool, device=dev)
+    )
     post_z, post_lg = [z], [lg]
     iz, ih = z.clone(), h.clone()
     imag_z, imag_lg = [iz], [lg]
@@ -98,7 +101,9 @@ def dual_rollout(agent, env, H, rng):
         imag_z.append(iz)
         imag_lg.append(ilg)
         obs, _, _, _ = env.step(u)
-        z, h, lg = rssm.obs_step(z, h, ut, embed_of(agent, obs["image"], obs["direction"]), torch.zeros(1, dtype=torch.bool, device=dev))
+        z, h, lg = rssm.obs_step(
+            z, h, ut, embed_of(agent, obs["image"], obs["direction"]), torch.zeros(1, dtype=torch.bool, device=dev)
+        )
         post_z.append(z)
         post_lg.append(lg)
     return post_z, post_lg, imag_z, imag_lg
@@ -107,7 +112,7 @@ def dual_rollout(agent, env, H, rng):
 def groups_eq(za, zb):
     """# of the 32 one-hot groups that match (by argmax), and whether all match."""
     a, b = za.argmax(-1), zb.argmax(-1)  # (1,32)
-    eq = (a == b)
+    eq = a == b
     return int(eq.sum()), bool(eq.all())
 
 
@@ -129,24 +134,16 @@ def main():
 
     H = args.horizon
     # aligned same-plan: real exec vs imagined, per step
-    samp_groups = np.zeros(H + 1)   # A: argmax(z) match
+    samp_groups = np.zeros(H + 1)  # A: argmax(z) match
     samp_full = np.zeros(H + 1)
-    mode_groups = np.zeros(H + 1)   # B: argmax(logit) match
+    mode_groups = np.zeros(H + 1)  # B: argmax(logit) match
     mode_full = np.zeros(H + 1)
     floor_groups = np.zeros(H + 1)  # C: two samples from same posterior logits
     floor_full = np.zeros(H + 1)
     # per-step approach to the FINAL imagined goal z (the actual goal)
-    pvg_groups = np.zeros(H + 1)   # real execution vs final goal
+    pvg_groups = np.zeros(H + 1)  # real execution vs final goal
     pvg_full = np.zeros(H + 1)
-    ivg_groups = np.zeros(H + 1)   # imagined trajectory vs its own final goal
-    # joint probability of drawing the imagined z (z-hat) under two different logits:
-    # the real posterior logit P(.|x_t,h_t) and the prior logit P(.|h_t) (h only).
-    # product over the 32 one-hot groups -> even ~7 differing low-prob groups -> ~0.
-    prob_imag = np.zeros(H + 1)      # P(z_hat | real posterior logit)
-    prob_imag_h = np.zeros(H + 1)    # P(z_hat | prior logit from h)
-    # same two probabilities, kept per individual action sequence (not averaged)
-    seq_prob_imag = []    # list of (H+1,) arrays, one per shown sequence
-    seq_prob_imag_h = []
+    ivg_groups = np.zeros(H + 1)  # imagined trajectory vs its own final goal
     # goal reachability: best match of any real step vs the FINAL imagined goal z
     best_vs_goal = []
     full_reach = 0
@@ -160,25 +157,21 @@ def main():
         cur_ph = np.zeros(H + 1) if r < args.show_seqs else None
         for t in range(H + 1):
             ng, nf = groups_eq(post_z[t], imag_z[t])
-            samp_groups[t] += ng; samp_full[t] += nf
+            samp_groups[t] += ng
+            samp_full[t] += nf
             mg = (post_lg[t].argmax(-1) == imag_lg[t].argmax(-1)).sum().item()
-            mode_groups[t] += mg; mode_full[t] += (mg == S)
+            mode_groups[t] += mg
+            mode_full[t] += mg == S
             # sampling floor: resample z from the same posterior logits
             post_dist = agent.rssm.get_dist(post_lg[t])
             z2 = post_dist.rsample()
             fg, ff = groups_eq(post_z[t], z2)
-            floor_groups[t] += fg; floor_full[t] += ff
-            # joint prob of the imagined z under the real posterior logit vs the prior
-            # logit (from h only); product over the 32 groups
-            pi = post_dist.log_prob(imag_z[t]).exp().item()
-            ph = agent.rssm.get_dist(imag_lg[t]).log_prob(imag_z[t]).exp().item()
-            prob_imag[t] += pi
-            prob_imag_h[t] += ph
-            if cur_pi is not None:
-                cur_pi[t] = pi; cur_ph[t] = ph
+            floor_groups[t] += fg
+            floor_full[t] += ff
             # per-step approach to the final imagined goal
             gg, gf = groups_eq(post_z[t], goal)
-            pvg_groups[t] += gg; pvg_full[t] += gf
+            pvg_groups[t] += gg
+            pvg_full[t] += gf
             ivg_groups[t] += groups_eq(imag_z[t], goal)[0]
             best = max(best, gg)
             reached = reached or gf
@@ -191,13 +184,15 @@ def main():
     print(f"\n=== Aligned same-plan: real execution vs imagined, averaged over {n} resets ===")
     print(" step | A:sample grp/32 | A:full% | B:mode grp/32 | B:full% | C:floor grp/32 | C:full%")
     for t in range(H + 1):
-        print(f" {t:4d} |     {samp_groups[t]/n:5.1f}      |  {100*samp_full[t]/n:4.0f}%  |"
-              f"    {mode_groups[t]/n:5.1f}     |  {100*mode_full[t]/n:4.0f}% |"
-              f"     {floor_groups[t]/n:5.1f}      |  {100*floor_full[t]/n:4.0f}%")
+        print(
+            f" {t:4d} |     {samp_groups[t] / n:5.1f}      |  {100 * samp_full[t] / n:4.0f}%  |"
+            f"    {mode_groups[t] / n:5.1f}     |  {100 * mode_full[t] / n:4.0f}% |"
+            f"     {floor_groups[t] / n:5.1f}      |  {100 * floor_full[t] / n:4.0f}%"
+        )
 
-    print(f"\n=== Reachability of the FINAL imagined goal z (the actual goal) ===")
+    print("\n=== Reachability of the FINAL imagined goal z (the actual goal) ===")
     print(f" best groups matched over the episode (mean of {n}): {np.mean(best_vs_goal):.1f} / {S}")
-    print(f" episodes with ANY exact full-z match to the goal: {full_reach}/{n} ({100*full_reach/n:.0f}%)")
+    print(f" episodes with ANY exact full-z match to the goal: {full_reach}/{n} ({100 * full_reach / n:.0f}%)")
 
     print(f"\n=== Joint prob of the imagined z (z_hat), mean of {n} ===")
     print(" step | P(z_hat | real posterior logit) | P(z_hat | prior logit from h)")
@@ -212,24 +207,32 @@ def main():
     ax1.plot(steps, 100 * samp_full / n, "-o", label="A: sample  (goal_type=full)")
     ax1.plot(steps, 100 * mode_full / n, "-s", label="B: mode  (argmax_full)")
     ax1.plot(steps, 100 * floor_full / n, "-^", label="C: sampling floor (same state)")
-    ax1.set_xlabel("aligned step t"); ax1.set_ylabel("full-z match rate (%)")
-    ax1.set_ylim(-2, 102); ax1.legend(); ax1.set_title("Would the reward fire?  (real exec vs imagined)")
+    ax1.set_xlabel("aligned step t")
+    ax1.set_ylabel("full-z match rate (%)")
+    ax1.set_ylim(-2, 102)
+    ax1.legend()
+    ax1.set_title("Would the reward fire?  (real exec vs imagined)")
 
     # Panel 2: mean groups matched per step (how close, out of 32)
     ax2.plot(steps, samp_groups / n, "-o", label="A: sample (full)")
     ax2.plot(steps, mode_groups / n, "-s", label="B: mode (argmax_full)")
     ax2.plot(steps, floor_groups / n, "-^", label="C: sampling floor")
     ax2.axhline(S, color="gray", ls="--", lw=1, label="32 = full match")
-    ax2.set_xlabel("aligned step t"); ax2.set_ylabel(f"mean groups matched / {S}")
-    ax2.set_ylim(0, S + 1); ax2.legend(); ax2.set_title("How close?  (real exec vs imagined)")
+    ax2.set_xlabel("aligned step t")
+    ax2.set_ylabel(f"mean groups matched / {S}")
+    ax2.set_ylim(0, S + 1)
+    ax2.legend()
+    ax2.set_title("How close?  (real exec vs imagined)")
 
     # Panel 3: per-step approach to the FINAL imagined goal z
     ax3.plot(steps, pvg_groups / n, "-o", label="real execution vs goal")
     ax3.plot(steps, ivg_groups / n, "-s", label="imagined traj vs goal")
     ax3.axhline(S, color="gray", ls="--", lw=1, label="32 = full match")
-    ax3.set_xlabel("step t"); ax3.set_ylabel(f"mean groups matched / {S}")
-    ax3.set_ylim(0, S + 1); ax3.legend()
-    ax3.set_title(f"Approach to FINAL goal z (full-reach {100*full_reach/n:.0f}%)")
+    ax3.set_xlabel("step t")
+    ax3.set_ylabel(f"mean groups matched / {S}")
+    ax3.set_ylim(0, S + 1)
+    ax3.legend()
+    ax3.set_title(f"Approach to FINAL goal z (full-reach {100 * full_reach / n:.0f}%)")
 
     # Panel 4: joint probability of sampling the imagined z (z-hat), under the real
     # posterior logit P(.|x_t,h_t) vs the prior logit P(.|h_t) (from h only). Like panel

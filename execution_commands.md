@@ -338,3 +338,48 @@ CUDA_VISIBLE_DEVICES=1 VALIDATE_ONEHOT=1 ts -G 1 bash scripts/train.sh \
    - **C ≈ -0.65 y el assert NO salta** ⟹ el estado siempre fue un one-hot válido; solo el `==` fallaba y el fix argmax lo resuelve.
    - **C: el assert SALTA** (`reward input is not (close to) one-hot`) ⟹ bajo compile `imag_stoch` llega corrupto (aliasing de cudagraphs), no es solo el `==`; el fix argmax por sí solo no bastaría. Reintentar C con `model.compile=False` para separar.
    - Nota: con `compile=True`, el assert de `VALIDATE_ONEHOT=1` fuerza un sync y puede romper/lentificar cudagraphs. Si C crashea por eso, correrlo con `VALIDATE_ONEHOT=0` (pierde el assert pero prueba el reward) y/o `model.compile=False`. Para la corrida de producción final: `VALIDATE_ONEHOT=0`.
+29. **Posterior sin h (`model.rssm.obs_use_deter=False`) — WM only en random_goal.** Requiere la branch `feat/posterior-z-no-deter` checkouteada en el servidor. Pre-entrena el WM con el posterior condicionado SOLO en el embed de la observación (z puramente observacional; el prior y la transición determinista no cambian). Espejo del item 17 para comparar contra el WM con h; los post-trains de los items 18-20 sirven igual apuntando `load_from` a este logdir, pero OJO: `load_from` solo carga el state_dict (el modelo se construye con la config actual), así que hay que repetir `model.rssm.obs_use_deter=False` también en el post-train — si se omite, `load_state_dict` falla por mismatch de dimensiones en `_obs_net`:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/random_goal/wm_only_randomgoal_no_deter/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=random buffer=normal wm_only=True \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+30. **Posterior sin h — Post-train con WM congelado, HER + goals del buffer.** Espejo del item 18 pero sobre el WM sin h del item 29. `model.rssm.obs_use_deter=False` se repite aquí porque `load_from` solo carga el state_dict y el modelo se reconstruye con la config actual (si se omite, `load_state_dict` falla por mismatch en `_obs_net`). Solo entrena actor/critic:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_no_deter_herbuf_goalbuf/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=buffer buffer=her \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+31. **Posterior sin h — Post-train con WM congelado, buffer normal + goals del buffer (sin HER).** Espejo del item 19 sobre el WM sin h del item 29. Baseline para aislar el efecto de HER frente al item 30:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_no_deter_normalbuf_goalbuf/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=buffer buffer=normal \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+32. **Posterior sin h — Post-train con WM congelado y `goal_sample=imagination`.** Espejo del item 20 sobre el WM sin h del item 29. El goal de cada episodio se genera imaginando `imag_horizon` pasos con acciones aleatorias desde la primera observación (`Dreamer.imagine_goal`), así es alcanzable por construcción. `buffer=normal` (el goal imaginado no se re-etiqueta):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomgoal_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_frozenwm_no_deter_normalbuf_goalimag/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.goal_sample=imagination buffer=normal \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```

@@ -42,7 +42,7 @@ def _make_metaworld(name="reach", camera=None, size=(64, 64), action_repeat=1, s
     mock_metaworld.MT1.return_value = mt1_mock
 
     with patch.dict(sys.modules, {"metaworld": mock_metaworld}):
-        from envs.metaworld import MetaWorld
+        from her_dream.envs.metaworld import MetaWorld
 
         env = MetaWorld(name, action_repeat=action_repeat, size=size, camera=camera, seed=seed)
     return env, env_mock
@@ -59,7 +59,7 @@ class TestMetaWorldInit:
         mock_metaworld = MagicMock()
         mock_metaworld.MT1.return_value = mt1_mock
         with patch.dict(sys.modules, {"metaworld": mock_metaworld}):
-            from envs.metaworld import MetaWorld
+            from her_dream.envs.metaworld import MetaWorld
 
             MetaWorld("reach", camera="corner2")
         assert env_mock.model.cam_pos[2] == [0.75, 0.075, 0.7]

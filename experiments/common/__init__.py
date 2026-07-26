@@ -7,16 +7,25 @@ Import the pieces you need, e.g.::
 """
 
 from .cli import add_common_args
-from .envs import agent_pose, goal_pos, unwrap_env
+from .envs import agent_pose, fixed_goal_cfg, goal_pos, unwrap_env
 from .io import dump_json, experiment_outdir, save_fig
 from .loading import env_factory, load_agent
-from .metrics import entropy, pairwise_hamming, posterior_probs, sym_kl, upper_triangular_mean
-from .obs import onehot_action, preprocess_obs, stack_obs
-from .rollout import Step, posterior_rollout, random_policy, scripted_policy
+from .metrics import (
+    entropy,
+    groups_matched,
+    pairwise_hamming,
+    posterior_probs,
+    reward_of,
+    sym_kl,
+    upper_triangular_mean,
+)
+from .obs import encode_goal_image, onehot_action, preprocess_obs, stack_obs
+from .rollout import Step, actor_policy, posterior_rollout, random_policy, scripted_policy
 
 __all__ = [
     "add_common_args",
     "agent_pose",
+    "fixed_goal_cfg",
     "goal_pos",
     "unwrap_env",
     "dump_json",
@@ -25,14 +34,18 @@ __all__ = [
     "env_factory",
     "load_agent",
     "entropy",
+    "groups_matched",
     "pairwise_hamming",
     "posterior_probs",
+    "reward_of",
     "sym_kl",
     "upper_triangular_mean",
+    "encode_goal_image",
     "onehot_action",
     "preprocess_obs",
     "stack_obs",
     "Step",
+    "actor_policy",
     "posterior_rollout",
     "random_policy",
     "scripted_policy",

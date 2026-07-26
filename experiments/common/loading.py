@@ -5,6 +5,7 @@ import pathlib
 import torch
 from omegaconf import OmegaConf
 
+from her_dream import goals
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_env
 from her_dream.rewards import make_reward
@@ -24,7 +25,8 @@ def load_agent(
     config (with `device` injected) suitable for `make_env` / `env_factory`.
 
     Backfills config keys added after older runs were trained (`wm_only`,
-    `goal_imag_horizon`) so old checkpoints load consistently.
+    `goal_imag_horizon`, and the goal-type descriptors) so old checkpoints load
+    consistently.
     """
     logdir = pathlib.Path(logdir)
     config = OmegaConf.load(logdir / ".hydra" / "config.yaml")
@@ -37,6 +39,19 @@ def load_agent(
         config.model.wm_only = False
     if "goal_imag_horizon" not in config.model:
         config.model.goal_imag_horizon = int(config.model.imag_horizon)
+
+    # The goal-type descriptors (state_repr / goal_repr / scope) arrived with the
+    # goal_type config group; runs trained before it have none, and every consumer
+    # that builds a GoalSpec — Dreamer, but also the GoalConditioned wrapper — would
+    # raise on the missing key. They are fanned out per section, so backfill each
+    # one this loader constructs, reading the config group as the source of truth.
+    if "goal_type" in config:
+        descriptors = goals.default_descriptors(config.goal_type)
+        for section in ("model", "env"):
+            OmegaConf.set_struct(config[section], False)
+            if "state_repr" not in config[section]:
+                for key, val in descriptors.items():
+                    config[section][key] = val
 
     if require_mission_text and not config.mission_text:
         raise ValueError("This experiment requires mission_text=True (the run must have a TextEncoderGRU).")

@@ -20,12 +20,15 @@ class GoalImageGenerator:
         self._env_factory = env_factory
         self._env = None
 
-    def observation(self, goal_pos, rng: np.random.RandomState = None):
+    def observation(self, goal_pos, rng: np.random.RandomState = None, agent_pos=None, agent_dir=None):
         """Return {"image": (H, W, 3) uint8, "direction": (4,) one-hot float32}.
 
         Agent position and direction are sampled uniformly from the grid
         interior; agent and goal may coincide (the success state), matching
-        the training distribution.
+        the training distribution. Pass `agent_pos` / `agent_dir` to pin either
+        one instead of sampling it — used by the evaluation experiments, which
+        need the ground-truth target state that the rendered goal encodes
+        (e.g. the agent standing on the green square).
         """
         if rng is None:
             rng = np.random.RandomState()
@@ -33,8 +36,11 @@ class GoalImageGenerator:
             self._env = self._env_factory()
         core = self._env.unwrapped
         interior = np.arange(1, core.size - 1)
-        agent_pos = (int(rng.choice(interior)), int(rng.choice(interior)))
-        agent_dir = int(rng.randint(0, 4))
+        if agent_pos is None:
+            agent_pos = (int(rng.choice(interior)), int(rng.choice(interior)))
+        else:
+            agent_pos = (int(agent_pos[0]), int(agent_pos[1]))
+        agent_dir = int(rng.randint(0, 4)) if agent_dir is None else int(agent_dir)
         core.goal_pos = (int(goal_pos[0]), int(goal_pos[1]))
         core.agent_start_pos = agent_pos
         core.agent_start_dir = agent_dir

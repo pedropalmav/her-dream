@@ -6,6 +6,24 @@ These operate on RSSM categorical posteriors with shape (..., S, K).
 import torch
 
 import her_dream.distributions as dists
+from her_dream import goals
+
+
+def groups_matched(z: torch.Tensor, goal: torch.Tensor) -> int:
+    """How many of the S groups share the goal's argmax category."""
+    return int((z.argmax(-1) == goal.argmax(-1)).sum().item())
+
+
+def reward_of(agent, spec, stoch, logit, goal) -> float:
+    """The run's own reward for this state/goal pair.
+
+    `goals.reward_state` picks the state argument the run's goal_type expects
+    (`stoch` / `logit` / `dist`), which is the same routing `Dreamer._cal_grad`
+    uses — so this stays correct for goal types added later (e.g. max_cosine,
+    which compares logits) without a branch here.
+    """
+    state = goals.reward_state(spec, stoch=stoch, logit=logit, rssm=agent.rssm)
+    return float(agent.reward_function(state, goal).reshape(-1)[0])
 
 
 def posterior_probs(agent, logit: torch.Tensor) -> torch.Tensor:

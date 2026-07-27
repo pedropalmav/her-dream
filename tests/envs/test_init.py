@@ -47,9 +47,7 @@ def make_config(task="random-goal_default", **overrides):
         eval_episode_num=1,
         device="cpu",
     )
-    merged = {**defaults, **overrides}
-    for key, val in goals.default_descriptors(merged["goal_type"]).items():
-        merged.setdefault(key, val)
+    merged = goals.with_default_descriptors({**defaults, **overrides})
     return DictNamespace(**merged)
 
 

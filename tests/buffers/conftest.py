@@ -27,9 +27,7 @@ def make_her_config(**overrides):
         her_strategy="future",
         n_envs=2,
     )
-    merged = {**defaults, **overrides}
-    for key, val in goals.default_descriptors(merged["goal_type"]).items():
-        merged.setdefault(key, val)
+    merged = goals.with_default_descriptors({**defaults, **overrides})
     return SimpleNamespace(**merged)
 
 

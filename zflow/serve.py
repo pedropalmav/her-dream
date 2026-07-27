@@ -59,46 +59,6 @@ def _reward_input(agent_state: TensorDict, agent):
     )
 
 
-def _backfill_config(config, force_wm_only=False):
-    """Fill in config keys added after older experiments were trained.
-
-    Returns ``(config, wm_only)``. ``wm_only`` is True for pre-goal-conditioning
-    checkpoints (e.g. the original-Dreamer WM on `feat/original-dreamer-wm`),
-    detected by the absence of the top-level ``goal_type`` key. In that mode the
-    goal-conditioned actor/critic and the reward/continue predictors in the
-    checkpoint are not loaded; only the world model (encoder + RSSM) is used.
-    """
-    updates = {}
-    if "goal_imag_horizon" not in config.model:
-        updates["model"] = {"goal_imag_horizon": int(config.model.imag_horizon)}
-
-    wm_only = force_wm_only or ("goal_type" not in config)
-    if wm_only:
-        # Dummy goal-conditioning keys so main's Dreamer can be *constructed*.
-        # These only size the actor/value heads, which are neither loaded nor
-        # run in WM-only mode; make_reward is skipped entirely.
-        goal_defaults = {
-            "goal_type": "full",
-            "mission_text": False,
-            "wm_only": False,
-            "train_text_only": False,
-            "freeze_wm": False,
-            "prob_threshold": 0.5,
-            "prob_threshold_step": 0.1,
-        }
-        top = {k: v for k, v in goal_defaults.items() if k not in config}
-        model_missing = {k: v for k, v in goal_defaults.items() if k not in config.model}
-        # Deep-merge: preserves the model.goal_imag_horizon backfill above.
-        updates = OmegaConf.merge(updates, {**top, "model": model_missing})
-
-    config = OmegaConf.merge(config, updates) if updates else config
-
-    if "goal_type" in config.model and "state_repr" not in config.model:
-        # Goal-type descriptors were added later; load them from the config group.
-        config = OmegaConf.merge(config, {"model": goals.default_descriptors(config.model.goal_type)})
-    return config, wm_only
-
-
 # state_dict prefixes that make up the world model — identical in keys and
 # shapes between the goal-conditioned Dreamer and the original-Dreamer runs.
 _WM_PREFIXES = ("encoder.", "_frozen_encoder.", "rssm.", "_frozen_rssm.", "return_ema.")
@@ -366,7 +326,7 @@ def main():
     if args.device is not None:
         overrides["device"] = args.device
     config = OmegaConf.merge(train_cfg, overrides)
-    config, wm_only = _backfill_config(config, force_wm_only=args.wm_only)
+    config, wm_only = tools.backfill_config(config, force_wm_only=args.wm_only)
     if wm_only:
         print("World-model-only mode: goal/actor/reward heads are skipped (WM latent stream only).")
 

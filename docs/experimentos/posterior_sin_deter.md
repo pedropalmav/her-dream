@@ -1,4 +1,4 @@
-# Posterior sin `h` (`obs_use_deter=False`) — quitar la historia del `z` no destraba `full` en random_goal (jul 16 → jul 25)
+# Posterior sin `h` (`obs_use_deter=False`) — no ayuda a `full`, pero **mejora** `row_by_row` en random_goal (jul 16 → jul 26)
 
 [← Índice](README.md)
 
@@ -8,12 +8,23 @@ determinista `h` (`deter`). El `z` pasa a ser **puramente observacional**; el
 prior `p(z|h)` y la transición determinista **no cambian**. La motivación era la
 sospecha de la fuga de posición: si la posición del verde se filtra a `z`
 *a través de `h`* ([random_goal_vs_fixed_goal](random_goal_vs_fixed_goal.md)),
-quizá un `z` que no ve `h` produzca un latente más "limpio" y comparable, y el
-match `full` deje de romperse en `random_goal`.
+quizá un `z` que no ve `h` produzca un latente más "limpio" y comparable como
+goal.
 
-**Resultado corto: no. Con `goal_type=full`, quitar `h` del posterior no mueve
-nada** — los tres post-trains quedan pegados al piso −1001, igual que sus
-contrapartes con `h`. Ni el WM se rompe ni mejora la comparabilidad del goal.
+**Resultado en dos partes:**
+
+1. **Con `goal_type=full`, quitar `h` no mueve nada** — los tres post-trains
+   quedan pegados al piso −1001, igual que sus contrapartes con `h`. Era
+   esperable: el muro de `full` es la varianza de Gumbel (sample-vs-sample), no
+   `h`.
+2. **Con `goal_type=row_by_row` (la receta que sí da señal), quitar `h`
+   *mejora*** — aprende ~2-3× más rápido y llega a un plateau ~110 puntos mejor
+   que con `h`, sobre la misma seed y el mismo WM. **Este es el hallazgo del
+   documento** (ver [§ El A/B con `row_by_row`](#el-ab-con-row_by_row-quitar-h-mejora)).
+
+La lectura combinada: `h` no es lo que rompe el match exacto, pero para
+**comparar goals** un `z` puramente observacional es más consistente — quitar `h`
+ayuda justo cuando la recompensa deja ver la diferencia.
 
 ## El cambio (`model.rssm.obs_use_deter=False`)
 
@@ -96,26 +107,68 @@ veredicto** para `full` en `random_goal`.
    ([hallazgo_goal_type_full](hallazgo_goal_type_full.md)), y estos runs lo dejan
    fijo.
 
-## El hueco: `row_by_row` sin `h` **no se corrió**
+## El A/B con `row_by_row`: quitar `h` mejora
 
-Los tres post-trains usaron `goal_type=full` (el default, no se sobrescribió).
-La **única receta que aprende en `random_goal`** —`row_by_row` + imagination +
-HER— nunca se probó sobre el WM sin `h`
-([artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md)). Así que esta
-ablación **no responde** su pregunta natural: *¿un `z` puramente observacional
-ayuda o estorba cuando la recompensa sí da señal?* Con `full` todo es −1001 por
-la razón de siempre, y eso enmascara cualquier efecto real de quitar `h`.
+Los tres post-trains de arriba usaron `goal_type=full`, que garantiza −1001 con
+o sin `h` y **enmascara** cualquier efecto de quitar `h`. La prueba que sí aísla
+el efecto es correr la **única receta que aprende en `random_goal`** —`row_by_row`
++ imagination + HER ([artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md))—
+sin `h`, y compararla 1:1 contra su espejo con `h` (`/03`): misma seed (3), mismo
+WM randomstart (`agent_start_random`), mismo goal imaginado, HER, 1M pasos. La
+única diferencia es `obs_use_deter`.
+
+| Métrica (seed 3, 1M) | **SIN `h`** (`posttrain_randomstart_no_deter_rowbyrow/01`) | CON `h` (`...randomstart_goalimag_rowbyrow/03`) |
+|---|---|---|
+| `episode/score` ma25 final | **−180** | −290 |
+| `episode/score` mejor episodio | **−22** | −116 |
+| `eval_score` ma25 final | **−217** | −286 |
+| `eval_score` mejor | **−121** | −220 |
+| `train/rew` final | **−0.1** (~29/32 filas) | −0.2 (~25/32) |
+| `episode/score` @143k (velocidad) | **−82** | −371 |
+
+**Quitar `h` no solo no estorba — mejora en todo:**
+
+- **Aprende ~2-3× más rápido**: llega a ≈ −82 a los 143k, donde el de `h` todavía
+  va en −371.
+- **Mejor plateau**: ma25 del score ≈ −180 (vs −290) y mejor episodio −22 (casi
+  el techo ≈ 0).
+- **Calza más filas en imaginación**: `train/rew` satura en ≈ −0.1 (≈29/32) en vez
+  de −0.2 (≈25/32). Las ~7 filas "difusas" que topaban al de `h`
+  ([artefacto §replica](artefacto_reward_exacto_gpu.md)) bajan a ~3 sin `h`.
+
+### El WM sin `h` es un pelo *peor*, y aun así la política aprende mejor
+
+El punto clave para el mecanismo: el WM-only sin `h` randomstart (item nuevo,
+`wm_only_randomstart_no_deter`) queda **algo peor** que con `h`:
+
+| WM randomstart | KL `dyn` (last10) | Barlow (last10) |
+|---|---|---|
+| con `h` (`wm_only_randomstart`) | 1.15 | 38.2 |
+| **sin `h`** (`wm_only_randomstart_no_deter`) | **1.41** | **47.0** |
+
+Es decir: **no es que el WM sea más nítido**. Con un posterior *menos* nítido, la
+política goal-condicionada aprende *mejor*. Lo que cambia no es la calidad del WM
+sino la **comparabilidad del `z` como goal**: al no apoyarse en `h`, el `z` del
+estado y el `z` del goal imaginado quedan gobernados por el **mismo encoder
+observacional**, así que sus argmax por fila coinciden más — justo lo que
+`row_by_row` premia.
 
 ## Lecturas
 
-- **Quitar `h` del posterior no es una palanca para el gap fixed↔random** bajo
-  `full`. El WM sigue sano; el −1001 es el mismo muro de la recompensa.
-- La ablación, tal como se corrió, **está confundida** por `goal_type=full`
-  (igual que la Fase 2 estaba confundida por random+full): no aísla el efecto de
-  `obs_use_deter` porque la recompensa ya garantiza −1001 con o sin `h`.
-- Para que la ablación signifique algo hay que correrla con una recompensa que
-  **sí da gradiente** (`row_by_row`), y comparar contra el WM con `h` bajo esa
-  misma receta.
+- **Para `full`, quitar `h` no es palanca** (el muro es Gumbel/sample-vs-sample);
+  para `row_by_row`, **sí lo es, y a favor**. La conclusión depende por completo
+  de la forma de la recompensa — de ahí que probar solo con `full` (los tres
+  primeros runs) llevara a la conclusión equivocada.
+- **`h` ayuda a *jugar*, estorba para *comparar goals*.** Encaja con la ablación
+  de crafter (quitar `h` cuesta ~13% de reward *controlando*,
+  [diagnosticos §6](diagnosticos_espacio_representacion.md)) y con el hilo "info
+  útil en `h` vs `z`" ([analisis_trayectorias_crafter](analisis_trayectorias_crafter.md)):
+  la posición y buena parte del estado viven en `h`, y meter eso en el `z` que se
+  compara lo vuelve más ruidoso como goal.
+- **Pendiente para consolidar**: replicar el A/B `row_by_row` sin `h` en más
+  seeds (hoy es 1 seed vs las 3 del lado con `h`), y ver el `eval_video` para
+  confirmar el comportamiento (perseguir el `z` objetivo — que es el objetivo por
+  diseño, no navegar al verde).
 
 ## Comandos (del `execution_commands.md`, items 29-32)
 

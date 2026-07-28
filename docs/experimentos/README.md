@@ -22,7 +22,7 @@ lo reproducible y presentable.
 | [`random_goal_vs_fixed_goal.md`](random_goal_vs_fixed_goal.md) | Por qué post-train funciona en fixed_goal y falla en random_goal: la posición del verde vive en `z`/`deter`. Incluye `goal_sample=imagination`. |
 | [`recompensa_prob_funciona.md`](recompensa_prob_funciona.md) | Recompensa densa `prob` + goal de imaginación → aprende en **fixed_goal** (+331), pero **no** en random_goal (se clava en el piso 0). El gap fixed↔random sigue abierto. |
 | [`artefacto_reward_exacto_gpu.md`](artefacto_reward_exacto_gpu.md) | **Bug de cómputo + primer aprendizaje en random_goal.** El `==` de floats de los rewards de match exacto se rompió en el paso GPU entre el 8 y el 26 de junio (train/rew clavado en -1 = gradiente cero); con el fix argmax, la receta rowbyrow+imagination del item 27 **aprende en random_goal**, replicado en 3/3 seeds con plateau ≈ -290 a 1M. Matiz: alcanza el goal latente, no el cuadrado verde. |
-| [`posterior_sin_deter.md`](posterior_sin_deter.md) | **Ablación `obs_use_deter=False`** (posterior sin `h`, items 29-32): quitar la historia del `z` **no destraba** `full` en random_goal — los 3 post-trains siguen en -1001, igual que con `h`. El WM sin `h` es sano (KL 1.50 vs 1.24). Confundida por `full`: la receta que sí aprende (`row_by_row`) no se corrió sin `h`. |
+| [`posterior_sin_deter.md`](posterior_sin_deter.md) | **Ablación `obs_use_deter=False`** (posterior sin `h`): con `full` no mueve nada (sigue -1001, items 29-32), pero con **`row_by_row` quitar `h` MEJORA** — mismo seed/WM/goal, aprende ~2-3× más rápido y plateau ma25 ≈ **-180 vs -290** con `h`. Y el WM sin `h` es un pelo *peor* → no es nitidez, es que el `z` observacional es más comparable como goal. |
 | [`analisis_trayectorias_crafter.md`](analisis_trayectorias_crafter.md) | Inspección de los `z` a lo largo de rollouts reales: en ambientes **complejos** (crafter) los `z` son **muy estocásticos** (entropía ≈1.96/4 bits, 48% de grupos difusos), mientras que en **fixed_goal** tienden a ser **mucho más deterministas**. Abre la pregunta de cuánta información útil vive en `z` vs en `h`. |
 | [`diagnosticos_espacio_representacion.md`](diagnosticos_espacio_representacion.md) | Las herramientas de `experiments/` (estocasticidad del WM/text, consistencia del posterior). |
 | [`papers_sugeridos.md`](papers_sugeridos.md) | Literatura relacionada (clásica + reciente 2024-2025) mapeada a cada problema/receta del proyecto. La lectura común: **abandonar el match exacto en latente** en favor de distancias aprendidas y goals con incertidumbre explícita. |
@@ -92,6 +92,7 @@ alcanzar el goal; en `crafter` la escala es otra). 🟢 = aprende, 🔴 = pegado
 | `random_goal/...no_deter_herbuf_goalbuf/01`ⁿ (item 30) | random | buffer | full | HER | 500k | -1001 | -997 | 🔴 |
 | `random_goal/...no_deter_normalbuf_goalbuf/01`ⁿ (item 31) | random | buffer | full | normal | 500k | -1001 | -969 | 🔴 |
 | `random_goal/...no_deter_normalbuf_goalimag/01`ⁿ (item 32) | random | imagination | full | normal | 500k | -1001 | -556 | 🔴 |
+| **`random_goal/...randomstart_no_deter_rowbyrow/01`**ⁿ (seed 3) | **random** | **imagination** | **row_by_row**¶ | HER | 999k | **-180 (ma25) ↗** | -22 | 🟢 **mejor que con `h`** |
 | `original_wm_crafter/02` (baseline vanilla) | crafter | — | — | — | 1.01M | eval≈10.9 | 14.1 | 🟢 WM juega |
 | `z_without_history_wm_crafter/01` (ablación) | crafter | — | — | — | 1.01M | eval≈8.7 | 12.1 | 🟢 −13% |
 
@@ -250,7 +251,7 @@ miramos **D**/credit assignment.
 | Confirmar en barto qué `rewards.py` corrió el A/B | [artefacto](artefacto_reward_exacto_gpu.md) | cierra (o no) la causa `torch.compile` |
 | Diagnóstico **0**: entropía `z` y `prob`-máx, random vs fixed | propuesto | cerraría formalmente que `prob` es inganable (HER y WM ampliado ya descartados) |
 | `argmax_full` + imagination en **random_goal** | propuesto (receta **B**) | menos urgente: rowbyrow ya prueba el mecanismo |
-| **`row_by_row` sobre el WM sin `h`** (`obs_use_deter=False`) en random_goal | flag en [posterior_sin_deter](posterior_sin_deter.md) | la ablación sin-`h` (items 29-32) sólo se corrió con `full` (todo -1001, confundido); falta con la receta que sí da señal para aislar el efecto de quitar `h` |
+| ~~`row_by_row` sobre el WM sin `h`~~ ✅ **hecho** (jul 26): sin `h` **mejora** (ma25 -180 vs -290) | [posterior_sin_deter](posterior_sin_deter.md) | falta replicarlo en más seeds (hoy 1 seed vs 3 con `h`) y ver el `eval_video` |
 | Sweep de `goal_imag_horizon` en random (h=5/8/30) | `execution_commands` item 21 | sin correr; receta **C** |
 | `argmax_full` desde WM-only en fixed_goal | `execution_commands` item 15 (corregido) | sin reportar |
 | Rehacer **Fase 2** (text encoder) en **fixed_goal** con reward alcanzable | flag en [fase2](fase2_goal_desde_texto.md) | aísla el encoder sin el confound de random+`full` |

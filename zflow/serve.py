@@ -59,6 +59,35 @@ def _reward_input(agent_state: TensorDict, agent):
     )
 
 
+def _image_goal_supported(env) -> bool:
+    """True iff this env can render a synthetic goal state (the grid goal envs)."""
+    try:
+        env.get_wrapper_attr("goal_observation")
+        return True
+    except AttributeError:
+        return False
+
+
+@torch.no_grad()
+def _encode_image_goal(agent, env, agent_dir):
+    """Render the goal state (agent standing ON the green square, facing
+    `agent_dir`) and encode it into this run's goal z with the frozen WM.
+
+    Mirrors experiments/common.encode_goal_image, so the served goal is a real,
+    reachable target — matching the offline goal-reach evaluations — instead of
+    the env's random-logit fallback (GoalConditioned._generate_goal). Returns
+    ``(goal (1, S, K), goal_image uint8 (H, W, 3), goal_cell (x, y))``.
+    """
+    goal_cell = env.get_wrapper_attr("goal_position")
+    obs = env.get_wrapper_attr("goal_observation")(agent_pos=goal_cell, agent_dir=agent_dir)
+    batch = {
+        "image": torch.as_tensor(obs["image"][None], device=agent.device),
+        "direction": torch.as_tensor(obs["direction"][None], device=agent.device),
+    }
+    goal = agent.encode_observation(batch)
+    return goal, obs["image"], goal_cell
+
+
 # state_dict prefixes that make up the world model — identical in keys and
 # shapes between the goal-conditioned Dreamer and the original-Dreamer runs.
 _WM_PREFIXES = ("encoder.", "_frozen_encoder.", "rssm.", "_frozen_rssm.", "return_ema.")
@@ -120,11 +149,13 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore,
     S = config.model.rssm.stoch
     K = config.model.rssm.discrete
     D = config.model.rssm.deter
+    image_goal = (not wm_only) and _image_goal_supported(env)
     metadata = {
         "model": "dreamer",
         "env": config.env.task,
         "stoch_size": [S, K],
         "deter_size": D,
+        "image_goal": image_goal,
     }
 
     app = FastAPI()
@@ -211,6 +242,26 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore,
         step_idx = 0
         prev_node_id = None
         done = False
+        # Image-goal state: a real, reachable goal encoded from the rendered
+        # target state (agent on the green square), held fixed for the episode.
+        # When set, it overrides the env's random-logit goal for both the actor
+        # and the reward (see _run_inference / _refresh_goal).
+        goal_dir = 0
+        goal_tensor = None
+
+        def _refresh_goal():
+            """Re-encode the image goal for the current goal_dir; return the
+            'goal' message to forward (image + facing), or None if unsupported."""
+            nonlocal goal_tensor
+            if not image_goal:
+                return None
+            goal_tensor, goal_img, goal_cell = _encode_image_goal(agent, env, goal_dir)
+            return {
+                "type": "goal",
+                "image_b64": encode_image(np.asarray(goal_img)),
+                "direction": goal_dir,
+                "goal_pos": [int(goal_cell[0]), int(goal_cell[1])],
+            }
 
         def _run_inference(obs, agent_state, action, env_reward=0.0):
             if wm_only:
@@ -218,6 +269,10 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore,
                 new_state, trans = _wm_forward(agent, obs, agent_state, action)
                 return new_state, float(env_reward), trans
             trans = make_trans(obs, action, agent.device)
+            if goal_tensor is not None:
+                # Chase (and score against) the encoded image goal, not the
+                # env's random-logit fallback.
+                trans["goal"] = goal_tensor
             with torch.no_grad():
                 _, new_state, _ = agent.act(trans, agent_state, eval=True)
             reward = reward_function(_reward_input(new_state, agent), trans["goal"]).item()
@@ -260,6 +315,9 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore,
         obs = env.reset()
         agent_state = agent.get_initial_state(1)
         action = agent_state["prev_action"].clone()
+        goal_msg = _refresh_goal()
+        if goal_msg:
+            await websocket.send_json(goal_msg)
         agent_state, reward, _ = _run_inference(obs, agent_state, action)
         await websocket.send_json(_build_step_msg(obs, agent_state, reward, is_first=True))
 
@@ -275,8 +333,19 @@ def create_app(config, env, agent, reward_function, cluster_store: ClusterStore,
                     obs = env.reset()
                     agent_state = agent.get_initial_state(1)
                     action = agent_state["prev_action"].clone()
+                    goal_msg = _refresh_goal()  # re-encode: random_goal moves the square each reset
+                    if goal_msg:
+                        await websocket.send_json(goal_msg)
                     agent_state, reward, _ = _run_inference(obs, agent_state, action)
                     await websocket.send_json(_build_step_msg(obs, agent_state, reward, is_first=True))
+
+                elif msg["type"] == "set_goal_dir" and image_goal:
+                    # Re-encode the goal for a new facing (the goal z depends on
+                    # the direction the agent faces on the square); no env step.
+                    goal_dir = int(msg["dir"]) % 4
+                    goal_msg = _refresh_goal()
+                    if goal_msg:
+                        await websocket.send_json(goal_msg)
 
                 elif msg["type"] == "action" and not done:
                     action_idx = int(msg["action_idx"])

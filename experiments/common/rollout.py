@@ -38,7 +38,7 @@ def random_policy(rng: np.random.Generator):
     """
     draw = getattr(rng, "integers", None) or rng.randint
 
-    def policy(t: int, n_actions: int) -> np.ndarray:
+    def policy(t: int, n_actions: int, state) -> np.ndarray:
         return onehot_action(int(draw(n_actions)), n_actions)
 
     return policy
@@ -47,8 +47,30 @@ def random_policy(rng: np.random.Generator):
 def scripted_policy(action_indices: list):
     """Replay a fixed sequence of action indices."""
 
-    def policy(t: int, n_actions: int) -> np.ndarray:
+    def policy(t: int, n_actions: int, state) -> np.ndarray:
         return onehot_action(int(action_indices[t]), n_actions)
+
+    return policy
+
+
+def actor_policy(agent, goal: torch.Tensor, eval: bool = True):
+    """Act with the trained actor, conditioned on a fixed (1, S, K) one-hot goal.
+
+    Mirrors `Dreamer.act`'s policy branch: the actor sees `[feat, flat(goal)]`
+    and its `mode` is taken when `eval` (its sample otherwise). Unlike `act`, it
+    reads the latent state from the rollout driver rather than keeping its own,
+    so the posterior chain stays the single source of truth.
+    """
+    if agent.threshold_bins > 0:
+        raise NotImplementedError("actor_policy does not handle log_prob's threshold_bins input")
+
+    def policy(t: int, n_actions: int, state) -> np.ndarray:
+        stoch, deter = state
+        feat = agent.rssm.get_feat(stoch, deter)
+        policy_input = torch.cat([feat, goal.reshape(feat.shape[0], -1)], dim=-1)
+        dist = agent.actor(policy_input)
+        action = dist.mode if eval else dist.rsample()
+        return action[0].detach().cpu().numpy().astype(np.float32)
 
     return policy
 
@@ -58,9 +80,10 @@ def posterior_rollout(agent, env, policy, device: str, max_steps: int, *, seed: 
     """Yield a `Step` at every visited state of a single-env posterior rollout.
 
     Processes the reset observation first (t=0, is_first=True), then applies
-    `policy(t, n_actions)` and steps the env until `done` or `max_steps` actions
-    have been taken. When `seed` is given, the base env's RNG is pre-seeded so
-    the reset (and hence goal placement) is reproducible.
+    `policy(t, n_actions, state)` — where `state` is the current `(stoch, deter)`
+    — and steps the env until `done` or `max_steps` actions have been taken.
+    When `seed` is given, the base env's RNG is pre-seeded so the reset (and
+    hence goal placement) is reproducible.
     """
     if seed is not None:
         base = unwrap_env(env)
@@ -78,7 +101,7 @@ def posterior_rollout(agent, env, policy, device: str, max_steps: int, *, seed: 
     yield Step(0, stoch, deter, logit, obs, env, done=False)
 
     for t in range(1, max_steps + 1):
-        act_np = policy(t - 1, n_actions)
+        act_np = policy(t - 1, n_actions, (stoch, deter))
         obs, _reward, done, _info = env.step(act_np)
         prev_action = torch.as_tensor(act_np, device=device).unsqueeze(0)
 

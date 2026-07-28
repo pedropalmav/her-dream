@@ -5,6 +5,7 @@ outputs/
 torch_compile_debug/
 plots/
 evals/
+experiments/out/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

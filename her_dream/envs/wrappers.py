@@ -227,9 +227,15 @@ class GoalImageObservation(gym.Wrapper):
     def step(self, action):
         return self.env.step(action)
 
-    def goal_observation(self):
+    def goal_observation(self, agent_pos=None, agent_dir=None):
+        """Render the goal state; `agent_pos` / `agent_dir` pin the agent's pose.
+
+        Training leaves both None (pose sampled uniformly). The evaluation
+        experiments pin them so the ground-truth state behind the goal z is
+        known and the agent's arrival can be checked against it.
+        """
         goal_pos = self.env.get_wrapper_attr("goal_position")
-        return self._generator.observation(goal_pos)
+        return self._generator.observation(goal_pos, agent_pos=agent_pos, agent_dir=agent_dir)
 
 
 class NoMission(gym.ObservationWrapper):

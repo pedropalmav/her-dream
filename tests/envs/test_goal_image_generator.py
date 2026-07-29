@@ -86,3 +86,43 @@ class TestWrapperIntegration:
         obs = wrapped.goal_observation()
         assert set(obs) == {"image", "direction"}
         assert wrapped._generator._env.unwrapped.goal_pos == (8, 1)
+
+
+class TestAgentOnGoal:
+    """env.goal_image_on_goal: render the success state (agent on the square)."""
+
+    def _wrap(self, **kwargs):
+        env = FixedGoal(size=SIZE, goal_pos=(8, 1))
+        return GoalImageObservation(env, lambda: make_fixed_goal_env(size=SIZE), **kwargs)
+
+    def test_agent_placed_on_goal_cell(self):
+        wrapped = self._wrap(agent_on_goal=True)
+        wrapped.goal_observation()
+        core = wrapped._generator._env.unwrapped
+        assert tuple(core.agent_pos) == (8, 1) == core.goal_pos
+
+    def test_image_is_constant_across_calls_when_dir_pinned(self):
+        # Constant goal across episodes: same square, same pose -> same pixels.
+        wrapped = self._wrap(agent_on_goal=True, agent_dir=0)
+        a = wrapped.goal_observation()
+        b = wrapped.goal_observation()
+        assert np.array_equal(a["image"], b["image"])
+        assert np.array_equal(a["direction"], b["direction"])
+        assert a["direction"][0] == 1.0
+
+    def test_random_agent_pose_by_default(self):
+        # Without the flag the agent is sampled, so it need not sit on the goal.
+        wrapped = self._wrap()
+        poses = set()
+        for _ in range(16):
+            wrapped.goal_observation()
+            core = wrapped._generator._env.unwrapped
+            poses.add((tuple(core.agent_pos), core.agent_dir))
+        assert len(poses) > 1
+
+    def test_explicit_agent_pos_overrides_on_goal(self):
+        # The evaluation experiments pin the pose explicitly; that must still win.
+        wrapped = self._wrap(agent_on_goal=True, agent_dir=0)
+        wrapped.goal_observation(agent_pos=(2, 2), agent_dir=3)
+        core = wrapped._generator._env.unwrapped
+        assert tuple(core.agent_pos) == (2, 2) and core.agent_dir == 3

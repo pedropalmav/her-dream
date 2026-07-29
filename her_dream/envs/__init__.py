@@ -12,6 +12,19 @@ def make_envs(config):
     return train_envs, eval_envs, obs_space, act_space
 
 
+def _goal_image_kwargs(config):
+    """Pose configuration for the goal_sample="image" renderer.
+
+    Read with getattr defaults so configs saved before these keys existed
+    (`<logdir>/.hydra/config.yaml`, replayed by evaluate.py and the experiment
+    scripts) still build an env.
+    """
+    return {
+        "agent_on_goal": getattr(config, "goal_image_on_goal", False),
+        "agent_dir": getattr(config, "goal_image_agent_dir", None),
+    }
+
+
 def make_env(config, id):
     suite, task = config.task.split("_", 1)
     if suite == "dmc":
@@ -82,7 +95,11 @@ def make_env(config, id):
         env = wrappers.GoalConditioned(env, config)
         # Auxiliary FixedGoal generator honours goal_pos, so it can render the
         # green square at the live (randomly placed) goal position.
-        env = wrappers.GoalImageObservation(env, lambda: fixed_goal.make_fixed_goal_env(size=config.env_size))
+        env = wrappers.GoalImageObservation(
+            env,
+            lambda: fixed_goal.make_fixed_goal_env(size=config.env_size),
+            **_goal_image_kwargs(config),
+        )
 
     elif suite == "fixed-goal":
         import her_dream.envs.fixed_goal as fixed_goal
@@ -99,7 +116,11 @@ def make_env(config, id):
         env = wrappers.MissionGridWrapper(env) if config.mission_text else wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
-        env = wrappers.GoalImageObservation(env, lambda: fixed_goal.make_fixed_goal_env(size=config.env_size))
+        env = wrappers.GoalImageObservation(
+            env,
+            lambda: fixed_goal.make_fixed_goal_env(size=config.env_size),
+            **_goal_image_kwargs(config),
+        )
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

@@ -14,7 +14,7 @@ def make_config(tmp_path, **overrides):
         deterministic_run=False,
         logdir=str(tmp_path / "logdir"),
         logger=SimpleNamespace(backends=["file"]),
-        env=SimpleNamespace(goal_sample="buffer"),
+        env=SimpleNamespace(goal_sample="buffer", goal_image_on_goal=False, goal_image_agent_dir=None),
         mission_text=False,
         model=SimpleNamespace(),
         device="cpu",
@@ -239,6 +239,38 @@ class TestGoalSampleAssertion:
         cfg.mission_text = False
         with pytest.raises(AssertionError):
             train.main.__wrapped__(cfg)
+
+
+class TestGoalImagePoseValidation:
+    """env.goal_image_* only mean something for goal_sample="image"."""
+
+    def test_on_goal_with_image_sample_passes(self, noop, cfg):
+        cfg.env.goal_sample = "image"
+        cfg.env.goal_image_on_goal = True
+        cfg.env.goal_image_agent_dir = 0
+        train.main.__wrapped__(cfg)  # must not raise
+
+    def test_on_goal_with_other_sample_raises(
+        self, mock_seed, mock_enable_det, mock_console_log, mock_atexit, mock_make_logger, cfg
+    ):
+        cfg.env.goal_sample = "buffer"
+        cfg.env.goal_image_on_goal = True
+        with pytest.raises(ValueError, match="goal_image_on_goal"):
+            train.main.__wrapped__(cfg)
+
+    @pytest.mark.parametrize("agent_dir", [-1, 4])
+    def test_out_of_range_agent_dir_raises(
+        self, mock_seed, mock_enable_det, mock_console_log, mock_atexit, mock_make_logger, cfg, agent_dir
+    ):
+        cfg.env.goal_sample = "image"
+        cfg.env.goal_image_agent_dir = agent_dir
+        with pytest.raises(ValueError, match="goal_image_agent_dir"):
+            train.main.__wrapped__(cfg)
+
+    def test_null_agent_dir_passes(self, noop, cfg):
+        cfg.env.goal_sample = "image"
+        cfg.env.goal_image_agent_dir = None
+        train.main.__wrapped__(cfg)  # must not raise
 
 
 class TestFactories:

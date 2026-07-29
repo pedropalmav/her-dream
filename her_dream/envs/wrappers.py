@@ -215,11 +215,21 @@ class GoalImageObservation(gym.Wrapper):
     `goal_position` attribute. `env_factory` is a zero-arg callable returning
     the auxiliary goal env used for rendering (it must honour
     `goal_pos` / `agent_start_pos`, e.g. fixed_goal.make_fixed_goal_env).
+
+    `agent_on_goal` (env.goal_image_on_goal) renders the success state instead:
+    the agent standing on the green square (MiniGrid draws the red triangle on
+    top of the goal cell, which `Goal.can_overlap()` allows). On `fixed_goal`
+    the square never moves, so the rendered image — and hence the goal — is the
+    same one every episode; on `random_goal` it tracks the episode's square.
+    `agent_dir` (env.goal_image_agent_dir) pins the agent's facing so the image
+    is fully determined; None keeps it sampled uniformly.
     """
 
-    def __init__(self, env, env_factory):
+    def __init__(self, env, env_factory, agent_on_goal=False, agent_dir=None):
         super().__init__(env)
         self._generator = GoalImageGenerator(env_factory)
+        self._agent_on_goal = bool(agent_on_goal)
+        self._agent_dir = None if agent_dir is None else int(agent_dir)
 
     def reset(self):
         return self.env.reset()
@@ -230,11 +240,17 @@ class GoalImageObservation(gym.Wrapper):
     def goal_observation(self, agent_pos=None, agent_dir=None):
         """Render the goal state; `agent_pos` / `agent_dir` pin the agent's pose.
 
-        Training leaves both None (pose sampled uniformly). The evaluation
-        experiments pin them so the ground-truth state behind the goal z is
-        known and the agent's arrival can be checked against it.
+        Explicit arguments always win: the evaluation experiments pass them so
+        the ground-truth state behind the goal z is known and the agent's
+        arrival can be checked against it. Left as None, the pose falls back to
+        the wrapper's configuration (`agent_on_goal` / `agent_dir`) and finally
+        to uniform sampling.
         """
         goal_pos = self.env.get_wrapper_attr("goal_position")
+        if agent_pos is None and self._agent_on_goal:
+            agent_pos = goal_pos
+        if agent_dir is None:
+            agent_dir = self._agent_dir
         return self._generator.observation(goal_pos, agent_pos=agent_pos, agent_dir=agent_dir)
 
 

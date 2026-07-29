@@ -85,6 +85,15 @@ def validate_config(config):
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
 
+    if config.env.goal_image_on_goal and config.env.goal_sample != "image":
+        raise ValueError(
+            f"env.goal_image_on_goal=True only affects goal_sample='image', but goal_sample="
+            f"'{config.env.goal_sample}'. Set env.goal_sample=image."
+        )
+    agent_dir = config.env.goal_image_agent_dir
+    if agent_dir is not None and int(agent_dir) not in range(4):
+        raise ValueError(f"env.goal_image_agent_dir must be null or 0-3, got {agent_dir}.")
+
 
 def load_checkpoint(agent, config):
     """Load a checkpoint into `agent` and re-establish the frozen clones.

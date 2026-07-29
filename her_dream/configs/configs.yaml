@@ -33,6 +33,12 @@ env:
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
   goal_sample: buffer # buffer|text|random|imagination|image
+  # goal_sample=image only: render the agent standing on the green square (the
+  # success state) instead of at a random cell, and optionally pin its facing
+  # (null = random). On fixed_goal both make the goal image identical every
+  # episode; on random_goal it follows the episode's square.
+  goal_image_on_goal: False
+  goal_image_agent_dir: null # null|0|1|2|3 (east|south|west|north)
   mission_text: ${mission_text}
 
 model:

@@ -139,6 +139,17 @@ class Dtype(gym.Wrapper):
         return tools.convert(self.env.reset())
 
 
+# goal_repr values whose goal is real-valued instead of one-hot, and the Box bounds
+# each one lives in: raw logits are unbounded, softmax probabilities lie in [0, 1].
+_CONTINUOUS_GOAL_BOUNDS = {"logit": (-np.inf, np.inf), "prob": (0.0, 1.0)}
+
+
+def _softmax_rows(x):
+    """Softmax over the last axis, max-subtracted for numerical stability."""
+    e = np.exp(x - x.max(axis=-1, keepdims=True))
+    return e / e.sum(axis=-1, keepdims=True)
+
+
 class GoalConditioned(gym.Wrapper):
     def __init__(self, env, config):
         super().__init__(env)
@@ -151,11 +162,13 @@ class GoalConditioned(gym.Wrapper):
         if self._goal_spec.scope == "first_row":
             self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(self.stochastic_classes)
             self.goal_index = config.get("goal_index", None)
-        elif self._goal_spec.goal_repr == "logit":
-            # Real-valued logit goals need a float Box (MultiBinary would truncate).
+        elif self._goal_spec.goal_repr in _CONTINUOUS_GOAL_BOUNDS:
+            # Real-valued goals (logits, probabilities) need a float Box (MultiBinary
+            # would truncate).
+            low, high = _CONTINUOUS_GOAL_BOUNDS[self._goal_spec.goal_repr]
             self.observation_space.spaces["goal"] = gym.spaces.Box(
-                low=-np.inf,
-                high=np.inf,
+                low=low,
+                high=high,
                 shape=(self.stochastic_rows, self.stochastic_classes),
                 dtype=np.float32,
             )
@@ -179,9 +192,14 @@ class GoalConditioned(gym.Wrapper):
                 goal[self.goal_index] = 1.0
             else:
                 goal = self._generate_row()
-        elif self._goal_spec.goal_repr == "logit":
-            # Real-valued logits resembling the RSSM's obs_step/img_step output.
-            goal = np.random.randn(self.stochastic_rows, self.stochastic_classes).astype(np.float32)
+        elif self._goal_spec.goal_repr in _CONTINUOUS_GOAL_BOUNDS:
+            # Real-valued logits resembling the RSSM's obs_step/img_step output; for
+            # goal_repr="prob" they are softmaxed into per-group probabilities, so the
+            # random goal is a point of the same simplex the reward compares against.
+            goal = np.random.randn(self.stochastic_rows, self.stochastic_classes)
+            if self._goal_spec.goal_repr == "prob":
+                goal = _softmax_rows(goal)
+            goal = goal.astype(np.float32)
         else:
             goal = np.zeros((self.stochastic_rows, self.stochastic_classes), dtype=np.float32)
             for i in range(self.stochastic_rows):

@@ -55,11 +55,33 @@ class TestMakeGoalSpec:
         with pytest.raises(ValueError):
             goals.make_goal_spec(_cfg(**{field: bad}))
 
+    def test_prob_on_both_axes_is_valid(self):
+        spec = _spec(goal_type="max_cosine", state_repr="prob", goal_repr="prob")
+        assert (spec.state_repr, spec.goal_repr) == ("prob", "prob")
+
+    @pytest.mark.parametrize(
+        "state_repr, goal_repr",
+        [("prob", "logit"), ("logit", "prob"), ("prob", "sample")],
+    )
+    def test_prob_on_a_single_axis_raises(self, state_repr, goal_repr):
+        # "prob" is selected as two CLI overrides; half of it would silently compare
+        # a softmax against a logit.
+        with pytest.raises(ValueError, match="prob"):
+            goals.make_goal_spec(_cfg(state_repr=state_repr, goal_repr=goal_repr))
+
 
 class TestStashesLogit:
-    @pytest.mark.parametrize("state_repr, expected", [("stoch", False), ("dist", True), ("logit", True)])
-    def test_stash_iff_not_stoch(self, state_repr, expected):
-        assert goals.stashes_logit(_spec(state_repr=state_repr)) is expected
+    @pytest.mark.parametrize(
+        "state_repr, goal_repr, expected",
+        [
+            ("stoch", "sample", False),
+            ("dist", "sample", True),
+            ("logit", "logit", True),
+            ("prob", "prob", True),
+        ],
+    )
+    def test_stash_iff_not_stoch(self, state_repr, goal_repr, expected):
+        assert goals.stashes_logit(_spec(state_repr=state_repr, goal_repr=goal_repr)) is expected
 
 
 class TestRewardState:
@@ -72,6 +94,13 @@ class TestRewardState:
         stoch, logit = torch.randn(2, 4, 4), torch.randn(2, 4, 4)
         out = goals.reward_state(_spec(state_repr="logit"), stoch=stoch, logit=logit, rssm=MagicMock())
         assert out is logit
+
+    def test_prob_returns_softmax_of_logit(self):
+        stoch, logit = torch.randn(2, 4, 4), torch.randn(2, 4, 4)
+        spec = _spec(state_repr="prob", goal_repr="prob")
+        out = goals.reward_state(spec, stoch=stoch, logit=logit, rssm=MagicMock())
+        assert torch.allclose(out, torch.softmax(logit, dim=-1))
+        assert torch.allclose(out.sum(-1), torch.ones(2, 4))
 
     def test_dist_returns_rssm_get_dist(self):
         stoch, logit = torch.randn(2, 4, 4), torch.randn(2, 4, 4)
@@ -91,6 +120,13 @@ class TestGoalFromLatent:
         stoch, logit = torch.randn(2, 4, 4), torch.randn(2, 4, 4)
         out = goals.goal_from_latent(_spec(goal_repr="logit"), stoch=stoch, logit=logit)
         assert out is logit
+
+    def test_prob_returns_softmax_of_logit(self):
+        stoch, logit = torch.randn(2, 4, 4), torch.randn(2, 4, 4)
+        spec = _spec(state_repr="prob", goal_repr="prob")
+        out = goals.goal_from_latent(spec, stoch=stoch, logit=logit)
+        assert torch.allclose(out, torch.softmax(logit, dim=-1))
+        assert torch.allclose(out.sum(-1), torch.ones(2, 4))
 
     def test_argmax_returns_one_hot_of_argmax(self):
         logit = torch.tensor([[[0.0, 5.0, 0.0], [3.0, 0.0, 0.0]]])  # argmax -> col 1, col 0

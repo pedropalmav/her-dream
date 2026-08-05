@@ -81,6 +81,8 @@ For headless MuJoCo environments: `export MUJOCO_GL=egl`.
 | `full` | `(S, K)` | 0 if **all S groups** match exactly, else -1 (**default; current research focus is this z-full comparison**) |
 | `argmax_full` | `(S, K)` | like `full` but compares against `argmax` one-hot of the prior logits instead of a sample |
 | `log_prob` | `(S, K)` | 0 if `dist.log_prob(goal) >= log(prob_threshold)`, else -1 |
+| `prob` | `(S, K)` | `dist.log_prob(goal).exp()` — dense in [0, 1] |
+| `max_cosine` | `(S, K)` | max-normalized dot product `(g·s)/max(‖g‖,‖s‖)²` between the flattened latents; 1 when equal |
 
 Everything else a goal type varies is captured by a **`GoalSpec`** (`goals.py`), built from
 three descriptor keys carried in each `configs/goal_type/<type>.yaml` (never string-branch on
@@ -88,11 +90,22 @@ three descriptor keys carried in each `configs/goal_type/<type>.yaml` (never str
 
 | descriptor | values | meaning / helper |
 |---|---|---|
-| `state_repr` | `stoch` \| `dist` \| `logit` | reward fn's state arg (`goals.reward_state`); also whether `act()` stashes `logit` (`goals.stashes_logit`) |
-| `goal_repr` | `sample` \| `argmax` \| `logit` | the goal tensor, must match the reward comparison (`goals.goal_from_latent`); also env goal space (`MultiBinary` vs float `Box`) + generation (one-hot vs `randn`) |
+| `state_repr` | `stoch` \| `dist` \| `logit` \| `prob` | reward fn's state arg (`goals.reward_state`); also whether `act()` stashes `logit` (`goals.stashes_logit`) |
+| `goal_repr` | `sample` \| `argmax` \| `logit` \| `prob` | the goal tensor, must match the reward comparison (`goals.goal_from_latent`); also env goal space (`MultiBinary` vs float `Box`) + generation (one-hot vs `randn`) |
 | `scope` | `first_row` \| `full` | actor/critic goal-input size: `K` vs `S*K` (`goals.goal_size`) |
 
 (`uses_threshold`, `log_prob`-only, appends a threshold one-hot to the actor/critic input.)
+
+`prob` is `softmax(logit)` — the per-group categorical probabilities. It exists for
+`max_cosine`: a logit vector is only defined up to a per-group additive constant, which
+softmax ignores but a dot product does not, so comparing probabilities makes the reward
+shift-invariant and bounded in [0, 1]. It must be set on **both** axes (`make_goal_spec`
+rejects a `prob`/`logit` mix), which is also the CLI switch between the two variants:
+
+```bash
+python3 train.py goal_type=max_cosine                                  # raw logits (file default)
+python3 train.py goal_type=max_cosine state_repr=prob goal_repr=prob   # softmax
+```
 Adding a goal type = a reward fn in `rewards.py` + a `configs/goal_type/<type>.yaml` with these
 keys; no edits to dreamer/trainer/her_buffer/wrappers. `goals.default_descriptors(goal_type)`
 reads a type's descriptors from its config file (used to backfill old checkpoints in zflow/viz).

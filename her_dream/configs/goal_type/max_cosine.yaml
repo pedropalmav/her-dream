@@ -1,6 +1,19 @@
 # @package _global_
+#
+# Max-normalized dot product between the state and goal latents (rewards.max_cosine_reward).
+# Two input spaces, selected by the state_repr/goal_repr pair below:
+#
+#   logit (this file's default) — the raw RSSM logits. Softmax is invariant to a
+#     per-group additive constant but this dot product is not, so equivalent
+#     distributions can score differently and the reward can go negative.
+#   prob — softmax(logit), the per-group probabilities. Shift-invariant, bounded in
+#     [0, 1], and equal to 1 exactly when the two distributions coincide. Select with:
+#
+#       python3 train.py goal_type=max_cosine state_repr=prob goal_repr=prob
+#
+# Both keys must be set together: make_goal_spec rejects a prob/logit mix.
 goal_type: max_cosine
-state_repr: logit # stoch | dist | logit   (reward fn's state arg)
-goal_repr: logit # sample | argmax | logit (the goal tensor)
-scope: full # first_row | full          (actor/critic goal input)
+state_repr: logit # stoch | dist | logit | prob   (reward fn's state arg)
+goal_repr: logit # sample | argmax | logit | prob (the goal tensor)
+scope: full # first_row | full              (actor/critic goal input)
 uses_threshold: false

@@ -1,4 +1,4 @@
-# Posterior sin `h` (`obs_use_deter=False`) — no ayuda a `full`, pero **mejora** `row_by_row` en random_goal (jul 16 → jul 26)
+# Posterior sin `h` (`obs_use_deter=False`) — no ayuda a `full`, pero **mejora** `row_by_row` en random_goal (jul 16 → jul 31)
 
 [← Índice](README.md)
 
@@ -18,13 +18,22 @@ goal.
    esperable: el muro de `full` es la varianza de Gumbel (sample-vs-sample), no
    `h`.
 2. **Con `goal_type=row_by_row` (la receta que sí da señal), quitar `h`
-   *mejora*** — aprende ~2-3× más rápido y llega a un plateau ~110 puntos mejor
+   *mejora*** — aprende ~2-4× más rápido y llega a un plateau ~110 puntos mejor
    que con `h`, sobre la misma seed y el mismo WM. **Este es el hallazgo del
    documento** (ver [§ El A/B con `row_by_row`](#el-ab-con-row_by_row-quitar-h-mejora)).
+3. **Con `prob`, tampoco** (item 39): sube el `train/rew` ~16× pero se queda en
+   el piso — `prob` queda descartada en `random_goal` con y sin `h`
+   ([§ items 38-39](#cerrando-el-ab-sobre-el-wm-bueno-full-y-prob-sin-h-items-38-39-jul-31)).
 
 La lectura combinada: `h` no es lo que rompe el match exacto, pero para
 **comparar goals** un `z` puramente observacional es más consistente — quitar `h`
 ayuda justo cuando la recompensa deja ver la diferencia.
+
+> **Acotación (jul 30, items 35/37).** El hallazgo vale para el **post-train
+> sobre un WM congelado**. En el régimen **joint end-to-end** (WM + política
+> juntos) el A/B se empata en train y **se invierte en eval** (−257 con `h` vs
+> −342 sin `h`): si el encoder se mueve, la ventaja de comparabilidad se diluye.
+> Detalle en [joint_vs_posttrain](joint_vs_posttrain.md).
 
 ## El cambio (`model.rssm.obs_use_deter=False`)
 
@@ -123,18 +132,20 @@ WM randomstart (`agent_start_random`), mismo goal imaginado, HER, 1M pasos. La
 | `episode/score` mejor episodio | **−22** | −116 |
 | `eval_score` ma25 final | **−217** | −286 |
 | `eval_score` mejor | **−121** | −220 |
-| `train/rew` final | **−0.1** (~29/32 filas) | −0.2 (~25/32) |
-| `episode/score` @143k (velocidad) | **−82** | −371 |
+| `train/rew` final (media últimos 10 logs) | **−0.14** (≈27/32 filas) | −0.22 (≈25/32) |
+| `episode/score` ma25 @143k (velocidad) | **−397** | −530 |
+| `episode/score` ma25 @250k | **−292** | −395 |
 
 **Quitar `h` no solo no estorba — mejora en todo:**
 
-- **Aprende ~2-3× más rápido**: llega a ≈ −82 a los 143k, donde el de `h` todavía
-  va en −371.
+- **Aprende ~2-4× más rápido**: el nivel que el de `h` alcanza a los 250k, el
+  sin `h` ya lo tiene a los 143k; y el nivel que el sin `h` tiene a los 250k
+  (−292) el de `h` recién lo alcanza al **1M** (−290).
 - **Mejor plateau**: ma25 del score ≈ −180 (vs −290) y mejor episodio −22 (casi
   el techo ≈ 0).
-- **Calza más filas en imaginación**: `train/rew` satura en ≈ −0.1 (≈29/32) en vez
-  de −0.2 (≈25/32). Las ~7 filas "difusas" que topaban al de `h`
-  ([artefacto §replica](artefacto_reward_exacto_gpu.md)) bajan a ~3 sin `h`.
+- **Calza más filas en imaginación**: `train/rew` satura en ≈ −0.14 (≈27/32) en
+  vez de −0.22 (≈25/32). Las ~7 filas "difusas" que topaban al de `h`
+  ([artefacto §replica](artefacto_reward_exacto_gpu.md)) bajan a ~5 sin `h`.
 
 ### El WM sin `h` es un pelo *peor*, y aun así la política aprende mejor
 
@@ -153,6 +164,58 @@ estado y el `z` del goal imaginado quedan gobernados por el **mismo encoder
 observacional**, así que sus argmax por fila coinciden más — justo lo que
 `row_by_row` premia.
 
+## Cerrando el A/B sobre el WM bueno: `full` y `prob` sin `h` (items 38-39, jul 31)
+
+Los tres primeros post-trains (items 30-32) corrieron sobre el WM **no**-randomstart
+(`wm_only_randomgoal_no_deter`). Faltaban los espejos sin `h` de las dos ramas
+del item 27 sobre el WM **randomstart** —el bueno, el que usa la receta
+ganadora— para que el A/B quedara pareado. Ambos corrieron a 500k sobre
+`wm_only_randomstart_no_deter/01`, `goal_sample=imagination` + HER:
+
+| # | Corrida | goal_type | seed | Score (últimos 10 / ma25) | Mejor ep. | `train/rew` | |
+|---|---|---|---|---|---|---|:--:|
+| 38 | `posttrain_randomstart_no_deter_full/01` | `full` | 1 | −1001 / −1001 | −683 | −0.98 | 🔴 |
+| 39 | `posttrain_randomstart_no_deter_prob/01` | `prob` | 2 | 4.4 / 1.8 | 61.8 | 0.010 | 🔴 |
+
+**Item 38 (`full`): sigue −1001, como se predijo** — el muro de `full` es la
+varianza de Gumbel, no `h`, y tampoco lo destraba un WM más ancho. Pero el run
+deja un dato **nuevo** que su espejo con `h` no podía dar:
+
+> El `train/rew` de `full` **ya no es −1.0 exacto**: promedia −0.980, con un
+> máximo de −0.923 y matches en el 95% de los logs. O sea, con el fix argmax
+> (`025f3b3`) el match 32/32 **sí ocurre**, en ~2% de los estados imaginados
+> (hasta 7.7% en el mejor batch). `full` en `random_goal` ya no es
+> gradiente-cero: es **señal demasiado escasa** para que la política converja.
+> Es una causa distinta —y más honesta— que la de junio.
+
+⚠️ **El A/B de `full` no está pareado en el código.** Su espejo con `h`
+(`posttrain_randomstart_goalimag_full/01`, item 27) corrió el **23 jun**,
+*anterior* al fix del `==` (2 jul), y tiene `train/rew` **exactamente −1.0000 en
+los 499 logs** — la firma del artefacto
+([artefacto_reward_exacto_gpu](artefacto_reward_exacto_gpu.md)). Así que la
+comparación −1.0 (con `h`) vs −0.98 (sin `h`) mezcla dos versiones del reward.
+Falta un `full` **con `h`** post-fix para cerrarlo; el veredicto de score
+(−1001 en ambos) no cambia.
+
+**Item 39 (`prob`): sale del cero exacto, pero sigue siendo el piso.** Frente a
+su espejo con `h` (`posttrain_randomstart_goalimag_prob/02`, misma seed 2):
+
+| `prob`, seed 2, 500k | sin `h` (item 39) | con `h` (item 27) |
+|---|---|---|
+| score últimos 10 | 4.4 | 0.0 |
+| mejor episodio | 61.8 | 11.7 |
+| `eval_score` últimos 10 | 0.9 | 0.0 |
+| `train/rew` últimos 10 | 0.0098 | 0.0006 |
+
+El `train/rew` es **~16× mayor** sin `h` —consistente con que el `z`
+observacional sea más comparable— pero sigue **dos órdenes de magnitud por
+debajo** de lo ganable (`prob` ∈ [0,1]; en `fixed_goal` la misma receta llegaba a
+score +331). Con la ma25 en 1.8 y el eval en ~1, esto **no es aprender**: `prob`
+queda **descartada en `random_goal`** también sin `h`. Ya no le quedan excusas
+(no era HER, no era el WM, no era `h`); lo que falta es el **diagnóstico 0**
+(entropía del `z` / `prob`-máx alcanzable) para cerrar formalmente que la
+recompensa es inganable.
+
 ## Lecturas
 
 - **Para `full`, quitar `h` no es palanca** (el muro es Gumbel/sample-vs-sample);
@@ -165,12 +228,18 @@ observacional**, así que sus argmax por fila coinciden más — justo lo que
   útil en `h` vs `z`" ([analisis_trayectorias_crafter](analisis_trayectorias_crafter.md)):
   la posición y buena parte del estado viven en `h`, y meter eso en el `z` que se
   compara lo vuelve más ruidoso como goal.
+- **El efecto es del régimen post-train**, no de `obs_use_deter` en abstracto:
+  end-to-end desaparece (y en eval se invierte). Ver
+  [joint_vs_posttrain](joint_vs_posttrain.md).
 - **Pendiente para consolidar**: replicar el A/B `row_by_row` sin `h` en más
-  seeds (hoy es 1 seed vs las 3 del lado con `h`), y ver el `eval_video` para
-  confirmar el comportamiento (perseguir el `z` objetivo — que es el objetivo por
-  diseño, no navegar al verde).
+  seeds — los items **33** (seed 1 → `/02`) y **34** (seed 2 → `/03`) están
+  lanzados y sus resultados aún **no se bajaron del servidor**; hasta que
+  lleguen sigue siendo 1 seed vs las 3 del lado con `h`. Falta también ver el
+  `eval_video` para confirmar el comportamiento (perseguir el `z` objetivo — que
+  es el objetivo por diseño, no navegar al verde), y un `full` **con `h`**
+  post-fix para parear el item 38.
 
-## Comandos (del `execution_commands.md`, items 29-32)
+## Comandos (del `execution_commands.md`, items 29-32; los sin-`h` posteriores son los items 33-36, 38-39)
 
 ```bash
 # 29) WM only, posterior sin h

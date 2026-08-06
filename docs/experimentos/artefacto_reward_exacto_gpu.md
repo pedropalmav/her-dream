@@ -151,9 +151,11 @@ entrenado la despegan.
   del agente.
 - O sea: lo que quedó demostrado es que **la maquinaria goal-condicionada en
   latente funciona en random_goal**. El eslabón pendiente es una fuente de goal
-  que sí pida el verde — el candidato natural es `goal_sample=image` (ya
-  fusionado, sin correr) con esta misma receta. Con el plateau de ≈-290 a 1M,
-  cambiar *qué pide el goal* es la única palanca que queda en esta rama.
+  que sí pida el verde — el candidato natural es `goal_sample=image` con esta
+  misma receta. Con el plateau de ≈-290 a 1M, cambiar *qué pide el goal* es la
+  única palanca que queda en esta rama. **(Corrido el jul 30, item 36: aprende
+  mejor que esta receta —ma25 -159— con un goal que sí codifica la posición del
+  verde. Ver [goal_desde_imagen](goal_desde_imagen.md).)**
 - El run seed 1 **murió silenciosamente a 249k/500k** (2.13 h, sin error en el
   log — SIGKILL/OOM/sesión cortada) y no dejó `latest.pt`. Los `/02` y `/03`
   (arriba) son sus relanzamientos completos.
@@ -164,7 +166,7 @@ entrenado la despegan.
 
 | Pendiente | Nota |
 |---|---|
-| `goal_sample=image` + `row_by_row` en random_goal | conecta el goal latente con la tarea del verde; la palanca con más retorno esperado |
+| ~~`goal_sample=image` + `row_by_row` en random_goal~~ ✅ **corrido** (jul 30) | ma25 **-159** / eval **-169**, mejor que esta receta; ver [goal_desde_imagen](goal_desde_imagen.md) |
 | Ver `eval_video.mp4` del `/03` | confirmar el comportamiento persigue-`z` |
 | Confirmar en barto qué `rewards.py` corrió el A/B | cierra (o no) la causa compile |
 | Diagnóstico 0 (entropía `z` / `prob`-máx) | cerraría formalmente que `prob` es inganable en random_goal |

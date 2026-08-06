@@ -166,6 +166,15 @@ Shape annotations throughout the code use these symbols (see `docs/tensor_shapes
 - **`text_kl` loss**: KL is computed as `dists.kl(post_logit.detach(), text_logit)` — the posterior is the target (detached), not the source, so the text encoder chases the world model's representation.
 - **Frozen-WM post-training** decouples representation learning from policy learning, so failures can be attributed to one or the other.
 
-## Current investigation (2026-06)
+## Current investigation (2026-08)
 
-With the identical recipe (frozen pretrained WM + `goal_type=full` + `goal_sample=buffer`), post-training **works on `fixed_goal`** (`logdir/post_train_wm_only/{her,normal}_buffer_goals` reach scores ≈ -430/-500) but **fails on `random_goal`** (`logdir/random_goal/posttrain_frozenwm_{herbuf,normalbuf}_goalbuf` stay at -1001). Working hypothesis (branch `analysis/random-goal-z-position`): some groups of `z` encode the green square's position; in `random_goal`, buffer-sampled goals come from episodes where the square was elsewhere, so a full-z match is unreachable in the current episode by construction. Earlier finding (2026-06-02, `text_wm_alignment`): `goal_type=full` is also what blocked the text-goal runs — exact 32-group sample-vs-sample match has P ≈ 4e-13 under the text encoder's distribution. See `bitacora_nano/general.md` for the full timeline.
+`random_goal` **already learns**. The recipe that works is a frozen pretrained WM (`agent_start_random=True`) + `goal_type=row_by_row` + `goal_sample=imagination|image` + HER with `buffer.her_strategy=future`, and the posterior built **without `h`** (`model.rssm.obs_use_deter=False`). Best run to date: `logdir/random_goal/posttrain_no_deter_rowbyrow_goalimage_herfuture/01`, score ma25 ≈ -91 / eval ≈ -126 at 1M steps.
+
+What got it there, in order:
+- `goal_type=full` (exact 32-group sample-vs-sample) is the blocker, not the environment — P ≈ 4e-13 under the text encoder, and it stays at -1001 in `random_goal` with any goal source. Dense per-row matching (`row_by_row`) is what gives gradient.
+- A float `==` in `rewards.py` silently zeroed the exact-match rewards on the GPU path between jun 8 and jun 26 (`train/rew` pinned at -1); fixed in `025f3b3` by comparing argmax indices.
+- Removing `h` from the posterior helps **post-training over a frozen WM** (ma25 -180 vs -290), but not end-to-end — the joint runs lose to post-training even with 2× the steps.
+- `goal_type=prob` is discarded in `random_goal` (flat at the floor with HER, a wider WM, and without `h`).
+- `buffer.her_strategy=future` beats the `final` default in both winning recipes (image: eval -126 vs -169; imagination: -166 vs -217), mostly by learning ~3× faster. With 1000-step episodes, `final` relabels to a goal hundreds of steps away and gives one goal for the whole 65-step sequence, while `future` gives one per step. The config default is still `final`.
+
+Open question: the policy reaches the target latent `z`, but it is not yet confirmed that it *navigates to the green square* — `goal_sample=image` ties the goal to the square by construction, and the behavioral check (eval videos, `experiments/goal_observation_eval.py`) is the top pending item. Full timeline and per-run numbers in `docs/experimentos/README.md`; personal log in `bitacora_nano/general.md`.

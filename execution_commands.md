@@ -383,3 +383,121 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
     model.rssm.obs_use_deter=False \
     env.steps=500000 trainer.update_log_every=1000
 ```
+
+33. **Posterior sin h — replicar la receta ganadora `row_by_row` en más seeds (seed 1).** El único run sin `h` con `row_by_row` es `posttrain_randomstart_no_deter_rowbyrow/01` (seed 3, ma25 −180, mejor del proyecto), pero está en 1 seed vs las 3 con `h`. Este replica esa receta sobre el **mismo WM congelado sin `h` `randomstart`** (`wm_only_randomstart_no_deter/01`), cambiando sólo seed y logdir. `model.rssm.obs_use_deter=False` se repite porque `load_from` reconstruye el modelo con la config actual:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_no_deter_rowbyrow/02 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+34. **Posterior sin h — `row_by_row`, seed 2.** Idéntico al item 33 salvo `seed=2` y `/03`. Con 33+34 quedan 3 seeds sin `h` (1/2/3) para el A/B limpio contra las 3 seeds con `h` (item 27 `/01`-`/03`):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_no_deter_rowbyrow/03 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=2 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+35. **Joint end-to-end sin h, horizonte largo (2M).** Pendiente "Joint desde 0" del README, ahora sin `h`: **sin `load_from`, sin `freeze_wm`** — WM + actor/critic se entrenan juntos desde cero. Mide si separar WM→política (post-train) ayuda o estorba vs end-to-end. Misma receta que la ganadora (`row_by_row`+imagination+HER+`agent_start_random`), pero como el WM también aprende se le da el doble de pasos. Caveat: con `goal_sample=imagination` el goal lo genera el WM, que al inicio es aleatorio (blanco móvil al comienzo, co-adapta):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/random_goal/joint_no_deter_rowbyrow/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=2000000 trainer.update_log_every=1000
+```
+
+36. **Posterior sin h — `goal_sample=image` + `row_by_row` (conectar el goal latente con la tarea real).** La palanca con más retorno esperado de la cola: hoy la política alcanza el `z` objetivo pero ignora el cuadrado verde; `goal_sample=image` renderiza un estado sintético con el verde en la celda-goal y lo codifica a `z` con un paso de posterior (`Dreamer.encode_observation`), atando el goal a la tarea. Post-train sobre el WM congelado sin `h` `randomstart`:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_no_deter_rowbyrow_goalimage/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=image \
+    buffer=her goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+37. **Control con h del joint (item 35).** Espejo exacto del item 35 quitando `obs_use_deter=False` (posterior con `h`), para que el A/B del joint end-to-end sea limpio (con `h` vs sin `h`, todo lo demás igual):
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    logdir=./logdir/random_goal/joint_rowbyrow/01 \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=row_by_row \
+    env.steps=2000000 trainer.update_log_every=1000
+```
+
+38. **Posterior sin h — replicar `full` sobre el WM `randomstart` (mirror del item 27 `full`).** Los items 30-32 corrieron `full` sin `h` sobre el WM **no**-randomstart (`wm_only_randomgoal_no_deter`, seed 1, 500k). Este es el mirror sin `h` del item 27 `full` (`posttrain_randomstart_goalimag_full/01`, seed 1): mismo WM ampliado `randomstart`, mismo goal/buffer, sólo cambia `obs_use_deter`. Esperado −1001 (el muro de `full` es Gumbel, no `h`), pero cierra el A/B sobre el WM bueno:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_no_deter_full/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=full \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+39. **Posterior sin h — replicar `prob` sobre el WM `randomstart` (mirror del item 27 `prob`).** Mirror sin `h` del item 27 `prob` (`posttrain_randomstart_goalimag_prob/02`, seed 2): idéntico salvo `obs_use_deter=False`. La hipótesis es que `prob` sea inganable en random por difusez del latente; sin `h` el posterior es un pelo más difuso aún, así que este cierra si quitar `h` mueve algo o no:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_no_deter_prob/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=2 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her goal_type=prob \
+    model.rssm.obs_use_deter=False \
+    env.steps=500000 trainer.update_log_every=1000
+```
+
+40. **HER `future` en vez de `final` (A/B sobre la mejor receta con imaginación).** Hoy `configs/buffer/her.yaml` fija `her_strategy: final`, que reetiqueta el goal al `z` del **último** paso del episodio. Con `env.time_limit=1000` y episodios que casi nunca terminan antes (piso -1001), ese goal queda a cientos de pasos del estado muestreado — muy lejos del `imag_horizon=15` sobre el que se calcula la reward en imaginación (HER original usaba episodios de ~50 pasos, donde "final" sí está cerca). Además, en `HERBuffer._sample_goal` (`her_dream/buffers/her_buffer.py`) los índices son vectores de largo `T+1`: con `FINAL` los 65 pasos de la secuencia **comparten el mismo goal**, mientras que con `FUTURE` (`randint(current, ep_length)` por paso) cada paso recibe **su propio** goal futuro → mucha más diversidad de goals por gradiente y un currículum natural de dificultad (a veces el propio estado → reward ≈0, a veces lejano). `future` es también el análogo on-policy de `goal_sample=imagination` ("un estado alcanzable desde acá"), así que reduce el mismatch entre los goals reetiquetados (80% del batch, `her_ratio=0.8`) y los del entorno. A/B limpio contra `posttrain_randomstart_no_deter_rowbyrow/01` (seed 3, ma25 −180): mismo WM congelado, misma seed, mismos pasos; **lo único que cambia es `buffer.her_strategy=future`** y el logdir:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_randomstart_no_deter_rowbyrow_herfuture/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=3 mission_text=False \
+    env.agent_start_random=True env.goal_sample=imagination \
+    buffer=her buffer.her_strategy=future goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+   ✅ **Corrido (ago 2-3, 1M pasos): `future` GANA.** `episode/score` ma25 **−147** (vs −180 con `final`) y `eval` ma25 **−166** (vs −217). La ganancia grande es de **velocidad**: a 143k ya está en −268 (train) / −341 (eval), nivel que `final` alcanza recién a ~500k. Los `.hydra/config.yaml` del par difieren sólo en `her_strategy` y `logdir`. Curvas y análisis en [`docs/experimentos/her_future_vs_final.md`](docs/experimentos/her_future_vs_final.md).
+
+   **Matiz:** con episodios de 1000 pasos, `future` uniforme sobre el resto del episodio deja el goal a ~cientos de pasos en promedio; se gana en **diversidad** y en la cola cercana, no en "todos los goals quedan cerca". El siguiente paso natural es un `future` **acotado a una ventana** (`t + U[1, 50]`), que hoy **no** está implementado (serían ~3 líneas en `_sample_goal`).
+
+   **Espejo con `goal_sample=image`** (la mejor corrida del proyecto, item 36, ma25 −159), por si `future` compone mejor con el goal que sí codifica la posición del verde:
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/posttrain_no_deter_rowbyrow_goalimage_herfuture/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=image \
+    buffer=her buffer.her_strategy=future goal_type=row_by_row \
+    model.rssm.obs_use_deter=False \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+   ✅ **Corrido (ago 3, 1M pasos): también gana, y es la nueva mejor corrida del proyecto.** `episode/score` ma25 **−91** (vs −159 del item 36) y `eval` ma25 **−126** (vs −169), con `train/rew` ≈ **28.0/32 filas**. Las dos palancas (`goal=image` y `future`) **componen**.

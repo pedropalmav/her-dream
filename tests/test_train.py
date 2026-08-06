@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import torch
 
 import train
 
@@ -389,6 +390,55 @@ class TestPostTrainMode:
         cfg = make_config(tmp_path, load_from=str(make_ckpt(tmp_path)), wm_only=True)
         with pytest.raises(ValueError):
             train.main.__wrapped__(cfg)
+
+
+class TestResetActorCritic:
+    """`_world_model_state_dict` keeps the WM and drops only actor/critic.
+
+    Used to post-train on a vanilla-Dreamer checkpoint whose actor/critic were
+    built without a goal input. The point of the helper is that it is *not* a
+    blanket strict=False: a partial load of the world model must raise.
+    """
+
+    @staticmethod
+    def agent_with(shapes):
+        agent = SimpleNamespace()
+        agent.state_dict = lambda: {k: torch.zeros(v) for k, v in shapes.items()}
+        return agent
+
+    def test_keeps_world_model_and_drops_actor_critic(self):
+        agent = self.agent_with({"rssm.w": (4, 4), "encoder.w": (2,), "actor.mlp.w": (3, 8)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "encoder.w": torch.ones(2), "actor.mlp.w": torch.ones(3, 5)}
+        kept = train._world_model_state_dict(agent, ckpt)
+        assert set(kept) == {"rssm.w", "encoder.w"}
+
+    def test_drops_stale_vanilla_heads(self):
+        agent = self.agent_with({"rssm.w": (4, 4)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "reward.last.weight": torch.ones(2), "cont.last.bias": torch.ones(1)}
+        assert set(train._world_model_state_dict(agent, ckpt)) == {"rssm.w"}
+
+    def test_unknown_extra_key_raises(self):
+        agent = self.agent_with({"rssm.w": (4, 4)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "text_encoder.gru.weight": torch.ones(2)}
+        with pytest.raises(ValueError, match="no counterpart"):
+            train._world_model_state_dict(agent, ckpt)
+
+    def test_world_model_shape_mismatch_raises(self):
+        agent = self.agent_with({"rssm.w": (4, 4)})
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            train._world_model_state_dict(agent, {"rssm.w": torch.ones(8, 8)})
+
+    def test_missing_world_model_tensor_raises(self):
+        agent = self.agent_with({"rssm.w": (4, 4), "encoder.w": (2,)})
+        with pytest.raises(ValueError, match="absent from the checkpoint"):
+            train._world_model_state_dict(agent, {"rssm.w": torch.ones(4, 4)})
+
+    def test_requires_load_from(self, tmp_path):
+        cfg = make_config(tmp_path)
+        cfg.reset_actor_critic = True
+        cfg.load_from = None
+        with pytest.raises(ValueError, match="only makes sense together with load_from"):
+            train.validate_config(cfg)
 
 
 class TestDistillMode:

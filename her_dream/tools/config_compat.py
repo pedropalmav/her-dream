@@ -48,6 +48,17 @@ def backfill_config(config, *, force_wm_only=False):
     config = OmegaConf.merge(config, updates) if updates else config
 
     if "goal_type" in config.model and "state_repr" not in config.model:
-        # Goal-type descriptors were added later; load them from the config group.
-        goals.with_default_descriptors(config.model)
+        # Goal-type descriptors were added later; load them from the config group
+        # and fan them into every section that carries them (mirrors configs.yaml).
+        # Notably `env` needs them too: the GoalConditioned wrapper reads the spec
+        # from config.env, so backfilling only `model` left `env.state_repr` missing
+        # and old goal_type checkpoints failed to serve in zflow.
+        d = goals.default_descriptors(config.model.goal_type)
+        core = {"state_repr": d["state_repr"], "goal_repr": d["goal_repr"], "scope": d["scope"]}
+        section_patch = {}
+        for section in ("env", "model", "buffer", "trainer"):
+            if section in config and "state_repr" not in config[section]:
+                # Only `model` carries uses_threshold in configs.yaml.
+                section_patch[section] = {**core, "uses_threshold": d["uses_threshold"]} if section == "model" else core
+        config = OmegaConf.merge(config, section_patch)
     return config, wm_only

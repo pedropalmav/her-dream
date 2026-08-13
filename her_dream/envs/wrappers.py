@@ -160,23 +160,32 @@ class GoalConditioned(gym.Wrapper):
         self._goal_spec = goals.make_goal_spec(config)
 
         if self._goal_spec.scope == "first_row":
-            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary(self.stochastic_classes)
+            goal_space = gym.spaces.MultiBinary(self.stochastic_classes)
             self.goal_index = config.get("goal_index", None)
         elif self._goal_spec.goal_repr in _CONTINUOUS_GOAL_BOUNDS:
             # Real-valued goals (logits, probabilities) need a float Box (MultiBinary
             # would truncate).
             low, high = _CONTINUOUS_GOAL_BOUNDS[self._goal_spec.goal_repr]
-            self.observation_space.spaces["goal"] = gym.spaces.Box(
+            goal_space = gym.spaces.Box(
                 low=low,
                 high=high,
                 shape=(self.stochastic_rows, self.stochastic_classes),
                 dtype=np.float32,
             )
         else:
-            self.observation_space.spaces["goal"] = gym.spaces.MultiBinary((
+            goal_space = gym.spaces.MultiBinary((
                 self.stochastic_rows,
                 self.stochastic_classes,
             ))
+
+        # Rebuild the Dict instead of mutating `self.observation_space.spaces` in
+        # place: some envs (e.g. envs.crafter.Crafter) expose observation_space as
+        # a property that builds a fresh Dict on every access, so an in-place
+        # write would land on a throwaway object and the goal key would vanish.
+        self.observation_space = gym.spaces.Dict({
+            **self.env.observation_space.spaces,
+            "goal": goal_space,
+        })
 
     def reset(self):
         obs = self.env.reset()

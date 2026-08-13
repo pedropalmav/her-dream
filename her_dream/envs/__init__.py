@@ -50,6 +50,9 @@ def make_env(config, id):
 
         env = crafter.Crafter(task, config.size, seed=config.seed + id)
         env = wrappers.OneHotAction(env)
+        # No GoalImageObservation: crafter has no goal cell to render, so
+        # goal_sample="image" is unavailable here (buffer/imagination/random are).
+        env = wrappers.GoalConditioned(env, config)
     elif suite == "metaworld":
         import her_dream.envs.metaworld as metaworld
 

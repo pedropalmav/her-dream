@@ -82,8 +82,83 @@ def validate_config(config):
                 "freeze_wm=True for the intended behavior."
             )
 
+    if getattr(config, "reset_actor_critic", False) and config.load_from is None:
+        raise ValueError("reset_actor_critic=True only makes sense together with load_from=<path-to-prev-logdir>.")
+
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
+
+
+# Actor/critic parameters, including the frozen inference clones and the slow
+# critic target. `reset_actor_critic=True` drops all of them from the checkpoint.
+_ACTOR_CRITIC_PREFIXES = (
+    "actor.",
+    "value.",
+    "_slow_value.",
+    "_frozen_actor.",
+    "_frozen_value.",
+    "_frozen_slow_value.",
+)
+
+# Heads a vanilla (non goal-conditioned) Dreamer trains but this agent no longer
+# builds: the goal reward function replaces the learned reward head, and the
+# continuation head went with it. Present in old checkpoints, absent here.
+_STALE_HEAD_PREFIXES = ("reward.", "cont.", "_frozen_reward.", "_frozen_cont.")
+
+
+def _world_model_state_dict(agent, ckpt_sd):
+    """Keep only the world-model tensors of `ckpt_sd`, leaving actor/critic at init.
+
+    Needed to post-train on a checkpoint whose actor/critic were built *without*
+    a goal input — e.g. the vanilla-Dreamer crafter runs, whose first actor layer
+    is `(units, feat_size)` while a goal-conditioned agent needs
+    `(units, feat_size + goal_size)`. A strict load fails on those tensors even
+    though the world model itself is perfectly compatible.
+
+    This is deliberately not a blanket `strict=False`: a silent partial load of
+    the *world model* would be indistinguishable from a correct one (the run
+    would train happily on a half-random encoder). Anything dropped or missing
+    outside the actor/critic and the stale vanilla heads raises instead.
+    """
+    model_sd = agent.state_dict()
+    kept, dropped_ac, dropped_stale = {}, [], []
+    for key, value in ckpt_sd.items():
+        if key.startswith(_ACTOR_CRITIC_PREFIXES):
+            dropped_ac.append(key)
+        elif key not in model_sd:
+            if not key.startswith(_STALE_HEAD_PREFIXES):
+                raise ValueError(
+                    f"Checkpoint key {key!r} has no counterpart in the agent and is not a "
+                    "known stale head. The checkpoint does not match this world model; "
+                    "refusing to load it partially."
+                )
+            dropped_stale.append(key)
+        elif model_sd[key].shape != value.shape:
+            raise ValueError(
+                f"Shape mismatch on world-model tensor {key!r}: checkpoint {tuple(value.shape)} "
+                f"vs agent {tuple(model_sd[key].shape)}. Check the model config used by the "
+                "source run (<load_from>/.hydra/config.yaml), e.g. model.rssm.obs_use_deter."
+            )
+        else:
+            kept[key] = value
+
+    missing = [k for k in model_sd if k not in kept and not k.startswith(_ACTOR_CRITIC_PREFIXES)]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} world-model tensors are absent from the checkpoint, e.g. "
+            f"{missing[:5]}. Refusing to load it partially."
+        )
+
+    print(f"[train] reset_actor_critic=True: loading {len(kept)} world-model tensors.")
+    print(f"[train]   re-initialized (actor/critic): {len(dropped_ac)} tensors, {_summarize(dropped_ac)}")
+    if dropped_stale:
+        print(f"[train]   discarded (stale vanilla heads): {len(dropped_stale)} tensors, {_summarize(dropped_stale)}")
+    return kept
+
+
+def _summarize(keys):
+    """Top-level module names of `keys`, for logging."""
+    return sorted({k.split(".")[0] for k in keys})
 
 
 def load_checkpoint(agent, config):
@@ -92,13 +167,20 @@ def load_checkpoint(agent, config):
     `load_state_dict` updates the live parameters, so the `_frozen_*` clones
     built at construction time still hold the random init. `clone_and_freeze`
     re-syncs them, then the appropriate `_apply_*` re-disables gradients.
+
+    With `reset_actor_critic=True` only the world model is loaded and the
+    actor/critic keep their fresh init (see `_world_model_state_dict`).
     """
     ckpt_path = pathlib.Path(config.load_from).expanduser() / "latest.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"No checkpoint at {ckpt_path}.")
     print("Loading agent state_dict from", config.load_from)
     state = torch.load(ckpt_path, map_location=config.device)
-    agent.load_state_dict(state["agent_state_dict"])
+    ckpt_sd = state["agent_state_dict"]
+    if getattr(config, "reset_actor_critic", False):
+        agent.load_state_dict(_world_model_state_dict(agent, ckpt_sd), strict=False)
+    else:
+        agent.load_state_dict(ckpt_sd)
     agent.clone_and_freeze()
     if agent.train_text_only:
         agent._apply_train_text_only()

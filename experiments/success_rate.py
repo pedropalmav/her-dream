@@ -80,6 +80,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 from experiments.common import (  # noqa: E402
     actor_policy,
@@ -300,13 +301,22 @@ def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip
     rng = np.random.default_rng(seed)
 
     records = []
-    for i, pair in enumerate(pairs):
+    # Per-pair progress with an ETA, because the runtime is wildly uneven: a solved
+    # pair stops at the success step while a failed one burns the whole budget
+    # (x2 for the random baseline), so elapsed time alone says nothing about how
+    # far along the suite is. The postfix carries the running success rate and the
+    # last pair's step count — the latter is why a pair was slow.
+    progress = tqdm(pairs, desc="    pairs", unit="pair", dynamic_ncols=True, leave=False)
+    for pair in progress:
         records.append(
             run_pair(agent, spec, env_cfg, pair, device, budget, rng, suite["seed"], skip_random, skip_oracle)
         )
-        if (i + 1) % 50 == 0:
-            done = float(np.mean([r["policy"]["success"] for r in records]))
-            print(f"    {i + 1}/{len(pairs)} pairs — success {100 * done:.1f}%")
+        solved = sum(r["policy"]["success"] for r in records)
+        progress.set_postfix(
+            success=f"{100 * solved / len(records):.1f}%",
+            steps=records[-1]["policy"]["steps_run"],
+            refresh=False,
+        )
 
     summary = summarize(records, S, not skip_random, not skip_oracle)
     meta = {

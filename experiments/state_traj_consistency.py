@@ -11,7 +11,7 @@ Diseño
 ──────
 Todas las trayectorias parten del mismo reset (mismo seed -> mismo goal, misma pose
 inicial) y todas terminan en la pose de reset (`agent_start_pos`, `agent_start_dir`)
-que se lee del env (compatible con RandomGoal y FixedGoal). La observación visual y
+que se lee del env (GoalGrid, con goal fijo o aleatorio). La observación visual y
 el goal son idénticos en el último paso. Si el WM fuese estrictamente Markoviano y
 consistente, el logit posterior debería coincidir entre trayectorias salvo por el
 ruido del straight-through Gumbel-Softmax.

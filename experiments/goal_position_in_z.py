@@ -12,9 +12,9 @@ queda en -1001 en random-goal con la misma receta.
 
 Diseño
 ──────
-FixedGoal y RandomGoal generan observaciones idénticas (mismo grid, misma
+GoalGrid con goal fijo y con goal aleatorio genera observaciones idénticas (mismo grid, misma
 cadena de wrappers); la única diferencia es cómo se elige la celda del goal.
-Usamos FixedGoal con el config del run de random-goal para barrer TODAS las
+Usamos GoalGrid con goal fijo y el config del run de random-goal para barrer TODAS las
 celdas interiores como posición del cuadrado, manteniendo fija la pose del
 agente, la secuencia de acciones (spin que vuelve a la pose inicial) y todo lo
 demás. Para cada posición se corre la misma trayectoria y se toma el posterior
@@ -78,7 +78,7 @@ ACT_LEFT = 0
 
 def collect_obs_sequence(env_cfg_resolved: dict, goal_pos: tuple[int, int], action_indices: list[int]) -> dict:
     """
-    Corre `action_indices` en un FixedGoal con el cuadrado en `goal_pos` y
+    Corre `action_indices` en un GoalGrid con el cuadrado fijo en `goal_pos` y
     devuelve la secuencia de observaciones (numpy) y la pose del agente.
     El env es determinista dado el plan de acciones, así que una sola pasada
     basta para todas las repeticiones.

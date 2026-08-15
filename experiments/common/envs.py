@@ -11,7 +11,7 @@ def fixed_goal_cfg(env_cfg, *, goal_pos=None, agent_start_pos=None, agent_start_
     the green-square / agent-spawn positions overridden.
 
     Lets an experiment dictate the layout instead of reading it off a random reset:
-    FixedGoal honours `goal_pos` / `agent_start_pos` on reset, so building an env
+    GoalGrid honours `goal_pos` / `agent_start_pos` on reset, so building an env
     from this config places the square and agent exactly where asked. Positions
     left as None keep whatever the run's config already had (so a fixed-goal run
     keeps its own `goal_pos`). Accepts an OmegaConf config or a plain dict; the
@@ -41,7 +41,8 @@ def unwrap_env(env):
 def goal_pos(base_env) -> np.ndarray:
     """Green-square position as an int array.
 
-    RandomGoal exposes `_goal_pos` (set in place_obj); FixedGoal uses `goal_pos`.
+    GoalGrid exposes `_goal_pos` (this episode's cell, always concrete); `goal_pos`
+    is the configured value and is None when the square is resampled per episode.
     """
     raw = getattr(base_env, "_goal_pos", None)
     if raw is None:

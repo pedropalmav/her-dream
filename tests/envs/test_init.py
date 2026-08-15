@@ -1,12 +1,34 @@
 import sys
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import gymnasium as gym
 import numpy as np
 import pytest
 
+import her_dream.envs
 import her_dream.goals as goals
 from tests.envs.conftest import DictNamespace
+
+
+@contextmanager
+def patch_env_module(module_name, dummy):
+    """Stub out a lazily-imported `her_dream.envs.<x>` submodule.
+
+    Patching `sys.modules` alone is not enough. `make_env` does
+    `import her_dream.envs.x as x`, which binds from the *parent package
+    attribute* whenever that attribute already exists — and it does as soon as
+    any earlier test in the session imports the real module (e.g. test_atari.py).
+    The mock is then silently bypassed and the real env is constructed, so the
+    failure depends on test ordering. Patching both keeps it deterministic.
+    """
+    attr = module_name.rsplit(".", 1)[1]
+    with (
+        patch.dict(sys.modules, {module_name: dummy}),
+        patch.object(her_dream.envs, attr, dummy, create=True),
+    ):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # Shared config factory
@@ -110,7 +132,7 @@ class TestMakeEnvSuites:
         dummy_env = _DummyBoxEnv()
         dummy.DeepMindControl.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.dmc": dummy}):
+        with patch_env_module("her_dream.envs.dmc", dummy):
             from her_dream.envs import make_env
 
             config = make_config(task="dmc_walker_walk")
@@ -126,7 +148,7 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(18)
         dummy_atari.Atari.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.atari": dummy_atari}):
+        with patch_env_module("her_dream.envs.atari", dummy_atari):
             from her_dream.envs import make_env
 
             config = make_config(task="atari_pong")
@@ -141,7 +163,7 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(5)
         dummy_mem.MemoryMaze.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.memorymaze": dummy_mem}):
+        with patch_env_module("her_dream.envs.memorymaze", dummy_mem):
             from her_dream.envs import make_env
 
             config = make_config(task="memorymaze_9x9")
@@ -156,7 +178,7 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+        with patch_env_module("her_dream.envs.crafter", dummy_crafter):
             from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward")
@@ -170,7 +192,7 @@ class TestMakeEnvSuites:
         dummy_env = _DummyBoxEnv()
         dummy_mw.MetaWorld.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.metaworld": dummy_mw}):
+        with patch_env_module("her_dream.envs.metaworld", dummy_mw):
             from her_dream.envs import make_env
 
             config = make_config(task="metaworld_reach")
@@ -185,7 +207,7 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(7)
         dummy_rg.make_random_goal_env.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.random_goal": dummy_rg}):
+        with patch_env_module("her_dream.envs.random_goal", dummy_rg):
             from her_dream.envs import make_env
 
             config = make_config(task="random-goal_default", mission_text=False)
@@ -244,7 +266,7 @@ class TestMakeEnvSuites:
         dummy_env.action_space = gym.spaces.Discrete(7)
         dummy_fg.make_fixed_goal_env.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.fixed_goal": dummy_fg}):
+        with patch_env_module("her_dream.envs.fixed_goal", dummy_fg):
             from her_dream.envs import make_env
 
             config = make_config(task="fixed-goal_default", goal_pos_x=8, goal_pos_y=1, mission_text=False)
@@ -277,7 +299,7 @@ class TestMakeEnvWrapperStack:
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+        with patch_env_module("her_dream.envs.crafter", dummy_crafter):
             from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward")
@@ -292,7 +314,7 @@ class TestMakeEnvWrapperStack:
         dummy_env.action_space = gym.spaces.Discrete(17)
         dummy_crafter.Crafter.return_value = dummy_env
 
-        with patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}):
+        with patch_env_module("her_dream.envs.crafter", dummy_crafter):
             from her_dream.envs import make_env
 
             config = make_config(task="crafter_reward", time_limit=50, action_repeat=1)
@@ -315,7 +337,7 @@ class TestMakeEnvs:
         dummy_crafter.Crafter.return_value = dummy_env
 
         with (
-            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch_env_module("her_dream.envs.crafter", dummy_crafter),
             patch("her_dream.envs.parallel.ParallelEnv") as mock_penv,
         ):
             penv_instance = MagicMock()
@@ -349,7 +371,7 @@ class TestMakeEnvs:
             return instance
 
         with (
-            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch_env_module("her_dream.envs.crafter", dummy_crafter),
             patch("her_dream.envs.parallel.ParallelEnv", side_effect=fake_penv),
         ):
             from her_dream.envs import make_envs
@@ -368,7 +390,7 @@ class TestMakeEnvs:
         dummy_crafter.Crafter.return_value = dummy_env
 
         with (
-            patch.dict(sys.modules, {"her_dream.envs.crafter": dummy_crafter}),
+            patch_env_module("her_dream.envs.crafter", dummy_crafter),
             patch("her_dream.envs.parallel.ParallelEnv") as mock_penv,
         ):
             penv_instance = MagicMock()

@@ -107,3 +107,14 @@ def default_descriptors(goal_type: str) -> dict:
         "scope": cfg.scope,
         "uses_threshold": bool(cfg.get("uses_threshold", False)),
     }
+
+
+def with_default_descriptors(cfg):
+    """Fill missing goal-type descriptor keys on `cfg` in place, from its config file.
+
+    `cfg` is a dict-like carrying a ``goal_type`` key (a plain dict or an OmegaConf
+    ``DictConfig``). Existing keys are preserved (setdefault semantics). Returns `cfg`.
+    """
+    for key, val in default_descriptors(cfg["goal_type"]).items():
+        cfg.setdefault(key, val)
+    return cfg

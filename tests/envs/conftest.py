@@ -40,9 +40,7 @@ def make_goal_config(**overrides):
         stochastic_rows=N_ROWS,
         goal_type="first_row",
     )
-    merged = {**defaults, **overrides}
-    for key, val in goals.default_descriptors(merged["goal_type"]).items():
-        merged.setdefault(key, val)
+    merged = goals.with_default_descriptors({**defaults, **overrides})
     return DictNamespace(**merged)
 
 

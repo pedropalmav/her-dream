@@ -501,3 +501,54 @@ CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
 ```
 
    ✅ **Corrido (ago 3, 1M pasos): también gana, y es la nueva mejor corrida del proyecto.** `episode/score` ma25 **−91** (vs −159 del item 36) y `eval` ma25 **−126** (vs −169), con `train/rew` ≈ **28.0/32 filas**. Las dos palancas (`goal=image` y `future`) **componen**.
+
+41. **`reward_offset=0` sobre la mejor receta (control de neutralidad, `random_goal`).** `reward_offset` (PR #71) reescribe cada reward como `offset + match`: `-1` reproduce el esquema histórico y `0` lo vuelve no-negativo. Existe **para los entornos episódicos** (lava): con reward negativo por paso, terminar rinde más que sobrevivir, así que un agente que percibe la terminación tiene incentivo a suicidarse — medido en `LavaGrid` con política aleatoria y `disc=0.997`, morir da **−136** contra **−309** de llegar al time limit, y la ventaja del paso terminal sale **+90** (con `offset=0` sale **−212**).
+
+    `random_goal` **no termina nunca**, así que aquí el offset debería ser *inocuo*: un shift constante mueve todos los valores en `offset/(1-γ)` y deja las ventajas intactas. Eso ya está verificado numéricamente contra el `_lambda_return` real (ventajas idénticas a 1e-4) y función por función contra la implementación anterior. **Estas tres corridas son el control empírico**: confirmar en entrenamiento real que el cambio es neutro, *antes* de apoyarse en él para lava. Si el offset alterara el aprendizaje en un entorno no-episódico, el supuesto teórico estaría mal y habría que revisarlo antes de seguir.
+
+    **La escala del score cambia y hay que corregirla al comparar.** Con `row_by_row` el reward sube exactamente +1 por paso, y con `env.time_limit=1000` los episodios son siempre de 1000 pasos, así que `score_offset0 = score_offset−1 + 1000`, exacto. El mejor run del proyecto (item 40 espejo, ma25 **−91**) equivale a **+909** en la escala nueva. `train/rew` no cambia de escala por paso: pasa de ≈−0.125 a ≈+0.875.
+
+    **Diseño de las tres corridas.** Comparar una sola corrida `offset=0` contra la del archivo no distingue el efecto del offset del ruido entre semillas, así que el trío incluye un par pareado y un control de semilla:
+
+    **41a — control de semilla y de refactor** (`offset=-1`, seed 2). Misma receta y mismo esquema de reward que el archivo, pero semilla nueva y código nuevo: da la varianza entre semillas y valida de paso que el refactor de `rewards.py` no cambió nada en una corrida real.
+```bash
+CUDA_VISIBLE_DEVICES=0 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/offset_control_m1_seed2/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=2 mission_text=False \
+    env.agent_start_random=True env.goal_sample=image \
+    buffer=her buffer.her_strategy=future goal_type=row_by_row \
+    model.rssm.obs_use_deter=False reward_offset=-1.0 \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+    **41b — la pregunta, pareada con el mejor run** (`offset=0`, seed 1). Idéntica al espejo del item 40 salvo `reward_offset` y el logdir, así que los `.hydra/config.yaml` deberían diferir sólo en esas dos claves.
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/offset_0_seed1/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=1 mission_text=False \
+    env.agent_start_random=True env.goal_sample=image \
+    buffer=her buffer.her_strategy=future goal_type=row_by_row \
+    model.rssm.obs_use_deter=False reward_offset=0.0 \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+    **41c — par de 41a** (`offset=0`, seed 2). Cierra el diseño 2×2: dos semillas por esquema.
+```bash
+CUDA_VISIBLE_DEVICES=2 ts -G 1 bash scripts/train.sh \
+    load_from=./logdir/random_goal/wm_only_randomstart_no_deter/01 \
+    logdir=./logdir/random_goal/offset_0_seed2/01 \
+    freeze_wm=True wm_only=False \
+    env=random_goal seed=2 mission_text=False \
+    env.agent_start_random=True env.goal_sample=image \
+    buffer=her buffer.her_strategy=future goal_type=row_by_row \
+    model.rssm.obs_use_deter=False reward_offset=0.0 \
+    env.steps=1000000 trainer.update_log_every=1000
+```
+
+    **Cómo leerlo.** Sumar 1000 a los scores de 41a (y a los del archivo) para llevarlos a la escala de 41b/41c. La hipótesis es que las cuatro curvas —archivo seed 1, 41a seed 2, 41b, 41c— quedan dentro de la dispersión entre semillas. Si `offset=0` queda sistemáticamente peor en ambas semillas, el supuesto de neutralidad falla y hay que entender por qué antes de usarlo en lava; los sospechosos serían la normalización de retornos (`return_ema`, que ve percentiles en otra escala) y el arranque del crítico, no el objetivo en sí.
+
+    ⚠️ **Antes de correr en el servidor:** `main` pinea `cookie-env @ git+...@v0.6.0` pero ese tag todavía no existe (PR #8 de cookie-env sigue abierta), así que `uv pip install -e .` falla. Instalar cookie-env aparte con `uv pip install -e ../cookie-env` hasta que el tag esté publicado.

@@ -106,6 +106,7 @@ def default_descriptors(goal_type: str) -> dict:
         "goal_repr": cfg.goal_repr,
         "scope": cfg.scope,
         "uses_threshold": bool(cfg.get("uses_threshold", False)),
+        "reward_offset": float(cfg.reward_offset),
     }
 
 

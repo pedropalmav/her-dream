@@ -13,6 +13,7 @@ from her_dream.rewards import (
     make_reward,
     max_cosine_reward,
     prob_reward,
+    reward_offset,
     row_by_row_reward,
 )
 
@@ -20,21 +21,35 @@ from .conftest import B, K, S, T, make_dist_mock
 
 
 class TestMakeReward:
-    def test_first_row_type(self):
+    """`make_reward` binds the goal type's reward offset, so it returns a closure
+    rather than the bare function; these assert behaviour instead of identity."""
+
+    def _onehot(self, idx, n=K):
+        return torch.nn.functional.one_hot(torch.tensor(idx), n).float()
+
+    def test_first_row_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="first_row")
-        assert make_reward(config) is first_row_reward
+        state = self._onehot([[0] * S] * B)
+        goal = self._onehot([0] * B)
+        assert torch.equal(make_reward(config)(state, goal), first_row_reward(state, goal))
 
-    def test_row_by_row_type(self):
+    def test_row_by_row_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="row_by_row")
-        assert make_reward(config) is row_by_row_reward
+        state = self._onehot([[0] * S] * B)
+        goal = self._onehot([0] * S)
+        assert torch.equal(make_reward(config)(state, goal), row_by_row_reward(state, goal))
 
-    def test_full_type(self):
+    def test_full_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="full")
-        assert make_reward(config) is full_goal_reward
+        state = self._onehot([[0] * S] * B)
+        goal = self._onehot([0] * S)
+        assert torch.equal(make_reward(config)(state, goal), full_goal_reward(state, goal))
 
-    def test_argmax_full_type(self):
+    def test_argmax_full_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="argmax_full")
-        assert make_reward(config) is argmax_full_reward
+        logit = torch.randn(B, S, K)
+        goal = self._onehot([0] * S)
+        assert torch.equal(make_reward(config)(logit, goal), argmax_full_reward(logit, goal))
 
     def test_log_prob_type_callable(self):
         prob_threshold = 0.5
@@ -48,18 +63,79 @@ class TestMakeReward:
         result = fn(dist, goal)
         assert torch.all(result == 0)
 
-    def test_prob_type(self):
+    def test_prob_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="prob")
-        assert make_reward(config) is prob_reward
+        dist = make_dist_mock(torch.randn(B, S, K), torch.log(torch.full((B,), 0.25)))
+        goal = torch.zeros(S, K)
+        assert torch.allclose(make_reward(config)(dist, goal), prob_reward(dist, goal))
 
-    def test_max_cosine_type(self):
+    def test_max_cosine_type_matches_bare_function(self):
         config = SimpleNamespace(goal_type="max_cosine")
-        assert make_reward(config) is max_cosine_reward
+        state = torch.randn(B, S, K)
+        goal = torch.randn(S, K)
+        assert torch.allclose(make_reward(config)(state, goal), max_cosine_reward(state, goal))
 
     def test_invalid_type_raises(self):
         config = SimpleNamespace(goal_type="unknown")
         with pytest.raises(ValueError):
             make_reward(config)
+
+
+class TestRewardOffset:
+    """The offset is the per-step baseline: reward == offset + match."""
+
+    def _onehot(self, idx, n=K):
+        return torch.nn.functional.one_hot(torch.tensor(idx), n).float()
+
+    @pytest.mark.parametrize(
+        "goal_type,expected",
+        [
+            ("first_row", -1.0),
+            ("row_by_row", -1.0),
+            ("full", -1.0),
+            ("argmax_full", -1.0),
+            ("log_prob", -1.0),
+            # Already non-negative / centred, so their historical baseline is 0.
+            ("prob", 0.0),
+            ("max_cosine", 0.0),
+        ],
+    )
+    def test_default_backfilled_from_goal_type_config(self, goal_type, expected):
+        """Configs saved before this key existed must still resolve."""
+        assert reward_offset(SimpleNamespace(goal_type=goal_type)) == expected
+
+    def test_explicit_value_wins_over_default(self):
+        assert reward_offset(SimpleNamespace(goal_type="full", reward_offset=0.0)) == 0.0
+
+    def test_offset_zero_makes_match_rewards_non_negative(self):
+        """The whole point: with offset 0 nothing is ever negative, so ending an
+        episode can never beat surviving it."""
+        matching = self._onehot([[0] * S] * B)
+        goal = self._onehot([0] * S)
+        missing = self._onehot([[1] * S] * B)
+        for state in (matching, missing):
+            assert torch.all(full_goal_reward(state, goal, offset=0.0) >= 0)
+            assert torch.all(row_by_row_reward(state, goal, offset=0.0) >= 0)
+
+    def test_offset_shifts_by_a_constant(self):
+        """Changing the offset adds a constant, it does not reshape the reward."""
+        state = self._onehot([[0, 0, 1, 1][:S]] * B)
+        goal = self._onehot([0] * S)
+        a = row_by_row_reward(state, goal, offset=-1.0)
+        b = row_by_row_reward(state, goal, offset=0.0)
+        assert torch.allclose(b - a, torch.ones_like(a))
+
+    def test_matching_state_is_offset_plus_one(self):
+        state = self._onehot([[0] * S] * B)
+        goal = self._onehot([0] * S)
+        for off in (-1.0, 0.0, 2.5):
+            assert torch.allclose(full_goal_reward(state, goal, offset=off), torch.tensor(off + 1.0))
+
+    def test_unmatched_state_is_exactly_the_offset(self):
+        state = self._onehot([[1] * S] * B)
+        goal = self._onehot([0] * S)
+        for off in (-1.0, 0.0, 2.5):
+            assert torch.allclose(full_goal_reward(state, goal, offset=off), torch.tensor(off))
 
 
 class TestFirstRowReward:

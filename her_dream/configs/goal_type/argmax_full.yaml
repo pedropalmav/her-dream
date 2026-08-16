@@ -4,3 +4,6 @@ state_repr: logit # stoch | dist | logit   (reward fn's state arg)
 goal_repr: argmax # sample | argmax | logit (the goal tensor)
 scope: full # first_row | full          (actor/critic goal input)
 uses_threshold: false
+# step cost; reward is offset + match, so -1 gives the historical {-1, 0}.
+# Set to 0.0 on the -1-based types for a non-negative scheme (see rewards.py).
+reward_offset: -1.0

@@ -6,3 +6,6 @@ scope: full # first_row | full          (actor/critic goal input)
 uses_threshold: true # appends a threshold one-hot to the actor/critic input
 prob_threshold: 0.5 # probability in [0,1]; compared in log-space
 prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)
+# step cost; reward is offset + match, so -1 gives the historical {-1, 0}.
+# Set to 0.0 on the -1-based types for a non-negative scheme (see rewards.py).
+reward_offset: -1.0

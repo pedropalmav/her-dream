@@ -91,8 +91,21 @@ three descriptor keys carried in each `configs/goal_type/<type>.yaml` (never str
 | `state_repr` | `stoch` \| `dist` \| `logit` | reward fn's state arg (`goals.reward_state`); also whether `act()` stashes `logit` (`goals.stashes_logit`) |
 | `goal_repr` | `sample` \| `argmax` \| `logit` | the goal tensor, must match the reward comparison (`goals.goal_from_latent`); also env goal space (`MultiBinary` vs float `Box`) + generation (one-hot vs `randn`) |
 | `scope` | `first_row` \| `full` | actor/critic goal-input size: `K` vs `S*K` (`goals.goal_size`) |
+| `reward_offset` | float | per-step baseline; reward is `offset + match` (`rewards.reward_offset`) |
 
 (`uses_threshold`, `log_prob`-only, appends a threshold one-hot to the actor/critic input.)
+
+Every reward is `offset + match`, where `match` is how much of the goal the state
+achieves. `reward_offset` is what a fully unmatched step is worth, so it fixes the
+sign of the scheme: `-1` reproduces the historical rewards (matching only stops the
+bleeding), `0` makes them non-negative. The defaults per type reproduce the archive
+exactly — `-1` for the match-style types, `0` for `prob`/`max_cosine`, which were
+already non-negative — and are backfilled from the goal-type config for runs saved
+before the key existed. **Any episodic env needs `reward_offset: 0`**: with a
+negative per-step reward, terminating is worth more than surviving, so an agent that
+can perceive termination is rewarded for dying. Absent termination the two schemes
+are equivalent for the optimal policy (a constant shift leaves advantages untouched),
+so this only changes behaviour once something can terminate.
 Adding a goal type = a reward fn in `rewards.py` + a `configs/goal_type/<type>.yaml` with these
 keys; no edits to dreamer/trainer/her_buffer/wrappers. `goals.default_descriptors(goal_type)`
 reads a type's descriptors from its config file (used to backfill old checkpoints in zflow/viz).

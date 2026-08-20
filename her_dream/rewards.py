@@ -189,16 +189,27 @@ def argmax_full_reward(logit: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
 
 def max_cosine_reward(state: torch.Tensor, goal: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """
-    Max-normalized dot product between the state and goal logit vectors.
+    Max-normalized dot product between the state and goal latent vectors.
 
     Each (S, K) latent is flattened into a single S*K vector; the reward is
     r = (g/m)^T (s/m) = (g . s) / m^2, with m = max(||g||, ||s||). It peaks at
-    1 when g == s and stays roughly in [-1, 1]. Both `state` and `goal` are the
-    raw logits returned by RSSM's obs_step/img_step (not one-hot samples).
+    1 when g == s and stays roughly in [-1, 1].
+
+    Both arguments are real-valued latents (not one-hot samples), in the space the
+    goal type's `state_repr`/`goal_repr` descriptors select:
+
+    - `logit`: the raw logits returned by RSSM's obs_step/img_step. Note that a
+      categorical logit vector is only defined up to a per-group additive constant
+      (softmax is shift-invariant) while this dot product is not, so equivalent
+      distributions can score differently.
+    - `prob` (`state_repr=prob goal_repr=prob`): softmax(logit), i.e. the per-group
+      probabilities. Shift-invariant by construction, and since both vectors are
+      non-negative with unit-sum rows the reward lies in [0, 1], reaching 1 exactly
+      when the two distributions coincide.
 
     Args:
-        state (torch.Tensor): Current-state logits. Shape (B, S, K) or (B, T, S, K).
-        goal (torch.Tensor): Goal logits. Shape (S, K) or (B, S, K).
+        state (torch.Tensor): Current-state latent. Shape (B, S, K) or (B, T, S, K).
+        goal (torch.Tensor): Goal latent. Shape (S, K) or (B, S, K).
         eps (float): Guards the all-zero degenerate case.
 
     Returns:

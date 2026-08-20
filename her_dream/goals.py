@@ -4,9 +4,11 @@ Each `goal_type` drives three orthogonal axes of behavior, previously branched o
 `goal_type` string at ~13 sites across the codebase:
 
 - ``state_repr`` — what the reward function's state argument is:
-  ``"stoch"`` (a sampled one-hot), ``"dist"`` (``rssm.get_dist(logit)``) or ``"logit"``.
+  ``"stoch"`` (a sampled one-hot), ``"dist"`` (``rssm.get_dist(logit)``), ``"logit"`` or
+  ``"prob"`` (``softmax(logit)``, the per-group categorical probabilities).
 - ``goal_repr`` — what the goal tensor is (it must match ``state_repr``'s comparison):
-  ``"sample"`` (a stoch one-hot), ``"argmax"`` (``one_hot(argmax(logit))``) or ``"logit"``.
+  ``"sample"`` (a stoch one-hot), ``"argmax"`` (``one_hot(argmax(logit))``), ``"logit"``
+  or ``"prob"`` (``softmax(logit)``).
 - ``scope`` — the actor/critic goal input: ``"first_row"`` (a single group, size ``K``)
   or ``"full"`` (all groups, size ``S*K``).
 
@@ -24,8 +26,8 @@ from omegaconf import OmegaConf
 
 _GOAL_TYPE_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs", "goal_type")
 
-_STATE_REPRS = {"stoch", "dist", "logit"}
-_GOAL_REPRS = {"sample", "argmax", "logit"}
+_STATE_REPRS = {"stoch", "dist", "logit", "prob"}
+_GOAL_REPRS = {"sample", "argmax", "logit", "prob"}
 _SCOPES = {"first_row", "full"}
 
 
@@ -58,6 +60,14 @@ def make_goal_spec(config) -> GoalSpec:
         raise ValueError(f"Invalid goal_repr {spec.goal_repr!r} for goal_type {spec.goal_type!r}")
     if spec.scope not in _SCOPES:
         raise ValueError(f"Invalid scope {spec.scope!r} for goal_type {spec.goal_type!r}")
+    # "prob" (softmax) is usually selected from the CLI as two independent overrides;
+    # setting it on only one axis would compare a simplex vector against a logit one.
+    if (spec.state_repr == "prob") != (spec.goal_repr == "prob"):
+        raise ValueError(
+            f"state_repr={spec.state_repr!r} / goal_repr={spec.goal_repr!r} for goal_type "
+            f"{spec.goal_type!r}: 'prob' compares softmax against softmax, so set both keys "
+            "(state_repr=prob goal_repr=prob) or neither."
+        )
     return spec
 
 
@@ -75,6 +85,8 @@ def reward_state(spec: GoalSpec, *, stoch, logit, rssm):
         return rssm.get_dist(logit)
     if spec.state_repr == "logit":
         return logit
+    if spec.state_repr == "prob":
+        return F.softmax(logit, dim=-1)
     return stoch
 
 
@@ -85,6 +97,8 @@ def goal_from_latent(spec: GoalSpec, *, stoch, logit):
         return F.one_hot(logit.argmax(dim=-1), num_classes=K).float()
     if spec.goal_repr == "logit":
         return logit
+    if spec.goal_repr == "prob":
+        return F.softmax(logit, dim=-1)
     return stoch
 
 

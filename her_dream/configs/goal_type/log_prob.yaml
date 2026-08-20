@@ -1,8 +1,8 @@
 # @package _global_
 goal_type: log_prob
-state_repr: dist # stoch | dist | logit   (reward fn's state arg)
-goal_repr: sample # sample | argmax | logit (the goal tensor)
-scope: full # first_row | full          (actor/critic goal input)
+state_repr: dist # stoch | dist | logit | prob   (reward fn's state arg)
+goal_repr: sample # sample | argmax | logit | prob (the goal tensor)
+scope: full # first_row | full              (actor/critic goal input)
 uses_threshold: true # appends a threshold one-hot to the actor/critic input
 prob_threshold: 0.5 # probability in [0,1]; compared in log-space
 prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)

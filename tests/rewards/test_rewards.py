@@ -394,3 +394,34 @@ class TestMaxCosineReward:
         goal = torch.zeros(K)
         with pytest.raises(ValueError):
             max_cosine_reward(state, goal)
+
+    def test_prob_inputs_identical_gives_one(self):
+        # state_repr=goal_repr="prob": both sides are softmax(logit).
+        probs = torch.softmax(torch.randn(B, S, K), dim=-1)
+        result = max_cosine_reward(probs, probs)
+        assert torch.allclose(result, torch.ones(B, 1), atol=1e-5)
+
+    def test_prob_inputs_stay_in_unit_range(self):
+        state = torch.softmax(torch.randn(B, S, K), dim=-1)
+        goal = torch.softmax(torch.randn(B, S, K), dim=-1)
+        result = max_cosine_reward(state, goal)
+        assert torch.all(result >= 0) and torch.all(result <= 1)
+
+    def test_prob_inputs_are_invariant_to_logit_shift(self):
+        # softmax(l + c) == softmax(l) per group, so the prob-space reward must not
+        # move under a per-group additive shift — the raw-logit one does. This is the
+        # whole reason state_repr=prob goal_repr=prob exists.
+        state_logit = torch.randn(B, S, K)
+        goal_logit = torch.randn(B, S, K)
+        shift = torch.randn(B, S, 1)
+
+        shifted = max_cosine_reward(torch.softmax(state_logit + shift, dim=-1), torch.softmax(goal_logit, dim=-1))
+        unshifted = max_cosine_reward(torch.softmax(state_logit, dim=-1), torch.softmax(goal_logit, dim=-1))
+        assert torch.allclose(shifted, unshifted, atol=1e-5)
+
+        # ... whereas feeding the raw logits, the same shift changes the reward.
+        assert not torch.allclose(
+            max_cosine_reward(state_logit + shift, goal_logit),
+            max_cosine_reward(state_logit, goal_logit),
+            atol=1e-3,
+        )

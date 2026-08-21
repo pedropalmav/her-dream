@@ -4,11 +4,11 @@ import pathlib
 import numpy as np
 import torch
 import torch.nn.functional as F
+from cookie_env.envs.goal_grid import GoalGrid
 from omegaconf import OmegaConf
 
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_envs
-from her_dream.envs.random_goal import RandomGoal
 from her_dream.envs.wrappers import encode_mission
 from train import reward_function
 
@@ -22,8 +22,12 @@ def goal_from_random_mission(text_encoder, env_size, device, B, deterministic=Fa
     Returns:
         goal: (B, K) float32 one-hot tensor.
     """
-    # (B, L) int8 token ids
-    missions = np.stack([encode_mission(RandomGoal.random_mission(env_size, rng)) for _ in range(B)])
+    # (B, L) int8 token ids.
+    # `random_mission` is an instance method reading self.size, so it needs a real
+    # env — it used to be called on the class with env_size passed as `self`,
+    # which never worked.
+    sampler = GoalGrid(size=env_size, goal_pos=None)
+    missions = np.stack([encode_mission(sampler.random_mission(rng)) for _ in range(B)])
     mission_t = torch.as_tensor(missions, device=device)
     mission_t = mission_t.unsqueeze(1)  # (B, 1, L)
 

@@ -241,7 +241,7 @@ class GoalImageObservation(gym.Wrapper):
     Works for any wrapped env that exposes the current goal cell via a
     `goal_position` attribute. `env_factory` is a zero-arg callable returning
     the auxiliary goal env used for rendering (it must honour
-    `goal_pos` / `agent_start_pos`, e.g. fixed_goal.make_fixed_goal_env).
+    `goal_pos` / `agent_start_pos`, e.g. cookie_env goal_grid.make_goal_grid_env).
     """
 
     def __init__(self, env, env_factory):

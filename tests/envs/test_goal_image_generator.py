@@ -1,6 +1,6 @@
 """Tests for `GoalImageGenerator` (goal_sample="image").
 
-Renders, via an auxiliary `FixedGoal` env, the observation of a synthetic goal
+Renders, via an auxiliary `GoalGrid` env, the observation of a synthetic goal
 state — green square at the episode's goal position, agent at a random interior
 cell — that the frozen WM later encodes into the goal z
 (`Dreamer.encode_observation`). Covers the observation contract (keys, shapes,
@@ -10,8 +10,8 @@ the goal position, agent placement, and lazy reuse of the auxiliary env.
 
 import numpy as np
 import pytest
+from cookie_env.envs.goal_grid import GoalGrid, make_goal_grid_env
 
-from her_dream.envs.fixed_goal import FixedGoal, make_fixed_goal_env
 from her_dream.envs.wrappers import GoalImageObservation
 from tests.envs.conftest import SIZE
 
@@ -81,8 +81,8 @@ class TestLazyEnvReuse:
 class TestWrapperIntegration:
     def test_goal_observation_renders_at_env_goal_position(self):
         # GoalImageObservation renders the goal at the wrapped env's goal_position.
-        env = FixedGoal(size=SIZE, goal_pos=(8, 1))
-        wrapped = GoalImageObservation(env, lambda: make_fixed_goal_env(size=SIZE))
+        env = GoalGrid(size=SIZE, goal_pos=(8, 1))
+        wrapped = GoalImageObservation(env, lambda: make_goal_grid_env(size=SIZE, goal_pos=(8, 1)))
         obs = wrapped.goal_observation()
         assert set(obs) == {"image", "direction"}
         assert wrapped._generator._env.unwrapped.goal_pos == (8, 1)

@@ -11,7 +11,7 @@ class GoalImageGenerator:
 
     The auxiliary env is built lazily from the injected `env_factory` (a
     zero-arg callable returning an RGBImgObsWrapper-wrapped goal env that honours
-    `goal_pos` / `agent_start_pos`, e.g. fixed_goal.make_fixed_goal_env). It goes
+    `goal_pos` / `agent_start_pos`, e.g. cookie_env goal_grid.make_goal_grid_env). It goes
     through the same RGBImgObsWrapper render pipeline as the training envs, so
     the image matches what the agent would actually observe in that state.
     """

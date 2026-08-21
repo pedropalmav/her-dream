@@ -764,7 +764,7 @@ def load_agent(logdir, device: str | None = None):
     """
     Carga config + checkpoint de un run y construye el agente en modo eval.
 
-    Soporta tanto los runs goal-conditioned (RandomGoal, …) como world models
+    Soporta tanto los runs goal-conditioned (GoalGrid, …) como world models
     "vanilla" sin objetivo (p.ej. Crafter, `logdir/original_wm_crafter/*`). Para
     estos últimos el checkpoint no trae las claves de goal en su config y su
     actor/critic tienen otra dimensión de entrada (sin concatenar el goal), así

@@ -77,7 +77,7 @@ class OnlineTrainer:
     def _image_goal(self, agent, envs, indices):
         """Sample one-hot goals by encoding env-rendered goal images with the WM.
 
-        Each env renders (with an auxiliary GoalGrid generator, see
+        Each env renders (with an auxiliary FixedGoal generator, see
         envs.goal_image.GoalImageGenerator) the observation of a synthetic
         state inside the current episode: the green square at the episode's
         goal position and the agent at a random cell. The frozen world model

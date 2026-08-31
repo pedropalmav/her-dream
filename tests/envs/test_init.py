@@ -201,56 +201,28 @@ class TestMakeEnvSuites:
 
         assert isinstance(env, Dtype)
 
-    # `random-goal` and `fixed-goal` are the same suite now (cookie_env.GoalGrid);
-    # both task strings stay supported because archived run configs carry them.
-    # What separates the variants is goal_pos: a tuple pins the square, None
-    # resamples it. `make_config` always injects goal_pos_x/y, so the random case
-    # passes them as None explicitly.
-
-    def _patch_goal_grid(self, dummy_env):
-        return patch("cookie_env.envs.goal_grid.make_goal_grid_env", return_value=dummy_env)
-
-    @pytest.mark.parametrize("task", ["random-goal_default", "fixed-goal_default", "goal-grid_default"])
-    def test_goal_grid_suites_build_without_mission_text(self, task):
+    def test_random_goal_without_mission_text_uses_minigrid_wrapper(self):
+        dummy_rg = MagicMock()
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
+        dummy_rg.make_random_goal_env.return_value = dummy_env
 
-        with self._patch_goal_grid(dummy_env):
+        with patch_env_module("her_dream.envs.random_goal", dummy_rg):
             from her_dream.envs import make_env
 
-            env = make_env(make_config(task=task, mission_text=False), 0)
+            config = make_config(task="random-goal_default", mission_text=False)
+            env = make_env(config, 0)
         from her_dream.envs.wrappers import Dtype
 
         assert isinstance(env, Dtype)
 
-    def test_configured_goal_pos_pins_the_square(self):
+    def test_random_goal_random_start_passes_none_pos(self):
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        with self._patch_goal_grid(dummy_env) as mock_make:
-            from her_dream.envs import make_env
+        import her_dream.envs.random_goal as rg_module
 
-            make_env(make_config(task="fixed-goal_default", goal_pos_x=8, goal_pos_y=1, mission_text=False), 0)
-
-        assert mock_make.call_args.kwargs["goal_pos"] == (8, 1)
-
-    def test_absent_goal_pos_leaves_the_square_random(self):
-        dummy_env = _make_dummy_gym_env()
-        dummy_env.action_space = gym.spaces.Discrete(7)
-
-        with self._patch_goal_grid(dummy_env) as mock_make:
-            from her_dream.envs import make_env
-
-            config = make_config(task="random-goal_default", goal_pos_x=None, goal_pos_y=None, mission_text=False)
-            make_env(config, 0)
-
-        assert mock_make.call_args.kwargs["goal_pos"] is None
-
-    def test_random_start_passes_none_pos(self):
-        dummy_env = _make_dummy_gym_env()
-        dummy_env.action_space = gym.spaces.Discrete(7)
-
-        with self._patch_goal_grid(dummy_env) as mock_make:
+        with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
             from her_dream.envs import make_env
 
             config = make_config(task="random-goal_default", mission_text=False, agent_start_random=True)
@@ -258,29 +230,63 @@ class TestMakeEnvSuites:
 
         assert mock_make.call_args.kwargs["agent_start_pos"] is None
 
-    def test_fixed_start_passes_configured_pos(self):
+    def test_random_goal_fixed_start_passes_configured_pos(self):
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        with self._patch_goal_grid(dummy_env) as mock_make:
+        import her_dream.envs.random_goal as rg_module
+
+        with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env) as mock_make:
             from her_dream.envs import make_env
 
-            # agent_start_random absent -> getattr default False -> use configured pos
-            make_env(make_config(task="random-goal_default", mission_text=False), 0)
+            # agent_start_random absent → getattr default False → use configured pos
+            config = make_config(task="random-goal_default", mission_text=False)
+            make_env(config, 0)
 
         assert mock_make.call_args.kwargs["agent_start_pos"] == (1, 1)
 
-    @pytest.mark.parametrize("task", ["random-goal_default", "fixed-goal_default"])
-    def test_goal_grid_with_mission_text_uses_mission_wrapper(self, task):
+    def test_random_goal_with_mission_text_uses_mission_wrapper(self):
         dummy_env = _make_dummy_gym_env()
         dummy_env.action_space = gym.spaces.Discrete(7)
 
-        with self._patch_goal_grid(dummy_env):
+        import her_dream.envs.random_goal as rg_module
+
+        with patch.object(rg_module, "make_random_goal_env", return_value=dummy_env):
             with patch("her_dream.envs.wrappers.MissionGridWrapper") as mock_mgw:
                 mock_mgw.return_value = dummy_env
                 from her_dream.envs import make_env
 
-                make_env(make_config(task=task, mission_text=True), 0)
+                config = make_config(task="random-goal_default", mission_text=True)
+                make_env(config, 0)
+            mock_mgw.assert_called_once_with(dummy_env)
+
+    def test_fixed_goal_without_mission_text(self):
+        dummy_fg = MagicMock()
+        dummy_env = _make_dummy_gym_env()
+        dummy_env.action_space = gym.spaces.Discrete(7)
+        dummy_fg.make_fixed_goal_env.return_value = dummy_env
+
+        with patch_env_module("her_dream.envs.fixed_goal", dummy_fg):
+            from her_dream.envs import make_env
+
+            config = make_config(task="fixed-goal_default", goal_pos_x=8, goal_pos_y=1, mission_text=False)
+            env = make_env(config, 0)
+        from her_dream.envs.wrappers import Dtype
+
+        assert isinstance(env, Dtype)
+
+    def test_fixed_goal_with_mission_text(self):
+        dummy_env = _make_dummy_gym_env()
+        dummy_env.action_space = gym.spaces.Discrete(7)
+        import her_dream.envs.fixed_goal as fg_module
+
+        with patch.object(fg_module, "make_fixed_goal_env", return_value=dummy_env):
+            with patch("her_dream.envs.wrappers.MissionGridWrapper") as mock_mgw:
+                mock_mgw.return_value = dummy_env
+                from her_dream.envs import make_env
+
+                config = make_config(task="fixed-goal_default", mission_text=True)
+                make_env(config, 0)
             mock_mgw.assert_called_once_with(dummy_env)
 
 

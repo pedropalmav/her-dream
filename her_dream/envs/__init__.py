@@ -63,40 +63,46 @@ def make_env(config, id):
             config.camera,
             config.seed + id,
         )
-    elif suite in ("goal-grid", "random-goal", "fixed-goal"):
-        # `random-goal` and `fixed-goal` were separate suites backed by separate
-        # env classes; both are now cookie_env.GoalGrid, selected by goal_pos.
-        # Both names stay accepted because every archived run's .hydra/config.yaml
-        # carries one of them.
-        from cookie_env.envs.goal_grid import make_goal_grid_env
-
-        # A configured goal cell pins the square; its absence (or an explicit
-        # null) resamples it every episode. Old random-goal configs simply have
-        # no goal_pos_x/y key, so they land on None without needing an edit.
-        goal_pos_x = getattr(config, "goal_pos_x", None)
-        goal_pos_y = getattr(config, "goal_pos_y", None)
-        goal_pos = None if goal_pos_x is None or goal_pos_y is None else (goal_pos_x, goal_pos_y)
+    elif suite == "random-goal":
+        import her_dream.envs.fixed_goal as fixed_goal
+        import her_dream.envs.random_goal as random_goal
 
         agent_start_pos = (
             None
             if getattr(config, "agent_start_random", False)
             else (config.agent_start_pos_x, config.agent_start_pos_y)
         )
-        env = make_goal_grid_env(
+        env = random_goal.make_random_goal_env(
+            size=config.env_size,
+            agent_start_dir=config.agent_start_dir,
+            agent_start_pos=agent_start_pos,
+            max_steps=config.time_limit,
+            render_mode=config.render_mode,
+        )
+        env = wrappers.MissionGridWrapper(env) if config.mission_text else wrappers.MiniGridWrapper(env)
+
+        env = wrappers.OneHotAction(env)
+        env = wrappers.GoalConditioned(env, config)
+        # Auxiliary FixedGoal generator honours goal_pos, so it can render the
+        # green square at the live (randomly placed) goal position.
+        env = wrappers.GoalImageObservation(env, lambda: fixed_goal.make_fixed_goal_env(size=config.env_size))
+
+    elif suite == "fixed-goal":
+        import her_dream.envs.fixed_goal as fixed_goal
+
+        agent_start_pos = (config.agent_start_pos_x, config.agent_start_pos_y)
+        goal_pos = (config.goal_pos_x, config.goal_pos_y)
+        env = fixed_goal.make_fixed_goal_env(
             size=config.env_size,
             agent_start_dir=config.agent_start_dir,
             agent_start_pos=agent_start_pos,
             goal_pos=goal_pos,
             max_steps=config.time_limit,
-            render_mode=getattr(config, "render_mode", "rgb_array"),
         )
         env = wrappers.MissionGridWrapper(env) if config.mission_text else wrappers.MiniGridWrapper(env)
         env = wrappers.OneHotAction(env)
         env = wrappers.GoalConditioned(env, config)
-        # The generator's own goal_pos is overwritten per call by
-        # GoalImageGenerator.observation(), so it is pinned here only to keep the
-        # auxiliary env deterministic before the first assignment.
-        env = wrappers.GoalImageObservation(env, lambda: make_goal_grid_env(size=config.env_size, goal_pos=(1, 1)))
+        env = wrappers.GoalImageObservation(env, lambda: fixed_goal.make_fixed_goal_env(size=config.env_size))
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit // config.action_repeat)

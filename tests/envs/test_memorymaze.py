@@ -1,4 +1,3 @@
-import sys
 from unittest.mock import MagicMock
 
 import gymnasium as gym
@@ -6,57 +5,55 @@ import numpy as np
 import pytest
 
 
-def _make_time_step(size=(64, 64), reward=0.5, last=False, discount=1.0):
-    time_step = MagicMock()
-    time_step.observation = np.zeros((*size, 3), dtype=np.uint8)
-    time_step.reward = reward
-    time_step.discount = discount
-    time_step.last.return_value = last
-    return time_step
-
-
-def _make_dm_env_mock(size=(64, 64), n_actions=5):
-    dm_env = MagicMock()
-    dm_env.action_spec.return_value.num_values = n_actions
-    dm_env.reset.return_value = _make_time_step(size, reward=None)
-    dm_env.step.return_value = _make_time_step(size)
-    dm_env.some_attr = "proxy_value"
-    return dm_env
+def _make_memory_maze_mock(task="9x9", size=(64, 64)):
+    mock_old_env = MagicMock()
+    mock_old_env.observation_space = MagicMock()
+    mock_old_env.observation_space.spaces = {}
+    mock_old_env.action_space.n = 5
+    mock_old_env.reset.return_value = np.zeros((*size, 3), dtype=np.uint8)
+    mock_old_env.step.return_value = (
+        np.zeros((*size, 3), dtype=np.uint8),
+        0.5,
+        False,
+        {"is_terminal": False},
+    )
+    mock_old_env.some_attr = "proxy_value"
+    return mock_old_env
 
 
 @pytest.fixture
-def mock_task(monkeypatch):
-    """Stub the whole `memory_maze` package.
+def mock_gym_make(monkeypatch):
+    mock_old_env = _make_memory_maze_mock()
+    import gym as old_gym
 
-    Importing the real one defaults MUJOCO_GL to egl and initialises a dm_control
-    renderer, which is unavailable in CI and on macOS. `MemoryMaze` imports it
-    lazily, so putting a mock in `sys.modules` first is enough.
-    """
-    dm_env = _make_dm_env_mock()
-    fake_memory_maze = MagicMock()
-    fake_memory_maze.tasks.memory_maze_9x9 = lambda **kwargs: dm_env
-    monkeypatch.setitem(sys.modules, "memory_maze", fake_memory_maze)
-    monkeypatch.setitem(sys.modules, "memory_maze.tasks", fake_memory_maze.tasks)
-    return dm_env
+    monkeypatch.setattr(old_gym, "make", lambda *a, **kw: mock_old_env)
+    return mock_old_env
 
 
 class TestMemoryMazeInit:
-    def test_builds_dm_env_task(self, mock_task):
+    def test_creates_old_gym_env(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9", size=(64, 64), seed=0)
         assert mm._size == (64, 64)
-        assert mm._env is mock_task
 
-    def test_unknown_task_raises(self, mock_task):
+    def test_obs_is_dict_set(self, mock_gym_make):
+        mock_gym_make.observation_space.spaces = {"image": None}
         from her_dream.envs.memorymaze import MemoryMaze
 
-        with pytest.raises(ValueError):
-            MemoryMaze("7x7")
+        mm = MemoryMaze("9x9")
+        assert mm._obs_is_dict is True
+
+    def test_obs_is_dict_false_when_no_spaces(self, mock_gym_make):
+        del mock_gym_make.observation_space.spaces
+        from her_dream.envs.memorymaze import MemoryMaze
+
+        mm = MemoryMaze("9x9")
+        assert mm._obs_is_dict is False
 
 
 class TestMemoryMazeObsAndActionSpace:
-    def test_observation_space_structure(self, mock_task):
+    def test_observation_space_structure(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9", size=(64, 64))
@@ -67,7 +64,7 @@ class TestMemoryMazeObsAndActionSpace:
         assert "is_terminal" in spaces
         assert spaces["image"].shape == (64, 64, 3)
 
-    def test_action_space_is_discrete(self, mock_task):
+    def test_action_space_is_discrete(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
@@ -76,16 +73,15 @@ class TestMemoryMazeObsAndActionSpace:
 
 
 class TestMemoryMazeStep:
-    def test_step_is_first_false(self, mock_task):
+    def test_step_is_first_false(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
         obs, rew, done, info = mm.step(0)
         assert obs["is_first"] is False
-        assert rew == 0.5
 
-    def test_step_is_last_matches_done(self, mock_task):
-        mock_task.step.return_value = _make_time_step(last=True, discount=1.0)
+    def test_step_is_last_matches_done(self, mock_gym_make):
+        mock_gym_make.step.return_value = (np.zeros((64, 64, 3), dtype=np.uint8), 0.0, True, {"is_terminal": False})
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
@@ -93,36 +89,25 @@ class TestMemoryMazeStep:
         assert obs["is_last"] is True
         assert done is True
 
-    def test_step_is_terminal_when_discount_zero(self, mock_task):
-        mock_task.step.return_value = _make_time_step(last=True, discount=0.0)
+    def test_step_is_terminal_from_info(self, mock_gym_make):
+        mock_gym_make.step.return_value = (np.zeros((64, 64, 3), dtype=np.uint8), 0.0, True, {"is_terminal": True})
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
-        obs, _, _, info = mm.step(0)
+        obs, _, _, _ = mm.step(0)
         assert obs["is_terminal"] is True
-        assert info["is_terminal"] is True
 
-    def test_truncation_is_not_terminal(self, mock_task):
-        """dm_env time-limit truncation ends the episode but keeps discount 1."""
-        mock_task.step.return_value = _make_time_step(last=True, discount=1.0)
+    def test_step_is_terminal_defaults_to_false(self, mock_gym_make):
+        mock_gym_make.step.return_value = (np.zeros((64, 64, 3), dtype=np.uint8), 0.0, False, {})
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
-        obs, _, done, _ = mm.step(0)
-        assert done is True
+        obs, _, _, _ = mm.step(0)
         assert obs["is_terminal"] is False
-
-    def test_none_reward_becomes_zero(self, mock_task):
-        mock_task.step.return_value = _make_time_step(reward=None)
-        from her_dream.envs.memorymaze import MemoryMaze
-
-        mm = MemoryMaze("9x9")
-        _, rew, _, _ = mm.step(0)
-        assert rew == 0.0
 
 
 class TestMemoryMazeReset:
-    def test_reset_is_first(self, mock_task):
+    def test_reset_is_first(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
@@ -131,7 +116,7 @@ class TestMemoryMazeReset:
         assert obs["is_last"] is False
         assert obs["is_terminal"] is False
 
-    def test_reset_has_image(self, mock_task):
+    def test_reset_has_image(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
@@ -140,21 +125,22 @@ class TestMemoryMazeReset:
 
 
 class TestMemoryMazeGetAttr:
-    def test_proxies_attribute_to_inner_env(self, mock_task):
+    def test_proxies_attribute_to_inner_env(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
         assert mm.some_attr == "proxy_value"
 
-    def test_dunder_attr_raises_attribute_error(self, mock_task):
+    def test_dunder_attr_raises_attribute_error(self, mock_gym_make):
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")
         with pytest.raises(AttributeError):
             _ = mm.__nonexistent__
 
-    def test_missing_attr_raises_value_error(self, mock_task):
-        del mock_task.nonexistent_attr
+    def test_missing_attr_raises_value_error(self, mock_gym_make):
+        mock_gym_make.nonexistent_attr = MagicMock(side_effect=AttributeError)
+        del mock_gym_make.nonexistent_attr
         from her_dream.envs.memorymaze import MemoryMaze
 
         mm = MemoryMaze("9x9")

@@ -1,38 +1,13 @@
+import gym as old_gym
 import gymnasium as gym
 import numpy as np
 
-_TASKS = ("9x9", "11x11", "13x13", "15x15")
-
 
 class MemoryMaze(gym.Env):
-    """Adapter over the `memory_maze` dm_env tasks.
-
-    Builds the dm_env task directly instead of going through the gym registry
-    (`gym.make("memory_maze:MemoryMaze-<task>-v0")`). `memory_maze` only registers
-    its ids with the unmaintained `gym` package, whose passive env checker calls
-    `np.bool8` — removed in numpy 2 — so every `step()` raised. Constructing the
-    task by hand keeps this class's contract unchanged: `step` returns the
-    old-style 4-tuple and `reset` returns the obs dict, which is what the wrapper
-    chain in `envs/__init__.py` expects.
-
-    `gym` stays an install requirement — `memory_maze/__init__.py` imports it and
-    re-raises if absent — but it is never called from here, so the `np.bool8`
-    path is no longer reachable.
-
-    `image_only_obs=True` matches the `MemoryMaze-<task>-v0` registration, so the
-    observation is the raw (H, W, 3) uint8 camera image.
-    """
-
     def __init__(self, task, size=(64, 64), seed=0):
-        if task not in _TASKS:
-            raise ValueError(f"Unknown memory maze task {task!r}; available: {list(_TASKS)}")
-        # Imported lazily: `memory_maze/__init__.py` defaults MUJOCO_GL to egl and
-        # pulls in dm_control, which initialises a renderer at import time. Keeping
-        # it in here matches the other suites and leaves `import her_dream.envs`
-        # renderer-free.
-        from memory_maze import tasks
-
-        self._env = getattr(tasks, f"memory_maze_{task}")(image_only_obs=True, seed=seed)
+        # 9x9, 11x11, 13x13 and 15x15 are available
+        self._env = old_gym.make(f"memory_maze:MemoryMaze-{task}-v0", seed=seed)
+        self._obs_is_dict = hasattr(self._env.observation_space, "spaces")
         self._size = size
 
     def __getattr__(self, name):
@@ -55,27 +30,13 @@ class MemoryMaze(gym.Env):
 
     @property
     def action_space(self):
-        return gym.spaces.Discrete(self._env.action_spec().num_values)
+        return gym.spaces.Discrete(self._env.action_space.n)
 
     def step(self, action):
-        time_step = self._env.step(action)
-        done = time_step.last()
-        # dm_env signals a true terminal with discount 0; a time-limit truncation
-        # keeps discount 1, which is the distinction `is_terminal` carries.
-        is_terminal = bool(done and time_step.discount == 0)
-        obs = {
-            "image": time_step.observation,
-            "is_first": False,
-            "is_last": done,
-            "is_terminal": is_terminal,
-        }
-        return obs, time_step.reward or 0.0, done, {"is_terminal": is_terminal}
+        image, reward, done, info = self._env.step(action)
+        obs = {"image": image, "is_first": False, "is_last": done, "is_terminal": info.get("is_terminal", False)}
+        return obs, reward, done, info
 
     def reset(self):
-        time_step = self._env.reset()
-        return {
-            "image": time_step.observation,
-            "is_first": True,
-            "is_last": False,
-            "is_terminal": False,
-        }
+        image = self._env.reset()
+        return {"image": image, "is_first": True, "is_last": False, "is_terminal": False}

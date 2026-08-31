@@ -23,12 +23,8 @@ The reusable library lives in an **installable package, `her_dream/`** (distribu
 **Always run Python / project code through `uv`** (e.g. `uv run python3 train.py ...`, `uv run python3 -c "..."`), not bare `python3`. The commands below are written with bare `python3` for brevity but should be invoked via `uv run`.
 
 ```bash
-# Install dependencies + the her_dream package, editable (Python 3.12, Ubuntu 24.04)
+# Install dependencies + the her_dream package, editable (Python 3.11, Ubuntu 24.04)
 uv pip install -e .
-
-# The grid envs come from the sibling `cookie-env` package, pinned to a git tag.
-# To work against an unreleased cookie-env, override it with a local editable install:
-uv pip install -e ../cookie-env
 
 # Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer)
 python3 train.py logdir=./logdir/test

@@ -104,6 +104,82 @@ class TestTrainingModes:
         assert "loss/dyn" not in metrics
 
 
+class TestHeads:
+    """The optional reward / continue heads and the imagination reward source."""
+
+    def test_no_head_losses_by_default(self):
+        agent, gs = make_real_dreamer()
+        metrics, _ = _run_once(agent, gs)
+        assert "loss/rew" not in metrics
+        assert "loss/con" not in metrics
+
+    def test_head_losses_present_when_enabled(self):
+        agent, gs = make_real_dreamer(model__use_reward_head=True, model__use_cont_head=True)
+        metrics, _ = _run_once(agent, gs)
+        assert "loss/rew" in metrics
+        assert "loss/con" in metrics
+
+    @pytest.mark.parametrize("flag,key", [("model__use_reward_head", "loss/rew"), ("model__use_cont_head", "loss/con")])
+    def test_each_head_contributes_only_its_own_loss(self, flag, key):
+        agent, gs = make_real_dreamer(**{flag: True})
+        metrics, _ = _run_once(agent, gs)
+        assert key in metrics
+        assert {"loss/rew", "loss/con"} & set(metrics) == {key}
+
+    def test_head_losses_trained_under_wm_only(self):
+        agent, gs = make_real_dreamer(wm_only=True, model__use_reward_head=True, model__use_cont_head=True)
+        metrics, _ = _run_once(agent, gs)
+        assert "loss/rew" in metrics
+        assert "loss/con" in metrics
+        assert "loss/policy" not in metrics
+
+    def test_head_losses_skipped_under_freeze_wm(self):
+        agent, gs = make_real_dreamer(freeze_wm=True, model__use_reward_head=True, model__use_cont_head=True)
+        metrics, _ = _run_once(agent, gs)
+        assert "loss/rew" not in metrics
+        assert "loss/con" not in metrics
+        assert "loss/policy" in metrics
+
+    def test_head_losses_skipped_under_train_text_only(self):
+        agent, gs = make_real_dreamer(
+            train_text_only=True,
+            mission_text=True,
+            model__use_reward_head=True,
+            model__use_cont_head=True,
+        )
+        metrics, _ = _run_once(agent, gs, mission=True)
+        assert "loss/rew" not in metrics
+        assert "loss/con" not in metrics
+
+    def test_cont_metric_is_pinned_to_one_without_the_head(self):
+        agent, gs = make_real_dreamer()
+        metrics, _ = _run_once(agent, gs)
+        assert metrics["con"].item() == 1.0
+
+    def test_cont_head_unpins_the_continuation_metric(self):
+        # The head makes imag_cont a learned probability instead of a constant 1,
+        # which is what feeds `weight = cumprod(imag_cont * disc)`.
+        agent, gs = make_real_dreamer(model__use_cont_head=True)
+        metrics, _ = _run_once(agent, gs)
+        assert metrics["con"].item() != 1.0
+
+    def test_goal_reward_source_is_the_default(self):
+        # goal_type="full" needs all S groups to match; an imagined z essentially
+        # never does, so the analytic reward is -1 everywhere.
+        agent, gs = make_real_dreamer(model__use_reward_head=True)
+        metrics, _ = _run_once(agent, gs)
+        assert metrics["rew"].item() == pytest.approx(-1.0)
+
+    def test_head_reward_source_drives_imagination(self):
+        # Same agent, only the source switched: a fresh reward head predicts 0
+        # (config.reward.outscale=0 zeroes the output layer), so the imagined
+        # reward is 0 rather than the analytic -1.
+        agent, gs = make_real_dreamer(model__use_reward_head=True, model__imag_reward_source="head")
+        metrics, _ = _run_once(agent, gs)
+        assert "loss/policy" in metrics
+        assert metrics["rew"].item() == pytest.approx(0.0)
+
+
 class TestGoalTypes:
     @pytest.mark.parametrize("goal_type", ["full", "first_row", "row_by_row", "argmax_full", "log_prob", "prob"])
     def test_update_runs_for_each_goal_type(self, goal_type):

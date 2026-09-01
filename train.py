@@ -59,6 +59,18 @@ _CONFIG_DIR = str(pathlib.Path(her_dream.__file__).parent / "configs")
 
 def validate_config(config):
     """Validate the mode-selecting flags before any heavy setup."""
+    if getattr(config, "plan2explore", False):
+        # Pretraining phase: it builds the world model from scratch with the
+        # explorer. The achiever is trained afterwards, in a separate run.
+        if config.load_from is not None:
+            raise ValueError(
+                "plan2explore=True is a from-scratch pretraining phase and does not take load_from. "
+                "To post-train on a Plan2Explore checkpoint, run without plan2explore and pass "
+                "load_from=<p2e-logdir> freeze_wm=True."
+            )
+        if config.wm_only or config.freeze_wm or config.train_text_only:
+            raise ValueError("plan2explore=True is exclusive with wm_only, freeze_wm and train_text_only.")
+
     if config.train_text_only:
         if config.load_from is None:
             raise ValueError(
@@ -96,13 +108,36 @@ def validate_config(config):
 # than carrying a stale scale onto a freshly initialised critic.
 _ACTOR_CRITIC_PREFIXES = ("ac.",)
 
-# The vanilla-Dreamer reward/continue heads, which this agent builds only when
-# `model.use_reward_head` / `model.use_cont_head` are on. They can therefore be
+# Modules this agent builds only under a config flag: the vanilla-Dreamer
+# reward/continue heads (`model.use_reward_head` / `model.use_cont_head`) and the
+# Plan2Explore explorer + disagreement ensemble (`plan2explore`). They can be
 # missing from either side of a load, and both directions are benign:
-#   - in the checkpoint but not the agent (heads off)  -> discard them
+#   - in the checkpoint but not the agent -> discard them. This is the normal
+#     phase-2 flow: a Plan2Explore pretraining checkpoint carries `explore.*` and
+#     `disag.*`, which the achiever agent does not build.
 #   - in the agent but not the checkpoint (heads newly enabled on an older
 #     wm_only run, the expected post-training flow) -> leave them at init
-_OPTIONAL_HEAD_PREFIXES = ("reward.", "cont.", "_frozen_reward.", "_frozen_cont.")
+_OPTIONAL_MODULE_PREFIXES = (
+    "reward.",
+    "cont.",
+    "_frozen_reward.",
+    "_frozen_cont.",
+    "explorer.",
+    "disag.",
+)
+
+
+def _drop_optional_absent(agent, ckpt_sd):
+    """Drop checkpoint keys for optional modules this agent did not build.
+
+    Keeps the load otherwise strict: anything absent from the agent that is not a
+    known optional module still trips `load_state_dict`.
+    """
+    model_sd = agent.state_dict()
+    dropped = [k for k in ckpt_sd if k not in model_sd and k.startswith(_OPTIONAL_MODULE_PREFIXES)]
+    if dropped:
+        print(f"[train]   dropped (absent from this agent): {len(dropped)} tensors, {_summarize(dropped)}")
+    return {k: v for k, v in ckpt_sd.items() if k not in set(dropped)}
 
 
 def _world_model_state_dict(agent, ckpt_sd):
@@ -125,7 +160,7 @@ def _world_model_state_dict(agent, ckpt_sd):
         if key.startswith(_ACTOR_CRITIC_PREFIXES):
             dropped_ac.append(key)
         elif key not in model_sd:
-            if not key.startswith(_OPTIONAL_HEAD_PREFIXES):
+            if not key.startswith(_OPTIONAL_MODULE_PREFIXES):
                 raise ValueError(
                     f"Checkpoint key {key!r} has no counterpart in the agent and is not a "
                     "known optional head. The checkpoint does not match this world model; "
@@ -144,7 +179,7 @@ def _world_model_state_dict(agent, ckpt_sd):
     missing = [k for k in model_sd if k not in kept and not k.startswith(_ACTOR_CRITIC_PREFIXES)]
     # Newly enabled reward/continue heads simply are not in an older checkpoint;
     # they start from init rather than invalidating the whole load.
-    fresh_heads = [k for k in missing if k.startswith(_OPTIONAL_HEAD_PREFIXES)]
+    fresh_heads = [k for k in missing if k.startswith(_OPTIONAL_MODULE_PREFIXES)]
     missing = [k for k in missing if k not in set(fresh_heads)]
     if missing:
         raise ValueError(
@@ -193,7 +228,7 @@ def load_checkpoint(agent, config):
     if getattr(config, "reset_actor_critic", False):
         agent.load_state_dict(_world_model_state_dict(agent, ckpt_sd), strict=False)
     else:
-        agent.load_state_dict(ckpt_sd)
+        agent.load_state_dict(_drop_optional_absent(agent, ckpt_sd))
     agent.clone_and_freeze()
     if agent.train_text_only:
         agent._apply_train_text_only()

@@ -6,7 +6,7 @@ from .checkpoint import (
 )
 from .config_compat import backfill_config
 from .logging import Logger, Tee, make_logger, setup_console_log
-from .math_utils import compute_global_norm, compute_rms
+from .math_utils import WelfordAccumulator, compute_global_norm, compute_rms
 from .model_inspection import build_module_tree, print_module_tree, print_param_stats
 from .nn_utils import convert, freeze_clone, tensorstats, weight_init_
 from .torch_utils import rpad, to_f32, to_i32, to_np
@@ -38,5 +38,6 @@ __all__ = [
     "print_param_stats",
     "compute_rms",
     "compute_global_norm",
+    "WelfordAccumulator",
     "CudaBenchmark",
 ]

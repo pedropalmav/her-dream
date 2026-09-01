@@ -223,3 +223,55 @@ def _mlphead_in_features(head):
         if isinstance(module, torch.nn.Linear):
             return module.in_features
     raise AssertionError("no Linear layer found in MLPHead")
+
+
+class TestPlan2Explore:
+    """The exploration modules and which of them the optimizer sees."""
+
+    def test_not_built_by_default(self, default_dreamer):
+        assert not hasattr(default_dreamer, "explorer")
+        assert not hasattr(default_dreamer, "disag")
+
+    def test_built_when_enabled(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        assert hasattr(agent, "explorer")
+        assert hasattr(agent, "disag")
+
+    def test_explorer_is_goal_agnostic(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        assert agent.explorer.goal_size == 0
+        assert _mlphead_in_features(agent.explorer.actor) == agent.rssm.feat_size
+
+    def test_optimizer_trains_the_explorer_and_ensemble(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        groups = {n.split(".")[0] for n in agent._named_params}
+        assert {"disag", "explore_actor", "explore_value"} <= groups
+
+    def test_optimizer_leaves_the_task_actor_critic_alone(self):
+        # The achiever is trained afterwards, on the frozen world model.
+        agent, _ = make_real_dreamer(plan2explore=True)
+        groups = {n.split(".")[0] for n in agent._named_params}
+        assert "actor" not in groups and "value" not in groups
+
+    def test_optimizer_still_trains_the_world_model(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        groups = {n.split(".")[0] for n in agent._named_params}
+        assert {"rssm", "encoder"} <= groups
+
+    def test_explorer_has_its_own_frozen_clones(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        for name in ("_frozen_actor", "_frozen_value", "_frozen_slow_value"):
+            assert hasattr(agent.explorer, name)
+
+    def test_loss_scales_gain_the_prefixed_keys(self):
+        agent, _ = make_real_dreamer(plan2explore=True)
+        assert {"explore_policy", "explore_value", "disag"} <= set(agent._loss_scales)
+
+    @pytest.mark.parametrize("flag", ["wm_only", "freeze_wm"])
+    def test_exclusive_with_the_other_pretraining_modes(self, flag):
+        with pytest.raises(ValueError, match="plan2explore is exclusive"):
+            make_real_dreamer(plan2explore=True, **{flag: True})
+
+    def test_exclusive_with_train_text_only(self):
+        with pytest.raises(ValueError, match="plan2explore is exclusive"):
+            make_real_dreamer(plan2explore=True, train_text_only=True, mission_text=True)

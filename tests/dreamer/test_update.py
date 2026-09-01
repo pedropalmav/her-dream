@@ -16,6 +16,7 @@ assert the returned metrics structure and the replay write-back instead.
 """
 
 import pytest
+import torch
 
 from tests.dreamer.conftest import StubReplayBuffer, make_real_dreamer
 
@@ -233,3 +234,56 @@ class TestOptimizerMetrics:
         first = agent.update(buf)["opt/lr_last"]
         second = agent.update(buf)["opt/lr_last"]
         assert first == second
+
+
+class TestPlan2Explore:
+    """A pretraining step trains the WM, the ensemble and the explorer only."""
+
+    @staticmethod
+    def _step(**overrides):
+        agent, goal_shape = make_real_dreamer(plan2explore=True, **overrides)
+        return agent, agent.update(StubReplayBuffer(goal_shape))
+
+    def test_reports_the_exploration_losses(self):
+        _, metrics = self._step()
+        assert {"loss/disag", "loss/explore_policy", "loss/explore_value"} <= set(metrics)
+
+    def test_does_not_report_the_task_losses(self):
+        _, metrics = self._step()
+        assert not {"loss/policy", "loss/value", "loss/repval"} & set(metrics)
+
+    def test_reports_the_raw_disagreement(self):
+        _, metrics = self._step()
+        assert torch.isfinite(torch.as_tensor(float(metrics["disag_raw"])))
+
+    def test_the_explorer_reward_is_the_disagreement(self):
+        # intr_scale defaults to 1.0 and log is off, so they coincide.
+        _, metrics = self._step()
+        assert float(metrics["explore_rew"]) == pytest.approx(float(metrics["disag_raw"]), rel=1e-4)
+
+    def test_the_world_model_still_trains(self):
+        _, metrics = self._step()
+        assert {"loss/dyn", "loss/rep"} <= set(metrics)
+
+    def test_the_task_actor_critic_does_not_move(self):
+        agent, goal_shape = make_real_dreamer(plan2explore=True)
+        buf = StubReplayBuffer(goal_shape)
+        before = [p.detach().clone() for p in agent.ac.parameters()]
+        for _ in range(3):
+            agent.update(buf)
+        assert all(torch.equal(b, p.detach()) for b, p in zip(before, agent.ac.parameters()))
+
+    def test_the_explorer_slow_target_tracks_its_critic(self):
+        # It bootstraps off this; leaving it at init would be silently wrong.
+        agent, goal_shape = make_real_dreamer(plan2explore=True)
+        with torch.no_grad():
+            for p in agent.explorer.value.parameters():
+                p.add_(1.0)
+        before = [p.detach().clone() for p in agent.explorer._slow_value.parameters()]
+        agent.update(StubReplayBuffer(goal_shape))
+        moved = any(not torch.equal(b, p.detach()) for b, p in zip(before, agent.explorer._slow_value.parameters()))
+        assert moved
+
+    def test_runs_with_the_continue_head(self):
+        _, metrics = self._step(model__use_cont_head=True)
+        assert {"loss/con", "loss/explore_policy"} <= set(metrics)

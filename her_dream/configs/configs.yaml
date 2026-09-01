@@ -24,6 +24,7 @@ wm_only: False
 freeze_wm: False
 train_text_only: False
 plan2explore: False
+lexa: False
 load_from: null
 # Load only the world model from `load_from` and re-initialize actor/critic.
 # Needed for checkpoints whose actor/critic were built without a goal input
@@ -51,6 +52,7 @@ model:
   freeze_wm: ${freeze_wm}
   train_text_only: ${train_text_only}
   plan2explore: ${plan2explore}
+  lexa: ${lexa}
   prob_threshold: ${oc.select:prob_threshold,0.5}
   prob_threshold_step: ${oc.select:prob_threshold_step,0.05}
 
@@ -91,3 +93,5 @@ trainer:
   scope: ${scope}
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}
+  lexa: ${lexa}
+  explore_every_ep: ${model.explore_every_ep}

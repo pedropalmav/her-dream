@@ -1087,3 +1087,34 @@ class TestBegin:
             (make_trans(1), torch.ones(1, dtype=torch.bool)),
         ]
         t.begin(agent)  # Must complete without error
+
+
+class TestLexaExploreMask:
+    """LEXA alternates data collection between the explorer and the achiever."""
+
+    @staticmethod
+    def trainer_with(**overrides):
+        return make_trainer(make_config(**overrides))
+
+    def test_no_mask_outside_lexa(self):
+        trainer = self.trainer_with()
+        assert trainer._explore_mask(torch.arange(4)) is None
+
+    def test_selects_every_nth_episode(self):
+        trainer = self.trainer_with(lexa=True, explore_every_ep=2)
+        mask = trainer._explore_mask(torch.arange(6))
+        assert mask.tolist() == [True, False, True, False, True, False]
+
+    def test_a_cadence_of_one_always_explores(self):
+        trainer = self.trainer_with(lexa=True, explore_every_ep=1)
+        assert trainer._explore_mask(torch.arange(4)).all()
+
+    def test_a_cadence_of_zero_disables_the_split(self):
+        # 0 means the achiever collects everything.
+        trainer = self.trainer_with(lexa=True, explore_every_ep=0)
+        assert trainer._explore_mask(torch.arange(4)) is None
+
+    def test_is_per_env_not_per_step(self):
+        # Envs run independent episodes, so the mask is indexed by episode id.
+        trainer = self.trainer_with(lexa=True, explore_every_ep=3)
+        assert trainer._explore_mask(torch.tensor([0, 1, 3, 6])).tolist() == [True, False, True, True]

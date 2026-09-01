@@ -84,23 +84,23 @@ class TestGoalTypeSizing:
         agent, _ = make_real_dreamer(goal_type="first_row")
         expected = agent.rssm.feat_size + agent.rssm._discrete
         # MLPHead stores its input dim on the first linear layer's in_features.
-        assert _mlphead_in_features(agent.actor) == expected
+        assert _mlphead_in_features(agent.ac.actor) == expected
 
     def test_full_uses_flat_stoch_goal_shape(self):
         agent, _ = make_real_dreamer(goal_type="full")
         expected = agent.rssm.feat_size + agent.rssm.flat_stoch
-        assert _mlphead_in_features(agent.actor) == expected
+        assert _mlphead_in_features(agent.ac.actor) == expected
 
     def test_log_prob_builds_threshold_bins(self):
         agent, _ = make_real_dreamer(goal_type="log_prob")
-        assert agent.threshold_bins > 0
-        assert hasattr(agent, "threshold_onehot")
-        assert agent.threshold_onehot.sum().item() == pytest.approx(1.0)
+        assert agent.ac.threshold_bins > 0
+        assert hasattr(agent.ac, "threshold_onehot")
+        assert agent.ac.threshold_onehot.sum().item() == pytest.approx(1.0)
 
     def test_non_log_prob_has_no_threshold_bins(self):
         agent, _ = make_real_dreamer(goal_type="full")
-        assert agent.threshold_bins == 0
-        assert not hasattr(agent, "threshold_onehot")
+        assert agent.ac.threshold_bins == 0
+        assert not hasattr(agent.ac, "threshold_onehot")
 
 
 class TestTextEncoder:

@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+import her_dream.tools as tools
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_envs
 from her_dream.envs.random_goal import RandomGoal
@@ -115,7 +116,7 @@ def main():
 
     agent = Dreamer(config.model, obs_space, act_space, reward_function=reward_function).to(device)
     ckpt = torch.load(logdir / "latest.pt", map_location=device, weights_only=False)
-    agent.load_state_dict(ckpt["agent_state_dict"])
+    agent.load_state_dict(tools.migrate_agent_state_dict(ckpt["agent_state_dict"]))
     agent.eval()
 
     mode = "deterministic (argmax)" if args.deterministic else "stochastic (sample)"

@@ -330,7 +330,7 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
     """Run every mode for one checkpoint."""
     agent, config, env_cfg = load_agent(logdir, device)
     # 1. Was the run fixed-goal or random-goal? The eval always drives a
-    #    controllable fixed-goal GoalGrid (it can dictate both the spawn and the green
+    #    controllable FixedGoal (it can dictate both the spawn and the green
     #    square), so remember the real task and reproduce the run's distribution by
     #    how we sample the layout below.
     task = env_cfg.task

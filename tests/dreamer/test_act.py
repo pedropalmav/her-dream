@@ -108,3 +108,38 @@ class TestPlan2ExploreActs:
         other_goal = torch.zeros_like(obs["goal"])
         other_goal[..., -1] = 1.0
         assert torch.equal(act_with(obs["goal"].clone()), act_with(other_goal))
+
+
+class TestLexaActs:
+    """LEXA splits data collection between the explorer and the achiever."""
+
+    @staticmethod
+    def _agent():
+        return make_real_dreamer(lexa=True, model__imag_reward_source="temporal")
+
+    def _act(self, agent, obs, state, mask):
+        torch.manual_seed(0)
+        return agent.act({k: v.clone() for k, v in obs.items()}, state, eval=True, explore=mask)[0]
+
+    def test_the_mask_selects_the_policy_per_env(self):
+        agent, goal_shape = self._agent()
+        obs = make_default_obs(B=2, goal_shape=goal_shape)
+        state = agent.get_initial_state(2)
+
+        explore = self._act(agent, obs, state, torch.tensor([True, True]))
+        achieve = self._act(agent, obs, state, torch.tensor([False, False]))
+        mixed = self._act(agent, obs, state, torch.tensor([True, False]))
+
+        assert not torch.equal(explore, achieve)
+        assert torch.equal(mixed[0], explore[0])
+        assert torch.equal(mixed[1], achieve[1])
+
+    def test_no_mask_uses_the_achiever(self):
+        # Evaluation passes no mask, and LEXA is evaluated on goal reaching.
+        agent, goal_shape = self._agent()
+        obs = make_default_obs(B=2, goal_shape=goal_shape)
+        state = agent.get_initial_state(2)
+        assert torch.equal(
+            self._act(agent, obs, state, None),
+            self._act(agent, obs, state, torch.tensor([False, False])),
+        )

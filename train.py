@@ -59,6 +59,9 @@ _CONFIG_DIR = str(pathlib.Path(her_dream.__file__).parent / "configs")
 
 def validate_config(config):
     """Validate the mode-selecting flags before any heavy setup."""
+    if getattr(config, "plan2explore", False) and getattr(config, "lexa", False):
+        raise ValueError("plan2explore and lexa are mutually exclusive; lexa already trains the explorer.")
+
     if getattr(config, "plan2explore", False):
         # Pretraining phase: it builds the world model from scratch with the
         # explorer. The achiever is trained afterwards, in a separate run.
@@ -70,6 +73,17 @@ def validate_config(config):
             )
         if config.wm_only or config.freeze_wm or config.train_text_only:
             raise ValueError("plan2explore=True is exclusive with wm_only, freeze_wm and train_text_only.")
+
+    if getattr(config, "lexa", False):
+        # LEXA trains the explorer and the achiever together, from scratch.
+        if config.wm_only or config.freeze_wm or config.train_text_only:
+            raise ValueError("lexa=True is exclusive with wm_only, freeze_wm and train_text_only.")
+        if config.model.imag_reward_source != "temporal":
+            print(
+                "[train] WARNING: lexa=True with model.imag_reward_source="
+                f"{config.model.imag_reward_source!r}. LEXA's achiever is normally driven by the "
+                "learned temporal distance — set model.imag_reward_source=temporal for that."
+            )
 
     if config.train_text_only:
         if config.load_from is None:
@@ -124,6 +138,7 @@ _OPTIONAL_MODULE_PREFIXES = (
     "_frozen_cont.",
     "explorer.",
     "disag.",
+    "temporal_distance.",
 )
 
 

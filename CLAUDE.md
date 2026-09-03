@@ -114,6 +114,29 @@ Adding a goal type = a reward fn in `rewards.py` + a `configs/goal_type/<type>.y
 keys; no edits to dreamer/trainer/her_buffer/wrappers. `goals.default_descriptors(goal_type)`
 reads a type's descriptors from its config file (used to backfill old checkpoints in zflow/viz).
 
+### `reward_offset` — the per-step baseline
+
+Whatever a goal type returns, `make_reward` wraps it in `rewards.with_reward_offset`, which
+adds the top-level `reward_offset` (default `0.0`, mirrored into `model`). It is a **run-level
+knob, not a goal-type descriptor**: no `configs/goal_type/<type>.yaml` carries one, and at 0
+the wrapper returns the reward function itself, so existing runs are bit-identical (dtype
+included) and configs saved before the key existed still resolve to 0.
+
+```bash
+python3 train.py reward_offset=1.0   # {-1, 0} -> {0, 1}, [-1, 0] -> [0, 1]
+```
+
+**Any env that can terminate needs it.** With a negative per-step reward, ending an episode is
+worth *more* than surviving it, because termination stops the accumulation of -1s — so an agent
+that can perceive termination is rewarded for dying. On a lava variant of the grid env (random
+policy, `gamma=0.997`) running to the time limit returns -309 while dying returns -136, and
+through the real `_lambda_return` the terminating step has advantage **+90.4** under `{-1, 0}`
+versus **-212.1** under `{0, 1}`. Nothing here can terminate yet (`envs/crafter.py` already
+propagates `is_terminal`, and a lava env is coming), and absent termination the two schemes are
+equivalent for the optimal policy — a constant shift moves every value by `offset/(1-gamma)` and
+leaves advantages untouched — so this only changes what is learned once something can terminate.
+`prob` and `max_cosine` are already non-negative and need no offset.
+
 The goal source is `env.goal_sample`:
 - `buffer` — sample a `z` (stoch) from the replay buffer (a state the agent actually visited).
 - `text` — sample from the `TextEncoderGRU` given the episode's mission (requires `mission_text=True`).

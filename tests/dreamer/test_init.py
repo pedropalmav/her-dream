@@ -121,6 +121,64 @@ class TestCompile:
         assert callable(agent._cal_grad)
 
 
+class TestHeads:
+    """The optional vanilla-Dreamer reward / continue heads (off by default)."""
+
+    def test_heads_absent_by_default(self):
+        agent, _ = make_real_dreamer()
+        assert not hasattr(agent, "reward")
+        assert not hasattr(agent, "cont")
+        assert not hasattr(agent, "_frozen_reward")
+        assert not hasattr(agent, "_frozen_cont")
+
+    def test_reward_head_built_and_takes_feat_only(self):
+        agent, _ = make_real_dreamer(model__use_reward_head=True)
+        assert hasattr(agent, "reward")
+        assert not hasattr(agent, "cont")
+        # feat only — no goal, unlike the actor/critic.
+        assert _mlphead_in_features(agent.reward) == agent.rssm.feat_size
+
+    def test_cont_head_built_and_takes_feat_only(self):
+        agent, _ = make_real_dreamer(model__use_cont_head=True)
+        assert hasattr(agent, "cont")
+        assert not hasattr(agent, "reward")
+        assert _mlphead_in_features(agent.cont) == agent.rssm.feat_size
+
+    def test_heads_are_cloned_and_frozen(self):
+        agent, _ = make_real_dreamer(model__use_reward_head=True, model__use_cont_head=True)
+        assert hasattr(agent, "_frozen_reward")
+        assert hasattr(agent, "_frozen_cont")
+        for clone in (agent._frozen_reward, agent._frozen_cont):
+            assert all(not p.requires_grad for p in clone.parameters())
+
+    def test_heads_are_optimized(self):
+        agent, _ = make_real_dreamer(model__use_reward_head=True, model__use_cont_head=True)
+        assert any(k.startswith("reward.") for k in agent._named_params)
+        assert any(k.startswith("cont.") for k in agent._named_params)
+
+    def test_heads_optimized_under_wm_only(self):
+        # They are world-model heads, so wm_only trains them alongside the RSSM.
+        agent, _ = make_real_dreamer(wm_only=True, model__use_reward_head=True, model__use_cont_head=True)
+        assert any(k.startswith("reward.") for k in agent._named_params)
+        assert any(k.startswith("cont.") for k in agent._named_params)
+
+    def test_heads_not_optimized_under_freeze_wm(self):
+        agent, _ = make_real_dreamer(freeze_wm=True, model__use_reward_head=True, model__use_cont_head=True)
+        assert not any(k.startswith(("reward.", "cont.")) for k in agent._named_params)
+        assert all(not p.requires_grad for p in agent.reward.parameters())
+        assert all(not p.requires_grad for p in agent.cont.parameters())
+
+    def test_heads_not_optimized_under_train_text_only(self):
+        agent, _ = make_real_dreamer(
+            train_text_only=True,
+            mission_text=True,
+            model__use_reward_head=True,
+            model__use_cont_head=True,
+        )
+        assert not any(k.startswith(("reward.", "cont.")) for k in agent._named_params)
+        assert all(not p.requires_grad for p in agent.reward.parameters())
+
+
 class TestModeGuards:
     def _build_raw(self, **model_overrides):
         cfg = build_model_config(**model_overrides)
@@ -144,6 +202,14 @@ class TestModeGuards:
     def test_train_text_only_requires_mission_text(self):
         with pytest.raises(ValueError, match="mission_text"):
             self._build_raw(train_text_only=True, mission_text=False)
+
+    def test_head_reward_source_requires_reward_head(self):
+        with pytest.raises(ValueError, match="use_reward_head"):
+            self._build_raw(model__imag_reward_source="head")
+
+    def test_unknown_reward_source_raises(self):
+        with pytest.raises(ValueError, match="imag_reward_source"):
+            self._build_raw(model__imag_reward_source="disagreement")
 
 
 # ---------------------------------------------------------------------------

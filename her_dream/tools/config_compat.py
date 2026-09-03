@@ -10,6 +10,14 @@ from omegaconf import OmegaConf
 
 from her_dream import goals
 
+# Reward/continue-head keys added after the archived runs were trained. Off means
+# `Dreamer` builds no head, which matches those checkpoints' state dicts.
+_OPTIONAL_HEAD_DEFAULTS = {
+    "use_reward_head": False,
+    "use_cont_head": False,
+    "imag_reward_source": "goal",
+}
+
 # Harmless dummy goal-conditioning defaults for pre-goal-conditioning (WM-only)
 # checkpoints — they only size the actor/value heads, which are neither loaded
 # nor run in WM-only mode; make_reward is skipped entirely.
@@ -32,8 +40,18 @@ def backfill_config(config, *, force_wm_only=False):
     is used in that mode.
     """
     updates = {}
+    model_defaults = {}
     if "goal_imag_horizon" not in config.model:
-        updates["model"] = {"goal_imag_horizon": int(config.model.imag_horizon)}
+        model_defaults["goal_imag_horizon"] = int(config.model.imag_horizon)
+    # The optional reward/continue heads and the imagination reward source
+    # postdate every archived run, so default them off for any config that
+    # predates them (unlike the goal keys below, this applies to *all* old
+    # configs, not just the pre-goal-conditioning ones).
+    for key, default in _OPTIONAL_HEAD_DEFAULTS.items():
+        if key not in config.model:
+            model_defaults[key] = default
+    if model_defaults:
+        updates["model"] = model_defaults
 
     wm_only = force_wm_only or ("goal_type" not in config)
     if wm_only:
@@ -42,7 +60,7 @@ def backfill_config(config, *, force_wm_only=False):
         # run in WM-only mode; make_reward is skipped entirely.
         top = {k: v for k, v in _WM_ONLY_GOAL_DEFAULTS.items() if k not in config}
         model_missing = {k: v for k, v in _WM_ONLY_GOAL_DEFAULTS.items() if k not in config.model}
-        # Deep-merge: preserves the model.goal_imag_horizon backfill above.
+        # Deep-merge: preserves the model-level backfills above.
         updates = OmegaConf.merge(updates, {**top, "model": model_missing})
 
     config = OmegaConf.merge(config, updates) if updates else config

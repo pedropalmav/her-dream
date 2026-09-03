@@ -8,6 +8,15 @@ compile: False
 log_grads: False
 device: ${device}
 rep_loss: "r2dreamer" # r2dreamer/dreamer/infonce/dreamerpro
+# Vanilla-Dreamer world-model heads. Off by default: the goal-conditioned recipe
+# uses the analytic reward from `rewards.make_reward` and assumes non-terminating
+# episodes. Enable them for vanilla/Plan2Explore-style baselines.
+use_reward_head: False
+use_cont_head: False
+# Where the imagination rollout gets its reward from:
+#   goal -> reward_function(reward_state(...), goal), the analytic goal reward
+#   head -> the learned reward head (requires use_reward_head=True)
+imag_reward_source: goal # goal|head
 goal_type: ${goal_type}
 wm_only: False
 freeze_wm: False

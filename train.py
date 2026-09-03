@@ -100,10 +100,13 @@ _ACTOR_CRITIC_PREFIXES = (
     "_frozen_slow_value.",
 )
 
-# Heads a vanilla (non goal-conditioned) Dreamer trains but this agent no longer
-# builds: the goal reward function replaces the learned reward head, and the
-# continuation head went with it. Present in old checkpoints, absent here.
-_STALE_HEAD_PREFIXES = ("reward.", "cont.", "_frozen_reward.", "_frozen_cont.")
+# The vanilla-Dreamer reward/continue heads, which this agent builds only when
+# `model.use_reward_head` / `model.use_cont_head` are on. They can therefore be
+# missing from either side of a load, and both directions are benign:
+#   - in the checkpoint but not the agent (heads off)  -> discard them
+#   - in the agent but not the checkpoint (heads newly enabled on an older
+#     wm_only run, the expected post-training flow) -> leave them at init
+_OPTIONAL_HEAD_PREFIXES = ("reward.", "cont.", "_frozen_reward.", "_frozen_cont.")
 
 
 def _world_model_state_dict(agent, ckpt_sd):
@@ -118,7 +121,7 @@ def _world_model_state_dict(agent, ckpt_sd):
     This is deliberately not a blanket `strict=False`: a silent partial load of
     the *world model* would be indistinguishable from a correct one (the run
     would train happily on a half-random encoder). Anything dropped or missing
-    outside the actor/critic and the stale vanilla heads raises instead.
+    outside the actor/critic and the optional reward/continue heads raises instead.
     """
     model_sd = agent.state_dict()
     kept, dropped_ac, dropped_stale = {}, [], []
@@ -126,10 +129,10 @@ def _world_model_state_dict(agent, ckpt_sd):
         if key.startswith(_ACTOR_CRITIC_PREFIXES):
             dropped_ac.append(key)
         elif key not in model_sd:
-            if not key.startswith(_STALE_HEAD_PREFIXES):
+            if not key.startswith(_OPTIONAL_HEAD_PREFIXES):
                 raise ValueError(
                     f"Checkpoint key {key!r} has no counterpart in the agent and is not a "
-                    "known stale head. The checkpoint does not match this world model; "
+                    "known optional head. The checkpoint does not match this world model; "
                     "refusing to load it partially."
                 )
             dropped_stale.append(key)
@@ -143,6 +146,10 @@ def _world_model_state_dict(agent, ckpt_sd):
             kept[key] = value
 
     missing = [k for k in model_sd if k not in kept and not k.startswith(_ACTOR_CRITIC_PREFIXES)]
+    # Newly enabled reward/continue heads simply are not in an older checkpoint;
+    # they start from init rather than invalidating the whole load.
+    fresh_heads = [k for k in missing if k.startswith(_OPTIONAL_HEAD_PREFIXES)]
+    missing = [k for k in missing if k not in set(fresh_heads)]
     if missing:
         raise ValueError(
             f"{len(missing)} world-model tensors are absent from the checkpoint, e.g. "
@@ -152,7 +159,15 @@ def _world_model_state_dict(agent, ckpt_sd):
     print(f"[train] reset_actor_critic=True: loading {len(kept)} world-model tensors.")
     print(f"[train]   re-initialized (actor/critic): {len(dropped_ac)} tensors, {_summarize(dropped_ac)}")
     if dropped_stale:
-        print(f"[train]   discarded (stale vanilla heads): {len(dropped_stale)} tensors, {_summarize(dropped_stale)}")
+        print(
+            f"[train]   discarded (heads absent from this agent): {len(dropped_stale)} tensors, "
+            f"{_summarize(dropped_stale)}"
+        )
+    if fresh_heads:
+        print(
+            f"[train]   WARNING: {len(fresh_heads)} reward/continue-head tensors are absent from the "
+            f"checkpoint, {_summarize(fresh_heads)}; they start from a fresh init."
+        )
     return kept
 
 

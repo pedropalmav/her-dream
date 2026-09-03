@@ -32,6 +32,17 @@ class Dreamer(nn.Module):
         self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
+        # Vanilla-Dreamer world-model heads (off by default). The reward head is a
+        # plain function of the RSSM feature, so it predicts `data["reward"]`
+        # marginalized over goals; `imag_reward_source="head"` is therefore meant
+        # for non-goal-conditioned baselines, and "goal" stays the default.
+        self.use_reward_head = bool(getattr(config, "use_reward_head", False))
+        self.use_cont_head = bool(getattr(config, "use_cont_head", False))
+        self.imag_reward_source = str(getattr(config, "imag_reward_source", "goal"))
+        if self.imag_reward_source not in ("goal", "head"):
+            raise ValueError(f"Unknown imag_reward_source {self.imag_reward_source!r}; expected 'goal' or 'head'.")
+        if self.imag_reward_source == "head" and not self.use_reward_head:
+            raise ValueError("imag_reward_source='head' requires use_reward_head=True.")
         self.goal_type = str(config.goal_type)
         self._goal_spec = goals.make_goal_spec(config)
         self.mission_text = config.mission_text
@@ -68,6 +79,12 @@ class Dreamer(nn.Module):
         )
 
         self.reward_function = reward_function
+        # World-model heads: predict the replayed reward / continuation from the
+        # RSSM feature alone, exactly as vanilla Dreamer does.
+        if self.use_reward_head:
+            self.reward = networks.MLPHead(config.reward, self.rssm.feat_size)
+        if self.use_cont_head:
+            self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
 
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
         self.act_discrete = False
@@ -105,6 +122,11 @@ class Dreamer(nn.Module):
         if not self.freeze_wm and not self.train_text_only:
             modules["rssm"] = self.rssm
             modules["encoder"] = self.encoder
+            # World-model heads, so they train under wm_only=True alongside the RSSM.
+            if self.use_reward_head:
+                modules["reward"] = self.reward
+            if self.use_cont_head:
+                modules["cont"] = self.cont
         if not self.wm_only and not self.train_text_only:
             modules["actor"] = self.actor
             modules["value"] = self.value
@@ -231,48 +253,31 @@ class Dreamer(nn.Module):
         self._slow_value.train(False)
         return self
 
+    @staticmethod
+    def _freeze_clone(module):
+        """Deep-copy `module` into a no-grad clone sharing its parameter storage.
+
+        NOTE: "requires_grad" affects whether a parameter is updated, not whether
+        gradients flow through its operations. Sharing `.data` keeps the clone in
+        lockstep with the live module without re-copying every step.
+        """
+        clone = copy.deepcopy(module)
+        for (name_orig, param_orig), (name_new, param_new) in zip(module.named_parameters(), clone.named_parameters()):
+            assert name_orig == name_new
+            param_new.data = param_orig.data
+            param_new.requires_grad_(False)
+        return clone
+
     def clone_and_freeze(self):
-        # NOTE: "requires_grad" affects whether a parameter is updated
-        # not whether gradients flow through its operations
-        self._frozen_encoder = copy.deepcopy(self.encoder)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.encoder.named_parameters(), self._frozen_encoder.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_rssm = copy.deepcopy(self.rssm)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.rssm.named_parameters(), self._frozen_rssm.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_actor = copy.deepcopy(self.actor)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.actor.named_parameters(), self._frozen_actor.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_value = copy.deepcopy(self.value)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self.value.named_parameters(), self._frozen_value.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-
-        self._frozen_slow_value = copy.deepcopy(self._slow_value)
-        for (name_orig, param_orig), (name_new, param_new) in zip(
-            self._slow_value.named_parameters(), self._frozen_slow_value.named_parameters()
-        ):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
+        self._frozen_encoder = self._freeze_clone(self.encoder)
+        self._frozen_rssm = self._freeze_clone(self.rssm)
+        self._frozen_actor = self._freeze_clone(self.actor)
+        self._frozen_value = self._freeze_clone(self.value)
+        self._frozen_slow_value = self._freeze_clone(self._slow_value)
+        if self.use_reward_head:
+            self._frozen_reward = self._freeze_clone(self.reward)
+        if self.use_cont_head:
+            self._frozen_cont = self._freeze_clone(self.cont)
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -287,13 +292,19 @@ class Dreamer(nn.Module):
     def _apply_freeze_wm(self):
         """Disable gradients on all world-model parameters.
 
-        Targets the live encoder/RSSM and any auxiliary modules tied to the
-        representation loss (decoder, projector, dreamerpro buffers) plus the
-        text encoder. The frozen `_frozen_*` clones already have requires_grad
-        disabled by `clone_and_freeze`.
+        Targets the live encoder/RSSM, the reward/continue heads and any auxiliary
+        modules tied to the representation loss (decoder, projector, dreamerpro
+        buffers) plus the text encoder. The frozen `_frozen_*` clones already have
+        requires_grad disabled by `clone_and_freeze`.
         """
         for module in (self.encoder, self.rssm):
             for param in module.parameters():
+                param.requires_grad_(False)
+        if self.use_reward_head:
+            for param in self.reward.parameters():
+                param.requires_grad_(False)
+        if self.use_cont_head:
+            for param in self.cont.parameters():
                 param.requires_grad_(False)
         if self.rep_loss == "dreamer" and hasattr(self, "decoder"):
             for param in self.decoder.parameters():
@@ -609,6 +620,15 @@ class Dreamer(nn.Module):
             # (B, T, F)
             feat = self.rssm.get_feat(post_stoch, post_deter)
 
+            # === Reward / continue heads (vanilla Dreamer, optional) ===
+            # Placed inside this branch so freeze_wm / train_text_only (which take
+            # the no-grad path above) skip them, while wm_only still trains them.
+            if self.use_reward_head:
+                losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
+            if self.use_cont_head:
+                cont = 1.0 - to_f32(data["is_terminal"])
+                losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
+
             # log
             metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
             metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
@@ -691,13 +711,18 @@ class Dreamer(nn.Module):
         S, K = self.rssm._stoch, self.rssm._discrete
         get_stoch_from_feat = lambda x: x[..., : S * K].reshape(*x.shape[:-1], S, K)  # noqa: E731
         imag_stoch = get_stoch_from_feat(imag_feat)
-        reward_input = goals.reward_state(self._goal_spec, stoch=imag_stoch, logit=imag_logit, rssm=self.rssm)
-        imag_reward = self.reward_function(reward_input, goal)
+        imag_reward = self._imagination_reward(imag_feat, imag_stoch, imag_logit, goal)
 
-        # (B*T, T_imag, 1)  probability of continuation
-        imag_cont = torch.ones_like(imag_reward, dtype=torch.float32)
+        # (B*T, T_imag, 1)  probability of continuation. Without the head every
+        # imagined step is assumed to continue, which is what this agent did
+        # before the head was reintroduced.
+        if self.use_cont_head:
+            imag_cont = self._frozen_cont(imag_feat).mean
+        else:
+            imag_cont = torch.ones(*imag_feat.shape[:2], 1, dtype=torch.float32, device=imag_feat.device)
 
         imag_reward = to_f32(imag_reward)
+        imag_cont = to_f32(imag_cont)
 
         # (B*T, T_imag, ...)
         imag_goal = goal.unsqueeze(1).expand(
@@ -797,6 +822,18 @@ class Dreamer(nn.Module):
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})
         return (post_stoch, post_deter), metrics
+
+    def _imagination_reward(self, imag_feat, imag_stoch, imag_logit, goal):
+        """Reward for the imagination rollout, selected by `imag_reward_source`.
+
+        This is the seam the exploration objectives plug into: "goal" is the
+        analytic goal reward from `rewards.make_reward`, "head" is the learned
+        reward predictor. Returns (B*T, T_imag, 1).
+        """
+        if self.imag_reward_source == "head":
+            return self._frozen_reward(imag_feat).mode
+        reward_input = goals.reward_state(self._goal_spec, stoch=imag_stoch, logit=imag_logit, rssm=self.rssm)
+        return self.reward_function(reward_input, goal)
 
     @torch.no_grad()
     def _imagine(self, start, imag_horizon, goal):

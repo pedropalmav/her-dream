@@ -412,10 +412,30 @@ class TestResetActorCritic:
         kept = train._world_model_state_dict(agent, ckpt)
         assert set(kept) == {"rssm.w", "encoder.w"}
 
-    def test_drops_stale_vanilla_heads(self):
+    def test_drops_heads_absent_from_the_agent(self):
+        # Checkpoint trained with the heads, agent built without them.
         agent = self.agent_with({"rssm.w": (4, 4)})
         ckpt = {"rssm.w": torch.ones(4, 4), "reward.last.weight": torch.ones(2), "cont.last.bias": torch.ones(1)}
         assert set(train._world_model_state_dict(agent, ckpt)) == {"rssm.w"}
+
+    def test_newly_enabled_heads_stay_at_init(self, capsys):
+        # The mirror case: heads switched on for a post-training run whose source
+        # checkpoint predates them. They start fresh instead of failing the load.
+        agent = self.agent_with({
+            "rssm.w": (4, 4),
+            "reward.last.weight": (2,),
+            "cont.last.bias": (1,),
+            "_frozen_reward.last.weight": (2,),
+        })
+        kept = train._world_model_state_dict(agent, {"rssm.w": torch.ones(4, 4)})
+        assert set(kept) == {"rssm.w"}
+        assert "fresh init" in capsys.readouterr().out
+
+    def test_missing_non_head_tensor_still_raises_when_heads_enabled(self):
+        # The head exemption must not weaken the partial-load guard.
+        agent = self.agent_with({"rssm.w": (4, 4), "encoder.w": (2,), "reward.last.weight": (2,)})
+        with pytest.raises(ValueError, match="absent from the checkpoint"):
+            train._world_model_state_dict(agent, {"rssm.w": torch.ones(4, 4)})
 
     def test_unknown_extra_key_raises(self):
         agent = self.agent_with({"rssm.w": (4, 4)})

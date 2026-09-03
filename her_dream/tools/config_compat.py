@@ -10,12 +10,14 @@ from omegaconf import OmegaConf
 
 from her_dream import goals
 
-# Reward/continue-head keys added after the archived runs were trained. Off means
-# `Dreamer` builds no head, which matches those checkpoints' state dicts.
+# Optional-module keys added after the archived runs were trained. All off, which
+# matches those checkpoints' state dicts: `Dreamer` builds no reward/continue head
+# and no Plan2Explore explorer or ensemble.
 _OPTIONAL_HEAD_DEFAULTS = {
     "use_reward_head": False,
     "use_cont_head": False,
     "imag_reward_source": "goal",
+    "plan2explore": False,
 }
 
 # Harmless dummy goal-conditioning defaults for pre-goal-conditioning (WM-only)

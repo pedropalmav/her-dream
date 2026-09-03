@@ -478,6 +478,56 @@ class TestResetActorCritic:
             train.validate_config(cfg)
 
 
+class TestPlan2ExploreCheckpoints:
+    """A pretraining checkpoint carries modules the achiever does not build."""
+
+    @staticmethod
+    def agent_with(shapes):
+        agent = SimpleNamespace()
+        agent.state_dict = lambda: {k: torch.zeros(v) for k, v in shapes.items()}
+        return agent
+
+    def test_drops_the_explorer_and_ensemble_on_a_strict_load(self, capsys):
+        # This is the phase-2 handoff: pretrain with plan2explore, then post-train
+        # the achiever on the frozen world model.
+        agent = self.agent_with({"rssm.w": (4, 4), "ac.actor.w": (3, 8)})
+        ckpt = {
+            "rssm.w": torch.ones(4, 4),
+            "ac.actor.w": torch.ones(3, 8),
+            "explorer.actor.w": torch.ones(3, 4),
+            "disag.heads.0.last.weight": torch.ones(2),
+        }
+        kept = train._drop_optional_absent(agent, ckpt)
+        assert set(kept) == {"rssm.w", "ac.actor.w"}
+        assert "explorer" in capsys.readouterr().out
+
+    def test_keeps_everything_the_agent_does_build(self):
+        agent = self.agent_with({"rssm.w": (4, 4), "explorer.actor.w": (3, 4)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "explorer.actor.w": torch.ones(3, 4)}
+        assert set(train._drop_optional_absent(agent, ckpt)) == set(ckpt)
+
+    def test_an_unknown_extra_key_is_left_for_load_state_dict_to_reject(self):
+        # Only *known* optional modules are dropped; strictness is preserved.
+        agent = self.agent_with({"rssm.w": (4, 4)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "mystery.w": torch.ones(2)}
+        assert "mystery.w" in train._drop_optional_absent(agent, ckpt)
+
+    def test_rejects_load_from(self, tmp_path):
+        cfg = make_config(tmp_path, load_from=str(make_ckpt(tmp_path)))
+        cfg.plan2explore = True
+        with pytest.raises(ValueError, match="does not take load_from"):
+            train.validate_config(cfg)
+
+    @pytest.mark.parametrize("flag", ["wm_only", "freeze_wm", "train_text_only"])
+    def test_rejects_the_other_modes(self, tmp_path, flag):
+        cfg = make_config(tmp_path)
+        cfg.plan2explore = True
+        setattr(cfg, flag, True)
+        cfg.mission_text = True
+        with pytest.raises(ValueError, match="exclusive with wm_only"):
+            train.validate_config(cfg)
+
+
 class TestDistillMode:
     def test_applies_train_text_only(self, noop, mock_torch_load, mock_dreamer_cls, tmp_path):
         src = make_ckpt(tmp_path)

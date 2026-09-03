@@ -3,8 +3,9 @@
 import pytest
 import torch
 
+from her_dream.actor_critic import ActorCritic
 from tests.actor_critic.conftest import T_IMAG, A, B, F, G, make_ac
-from tests.dreamer.conftest import act_cont, act_multi, act_with_n
+from tests.dreamer.conftest import act_cont, act_discrete, act_multi, act_with_n, build_model_config
 
 
 def _mlphead_in_features(head):
@@ -268,3 +269,61 @@ class TestLifecycle:
 
     def test_slow_value_is_absent_from_the_optimizer_modules(self, ac):
         assert ac._slow_value not in ac.optim_modules().values()
+
+
+class TestGoalAgnostic:
+    """`goal_size=0` — the layout an exploration policy uses."""
+
+    def test_policy_input_is_the_bare_feature(self):
+        ac = make_ac(goal_size=0)
+        feat = torch.randn(B, F)
+        assert torch.equal(ac.policy_input(feat, None), feat)
+
+    def test_actor_and_critic_take_the_feature_alone(self):
+        ac = make_ac(goal_size=0)
+        assert _mlphead_in_features(ac.actor) == F
+        assert _mlphead_in_features(ac.value) == F
+
+    def test_the_threshold_onehot_is_suppressed(self):
+        # The threshold describes the goal acceptance criterion, so a policy that
+        # ignores goals takes neither — even under log_prob.
+        ac = make_ac(goal_type="log_prob", goal_size=0)
+        assert ac.threshold_bins == 0
+        assert not hasattr(ac, "threshold_onehot")
+
+    def test_imagination_loss_accepts_no_goal(self, imag_batch):
+        ac = make_ac(goal_size=0)
+        losses, metrics, ret = ac.imagination_loss(
+            imag_batch.feat, imag_batch.action, imag_batch.reward, imag_batch.cont, None
+        )
+        assert set(losses) == {"policy", "value"}
+        assert ret.shape == (B, T_IMAG - 1, 1)
+
+    def test_replay_value_loss_accepts_no_goal(self, replay_batch):
+        ac = make_ac(goal_size=0)
+        losses, _ = ac.replay_value_loss(
+            replay_batch.feat, None, replay_batch.last, replay_batch.term, replay_batch.reward, replay_batch.boot
+        )
+        assert set(losses) == {"repval"}
+
+
+class TestSharedConfigNode:
+    """Two instances from one config — how Dreamer builds task + explorer."""
+
+    @pytest.mark.parametrize("act", ["discrete", "multi", "cont", "n"])
+    def test_a_second_instance_reuses_the_collapsed_dist(self, act):
+        # __init__ collapses config.actor.dist in place; the second build must
+        # not look for `.disc` on the already-collapsed node.
+        cfg = build_model_config()
+        act_space = {"discrete": act_discrete, "multi": act_multi, "cont": act_cont, "n": act_with_n}[act]()
+        first = ActorCritic(cfg.model, F, act_space, G)
+        second = ActorCritic(cfg.model, F, act_space, 0, name="explore")
+        assert first.act_discrete == second.act_discrete
+        assert _mlphead_in_features(second.actor) == F
+
+    def test_the_two_instances_have_separate_parameters(self):
+        cfg = build_model_config()
+        task = ActorCritic(cfg.model, F, act_discrete(A), G)
+        explorer = ActorCritic(cfg.model, F, act_discrete(A), 0, name="explore")
+        task_ids = {id(p) for p in task.parameters()}
+        assert not task_ids & {id(p) for p in explorer.parameters()}

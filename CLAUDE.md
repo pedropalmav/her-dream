@@ -13,7 +13,7 @@ A PyTorch implementation of **R2-Dreamer** (ICLR 2026) extended with goal-condit
 
 The reusable library lives in an **installable package, `her_dream/`** (distribution name `her-dream`, defined in `pyproject.toml`). Install it editable with **`uv pip install -e .`**; this replaces the old `sys.path`/CWD-based imports, so `import her_dream` (and `from her_dream.dreamer import Dreamer`, `from her_dream.envs import make_envs`, …) works from any directory.
 
-- **Package** (`her_dream/`): the core modules `dreamer.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
+- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
 - **Repo-root scripts** (kept out of the package, but they `import her_dream`): `train.py`, `evaluate.py`, `eval_text_goal.py`, `export.py`, `visualization.py`, and the `experiments/`, `viz/`, `zflow/`, `scripts/`, `tests/` directories.
 - **Convention for this doc**: paths naming a library module (e.g. `dreamer.py`, `envs/wrappers.py`, `configs/goal_type/full.yaml`) are relative to `her_dream/` — i.e. `her_dream/dreamer.py`, `her_dream/configs/…`. Root-level things (`train.py`, `experiments/`, `scripts/`, `docs/`) are named as-is.
 - Because `configs/` now ships inside the package, the Hydra entry points (`train.py`, `evaluate.py`) resolve it via `pathlib.Path(her_dream.__file__).parent / "configs"` rather than a path relative to the script.
@@ -139,7 +139,36 @@ Diagnostic scripts live in `experiments/` (WM/text-encoder stochasticity, poster
 4. Computes the representation loss branch selected by `config.rep_loss`.
 5. Runs imagination rollout (`rssm.prior`) for `imag_horizon` steps.
 6. Calls `reward_function(imag_stoch, goal)` to get imagined rewards.
-7. Updates actor and critic with policy gradient and TD learning.
+7. Hands the rollout to `self.ac` (an `ActorCritic`) for the policy-gradient and TD losses.
+
+`Dreamer` keeps the single optimizer and the single `backward()`: every sub-module
+returns unscaled losses which `_cal_grad` weights by `loss_scales` and sums.
+
+**`actor_critic.py` — `ActorCritic` class**: the goal-conditioned actor, its
+critic, the slow value target, the return EMA and the three frozen inference
+clones (`_frozen_actor` / `_frozen_value` / `_frozen_slow_value`). It owns:
+- `policy_input(feat, goal)` — the single definition of the policy input layout,
+  `feat ++ flatten(goal) [++ threshold_onehot]`. Everything that runs the policy
+  (`Dreamer.act`, `Dreamer._imagine`, both loss branches,
+  `experiments/common/rollout.actor_policy`) goes through it.
+- `imagination_loss(...) -> (losses, metrics, ret)` — lambda returns, advantage,
+  the `policy` and `value` losses.
+- `replay_value_loss(...) -> (losses, metrics)` — the `repval` loss, deliberately
+  fed the *attached* RSSM feature so the critic's gradient reaches the world model.
+- `clone_and_freeze` / `update_slow_target` / `freeze` / `train`.
+
+It is instantiable more than once. A `name=""` constructor argument prefixes every
+loss key, metric name and optimizer module name, so an exploration actor-critic
+(`name="explore"` → `explore_policy`, `explore_value`, …) can coexist with the task
+one; `loss_scales(base)` mirrors the base scales onto the prefixed keys, and
+`Dreamer._imagine(start, horizon, goal, actor_critic)` takes the policy to roll out
+as a parameter. The default unnamed instance leaves every key exactly as it was.
+
+**Checkpoint layout**: `Dreamer.state_dict()` nests these under `ac.` (`ac.actor.*`,
+`ac.value.*`, `ac._slow_value.*`, `ac.return_ema.*`, `ac.threshold_onehot`).
+Checkpoints written before that are still loadable — every load site runs
+`tools.migrate_agent_state_dict(sd)` first, which rewrites the old flat keys and is
+a no-op on current ones.
 
 **`rssm.py` — `RSSM` class**: Manages the latent state `(stoch, deter)`.
 - `stoch` shape: `(B, S, K)` — S groups, K categories (e.g. 32×16).

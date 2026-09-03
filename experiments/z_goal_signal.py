@@ -57,6 +57,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import her_dream  # noqa: E402
 import her_dream.goals as goals  # noqa: E402
 import her_dream.networks as networks  # noqa: E402
+import her_dream.tools as tools  # noqa: E402
 import train as train_mod  # noqa: E402
 from experiments.common.io import dump_json  # noqa: E402
 from experiments.common.obs import onehot_action, preprocess_obs  # noqa: E402
@@ -112,7 +113,8 @@ def load_pretrained_actor(agent, config, logdir, device):
     on-distribution rollouts and for proposing non-trivial imagined goals.
     """
     ckpt = torch.load(pathlib.Path(logdir) / "latest.pt", map_location=device)["agent_state_dict"]
-    actor_sd = {k[len("actor.") :]: v for k, v in ckpt.items() if k.startswith("actor.")}
+    ckpt = tools.migrate_agent_state_dict(ckpt)
+    actor_sd = {k[len("ac.actor.") :]: v for k, v in ckpt.items() if k.startswith("ac.actor.")}
     if not actor_sd:
         return None
     actor = networks.MLPHead(config.model.actor, agent.rssm.feat_size).to(device)

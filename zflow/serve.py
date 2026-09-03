@@ -90,7 +90,7 @@ def _encode_image_goal(agent, env, agent_dir):
 
 # state_dict prefixes that make up the world model — identical in keys and
 # shapes between the goal-conditioned Dreamer and the original-Dreamer runs.
-_WM_PREFIXES = ("encoder.", "_frozen_encoder.", "rssm.", "_frozen_rssm.", "return_ema.")
+_WM_PREFIXES = ("encoder.", "_frozen_encoder.", "rssm.", "_frozen_rssm.")
 
 
 def _load_agent_weights(agent, checkpoint, wm_only: bool):
@@ -102,6 +102,9 @@ def _load_agent_weights(agent, checkpoint, wm_only: bool):
     (which have incompatible shapes) are intentionally skipped. The randomly
     initialised actor/value on the agent are never exercised in WM-only mode.
     """
+    # Checkpoints predating the `Dreamer.ac` sub-module use the old flat
+    # actor/critic keys; the migration is a no-op on current ones.
+    checkpoint = tools.migrate_agent_state_dict(checkpoint)
     if not wm_only:
         agent.load_state_dict(checkpoint)
         return

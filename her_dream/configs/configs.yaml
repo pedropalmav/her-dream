@@ -19,6 +19,11 @@ hydra:
 
 batch_size: 16
 batch_length: 64
+# Constant per-step baseline added to whatever the goal type's reward returns
+# (rewards.with_reward_offset). 0 keeps the historical rewards untouched; an env that
+# can terminate needs reward_offset=1.0 so the {-1, 0} match rewards become {0, 1} and
+# dying stops being worth more than surviving.
+reward_offset: 0.0
 mission_text: False
 wm_only: False
 freeze_wm: False
@@ -51,6 +56,7 @@ model:
   train_text_only: ${train_text_only}
   prob_threshold: ${oc.select:prob_threshold,0.5}
   prob_threshold_step: ${oc.select:prob_threshold_step,0.05}
+  reward_offset: ${reward_offset}
 
 buffer:
   goal_type: ${goal_type}

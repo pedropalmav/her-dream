@@ -17,6 +17,7 @@ import her_dream.tools as tools
 from her_dream.actor_critic import ActorCritic
 from her_dream.networks import Projector
 from her_dream.optim import LaProp, clip_grad_agc_
+from her_dream.plan2explore import Disagreement
 from her_dream.tools import to_f32
 
 
@@ -55,6 +56,13 @@ class Dreamer(nn.Module):
             raise ValueError("train_text_only is exclusive with wm_only and freeze_wm.")
         if self.train_text_only and not self.mission_text:
             raise ValueError("train_text_only=True requires mission_text=True.")
+        # Plan2Explore world-model pretraining: an ensemble of one-step predictors
+        # supplies an intrinsic reward, and a separate goal-agnostic explorer
+        # actor-critic collects the data. The task actor-critic is left untouched
+        # and trained afterwards on the frozen world model (load_from + freeze_wm).
+        self.plan2explore = bool(getattr(config, "plan2explore", False))
+        if self.plan2explore and (self.wm_only or self.freeze_wm or self.train_text_only):
+            raise ValueError("plan2explore is exclusive with wm_only, freeze_wm and train_text_only.")
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -95,8 +103,17 @@ class Dreamer(nn.Module):
         )
         self.act_discrete = self.ac.act_discrete
 
+        # Built after `self.ac` on purpose: construction order fixes the RNG
+        # stream and the shared optimizer's parameter order, so an agent without
+        # Plan2Explore is bit-identical to one from before this existed.
+        if self.plan2explore:
+            self.explorer = ActorCritic(config, self.rssm.feat_size, act_space, 0, name="explore")
+            self.disag = Disagreement(config, self.rssm.feat_size, self.act_dim, self.rssm)
+
         self._loss_scales = dict(config.loss_scales)
         self._loss_scales.update(self.ac.loss_scales(self._loss_scales))
+        if self.plan2explore:
+            self._loss_scales.update(self.explorer.loss_scales(self._loss_scales))
         self._log_grads = bool(config.log_grads)
 
         modules = {}
@@ -108,7 +125,12 @@ class Dreamer(nn.Module):
                 modules["reward"] = self.reward
             if self.use_cont_head:
                 modules["cont"] = self.cont
-        if not self.wm_only and not self.train_text_only:
+        if self.plan2explore:
+            # Pretraining trains the world model, the ensemble and the explorer;
+            # the task actor-critic stays at its init and is trained later.
+            modules["disag"] = self.disag
+            modules.update(self.explorer.optim_modules())
+        elif not self.wm_only and not self.train_text_only:
             modules.update(self.ac.optim_modules())
 
         # TODO: Create a method for this block
@@ -222,6 +244,8 @@ class Dreamer(nn.Module):
         self._frozen_encoder = tools.freeze_clone(self.encoder)
         self._frozen_rssm = tools.freeze_clone(self.rssm)
         self.ac.clone_and_freeze()
+        if self.plan2explore:
+            self.explorer.clone_and_freeze()
         if self.use_reward_head:
             self._frozen_reward = tools.freeze_clone(self.reward)
         if self.use_cont_head:
@@ -253,6 +277,9 @@ class Dreamer(nn.Module):
                 param.requires_grad_(False)
         if self.use_cont_head:
             for param in self.cont.parameters():
+                param.requires_grad_(False)
+        if hasattr(self, "disag"):
+            for param in self.disag.parameters():
                 param.requires_grad_(False)
         if self.rep_loss == "dreamer" and hasattr(self, "decoder"):
             for param in self.decoder.parameters():
@@ -310,8 +337,10 @@ class Dreamer(nn.Module):
         if random:
             action = self._random_action(B)
         else:
+            # Pretraining collects data with the goal-agnostic explorer.
+            actor_critic, goal = (self.explorer, None) if self.plan2explore else (self.ac, obs["goal"])
             # (B, A)
-            action_dist = self.ac.frozen_policy(feat, obs["goal"])
+            action_dist = actor_critic.frozen_policy(feat, goal)
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
@@ -457,7 +486,10 @@ class Dreamer(nn.Module):
         data, index, initial = replay_buffer.sample()
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        self.ac.update_slow_target()
+        # Only the actor-critic being trained: Plan2Explore pretraining leaves the
+        # task one untouched, and mixing an untrained critic into its own target
+        # would just accumulate rounding drift.
+        (self.explorer if self.plan2explore else self.ac).update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
@@ -570,6 +602,14 @@ class Dreamer(nn.Module):
                 cont = 1.0 - to_f32(data["is_terminal"])
                 losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
 
+            # === Plan2Explore ensemble (optional) ===
+            # Same placement rationale as the heads: trained whenever the world
+            # model is, skipped under freeze_wm / train_text_only.
+            if self.plan2explore:
+                target = self.disag.target_from(post_stoch, post_deter, feat)
+                losses["disag"], disag_metrics = self.disag.loss(feat, data["action"], target)
+                metrics.update(disag_metrics)
+
             # log
             metrics["dyn_entropy"] = torch.mean(self.rssm.get_dist(prior_logit).entropy())
             metrics["rep_entropy"] = torch.mean(self.rssm.get_dist(post_logit).entropy())
@@ -631,6 +671,16 @@ class Dreamer(nn.Module):
         # === Imagination rollout for actor-critic ===
         # Skipped entirely in wm_only mode: actor and value are frozen, so
         # policy/value/repval losses would only waste compute.
+        if self.plan2explore:
+            explore_losses, explore_metrics = self._explore_losses(post_stoch, post_deter)
+            losses.update(explore_losses)
+            metrics.update(explore_metrics)
+            total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
+            self._scaler.scale(total_loss).backward()
+            metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
+            metrics.update({"opt/loss": total_loss})
+            return (post_stoch, post_deter), metrics
+
         if self.wm_only:
             total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
             self._scaler.scale(total_loss).backward()
@@ -654,16 +704,9 @@ class Dreamer(nn.Module):
         imag_stoch = get_stoch_from_feat(imag_feat)
         imag_reward = self._imagination_reward(imag_feat, imag_stoch, imag_logit, goal)
 
-        # (B*T, T_imag, 1)  probability of continuation. Without the head every
-        # imagined step is assumed to continue, which is what this agent did
-        # before the head was reintroduced.
-        if self.use_cont_head:
-            imag_cont = self._frozen_cont(imag_feat).mean
-        else:
-            imag_cont = torch.ones(*imag_feat.shape[:2], 1, dtype=torch.float32, device=imag_feat.device)
-
+        # (B*T, T_imag, 1)
         imag_reward = to_f32(imag_reward)
-        imag_cont = to_f32(imag_cont)
+        imag_cont = to_f32(self._imagination_cont(imag_feat))
 
         imag_losses, imag_metrics, ret = self.ac.imagination_loss(imag_feat, imag_action, imag_reward, imag_cont, goal)
         losses.update(imag_losses)
@@ -687,6 +730,38 @@ class Dreamer(nn.Module):
         metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
         metrics.update({"opt/loss": total_loss})
         return (post_stoch, post_deter), metrics
+
+    def _explore_losses(self, post_stoch, post_deter):
+        """Imagine under the explorer and score it with ensemble disagreement.
+
+        The task actor-critic is not touched, and there is no replay-value loss:
+        `data["reward"]` is the goal reward, which means nothing to an explorer.
+        """
+        start = (
+            post_stoch.reshape(-1, *post_stoch.shape[2:]).detach(),
+            post_deter.reshape(-1, *post_deter.shape[2:]).detach(),
+        )
+        imag_feat, imag_action, _ = self._imagine(start, self.imag_horizon + 1, None, self.explorer)
+        imag_feat, imag_action = imag_feat.detach(), imag_action.detach()
+
+        # (B*T, T_imag, 1)
+        imag_reward, metrics = self.disag.intrinsic_reward(imag_feat, imag_action)
+        imag_reward = to_f32(imag_reward)
+        imag_cont = to_f32(self._imagination_cont(imag_feat))
+
+        losses, ac_metrics, _ = self.explorer.imagination_loss(imag_feat, imag_action, imag_reward, imag_cont, None)
+        metrics.update(ac_metrics)
+        return losses, metrics
+
+    def _imagination_cont(self, imag_feat):
+        """Per-step continuation probability over an imagined rollout.
+
+        Without the continue head every imagined step is assumed to continue,
+        which is what this agent did before the head was reintroduced.
+        """
+        if self.use_cont_head:
+            return self._frozen_cont(imag_feat).mean
+        return torch.ones(*imag_feat.shape[:2], 1, dtype=torch.float32, device=imag_feat.device)
 
     def _imagination_reward(self, imag_feat, imag_stoch, imag_logit, goal):
         """Reward for the imagination rollout, selected by `imag_reward_source`.

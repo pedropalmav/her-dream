@@ -21,6 +21,10 @@ goal_type: ${goal_type}
 wm_only: False
 freeze_wm: False
 train_text_only: False
+# Plan2Explore world-model pretraining: train the WM with an ensemble of
+# one-step predictors and a goal-agnostic explorer driven by their
+# disagreement. Post-train the achiever afterwards with load_from+freeze_wm.
+plan2explore: False
 
 lr: 4e-5
 agc: 0.3
@@ -43,10 +47,33 @@ loss_scales:
   policy: 1.0
   value: 1.0
   repval: 0.3
+  disag: 1.0
   swav: 1.0
   temp: 1.0
   norm: 1.0
   text_kl: 0.1
+
+disag:
+  models: 8 # ensemble members; >=2. The intrinsic-reward forward is the memory
+  # hot spot of a pretraining step, so drop this first if it OOMs.
+  target: stoch # stoch|deter|feat — what each member predicts one step ahead
+  action_cond: True # condition the prediction on the action driving the step
+  offset: 1 # predict this many steps ahead
+  log: False # take log(disagreement); flip if disag_raw is far from O(1)
+  intr_scale: 1.0 # set against the logged `disag_raw` — ReturnEMA clips its
+  # scale at min=1.0, so it cannot amplify a tiny reward.
+  head:
+    shape: null # set to the target size at build time
+    layers: 2
+    units: ${model.units}
+    act: ${model.act}
+    norm: ${model.norm}
+    device: ${device}
+    dist:
+      name: "identity" # raw tensor; dists.mse wraps it for the loss
+    outscale: 1.0
+    symlog_inputs: False
+    name: "disag"
 
 r2dreamer:
   lambd: 5e-4

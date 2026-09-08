@@ -19,10 +19,13 @@ B, T_IMAG = 3, 4  # batch, imagination horizon
 A = 5  # discrete action dim
 
 
-def make_ac(goal_type="full", act=None, *, name="", **cfg_overrides):
-    """Build a real `ActorCritic` from the composed Hydra config."""
+def make_ac(goal_type="full", act=None, *, name="", goal_size=G, **cfg_overrides):
+    """Build a real `ActorCritic` from the composed Hydra config.
+
+    `goal_size=0` builds the goal-agnostic variant an explorer uses.
+    """
     cfg = build_model_config(goal_type=goal_type, **cfg_overrides)
-    return ActorCritic(cfg.model, F, act or act_discrete(A), G, name=name)
+    return ActorCritic(cfg.model, F, act or act_discrete(A), goal_size, name=name)
 
 
 @pytest.fixture

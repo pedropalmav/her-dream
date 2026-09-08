@@ -13,7 +13,7 @@ A PyTorch implementation of **R2-Dreamer** (ICLR 2026) extended with goal-condit
 
 The reusable library lives in an **installable package, `her_dream/`** (distribution name `her-dream`, defined in `pyproject.toml`). Install it editable with **`uv pip install -e .`**; this replaces the old `sys.path`/CWD-based imports, so `import her_dream` (and `from her_dream.dreamer import Dreamer`, `from her_dream.envs import make_envs`, …) works from any directory.
 
-- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
+- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py plan2explore.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
 - **Repo-root scripts** (kept out of the package, but they `import her_dream`): `train.py`, `evaluate.py`, `eval_text_goal.py`, `export.py`, `visualization.py`, and the `experiments/`, `viz/`, `zflow/`, `scripts/`, `tests/` directories.
 - **Convention for this doc**: paths naming a library module (e.g. `dreamer.py`, `envs/wrappers.py`, `configs/goal_type/full.yaml`) are relative to `her_dream/` — i.e. `her_dream/dreamer.py`, `her_dream/configs/…`. Root-level things (`train.py`, `experiments/`, `scripts/`, `docs/`) are named as-is.
 - Because `configs/` now ships inside the package, the Hydra entry points (`train.py`, `evaluate.py`) resolve it via `pathlib.Path(her_dream.__file__).parent / "configs"` rather than a path relative to the script.
@@ -37,6 +37,12 @@ python3 train.py logdir=./logdir/wm_only/01 wm_only=True
 
 # Post-training: load a pretrained WM, freeze it, train actor/critic on top
 python3 train.py logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
+
+# Plan2Explore: pretrain the WM with an exploration policy, then post-train the
+# goal achiever on the frozen result (the second command is the ordinary
+# post-training path — the checkpoint's explorer/ensemble are dropped on load).
+python3 train.py logdir=./logdir/p2e/01 plan2explore=True
+python3 train.py logdir=./logdir/p2e/achiever load_from=./logdir/p2e/01 freeze_wm=True
 
 # Distill the text encoder against a frozen WM
 python3 train.py logdir=./logdir/distill/01 load_from=./logdir/wm_only/01 train_text_only=True mission_text=True
@@ -124,6 +130,7 @@ The goal source is `env.goal_sample`:
 A single entry point — **`train.py`** — covers three modes, selected purely from the config (see `train.py:validate_config`/`load_checkpoint`):
 - **From-scratch** (default, `load_from=null`) — end-to-end training (WM + actor/critic). With `wm_only=True` it trains only the WM with random actions.
 - **Post-training** (`load_from=<logdir>`) — loads a checkpoint, optionally freezes the WM (`freeze_wm=True`), and trains actor/critic on top. Used to isolate "is the WM or the policy the problem".
+- **Plan2Explore pretraining** (`plan2explore=True`) — trains the WM, a disagreement ensemble and a goal-agnostic *explorer* actor-critic; the task actor-critic is left at its init. Exclusive with the other modes and takes no `load_from`. Phase 2 is plain post-training on the result.
 - **Text distillation** (`train_text_only=True load_from=<logdir> mission_text=True`) — trains only the `TextEncoderGRU` (KL against a frozen WM posterior); WM and actor/critic stay fixed.
 
 There is a single launcher script, `scripts/train.sh` (uv + headless rendering); the mode is chosen entirely by the args it forwards to `train.py` (e.g. `load_from=`, `freeze_wm=True`, `train_text_only=True mission_text=True`).
@@ -169,6 +176,31 @@ as a parameter. The default unnamed instance leaves every key exactly as it was.
 Checkpoints written before that are still loadable — every load site runs
 `tools.migrate_agent_state_dict(sd)` first, which rewrites the old flat keys and is
 a no-op on current ones.
+
+**`plan2explore.py` — `Disagreement` class**: an ensemble of `disag.models`
+one-step predictors, each mapping `feat ++ action` to the next latent
+(`disag.target`: `stoch` | `deter` | `feat`). Their spread is the intrinsic
+reward:
+- `loss(feat, action, target)` — one-step prediction error, summed over members.
+  Inputs *and* targets are detached, so the ensemble never shapes the
+  representation (as in DreamerV2). Because the buffer already shifts the action
+  one step back (`buffers/buffer.py`), the transition `t -> t+offset` pairs
+  `feat[:, :-offset]` with `action[:, offset:]`.
+- `intrinsic_reward(feat, action)` — std across members, mean over the predicted
+  dimensions, times `disag.intr_scale`. Accumulated with Welford rather than
+  stacking every member: memory stays flat in the ensemble size, and a well-fit
+  ensemble reaches exactly zero instead of the ~1e-4 float-error floor the
+  sum-of-squares form leaves behind.
+
+`disag_raw` is logged unscaled — set `disag.intr_scale` against it, because
+`ReturnEMA` clips its scale at `min=1.0` and so cannot amplify a tiny reward.
+`disag.log=True` takes the log instead, if the raw magnitude is far from O(1).
+
+Under `plan2explore=True`, `Dreamer` builds `self.explorer` (an `ActorCritic`
+with `goal_size=0` and `name="explore"`) and `self.disag`; `act` collects data
+with the explorer, and only the WM, the ensemble and the explorer are optimized.
+Checkpoints therefore carry `explorer.*` / `disag.*`, which `train.py` drops on
+load for an agent that does not build them (`_OPTIONAL_MODULE_PREFIXES`).
 
 **`rssm.py` — `RSSM` class**: Manages the latent state `(stoch, deter)`.
 - `stoch` shape: `(B, S, K)` — S groups, K categories (e.g. 32×16).

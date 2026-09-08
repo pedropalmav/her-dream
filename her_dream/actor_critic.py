@@ -37,23 +37,27 @@ class ActorCritic(nn.Module):
 
         # The actor head is shaped by the action space, and its `dist` node is
         # collapsed from the cont/disc/multi_disc triple down to the selected
-        # one. Both edits are in place on the shared config node.
+        # one. Both edits are in place on the shared config node, so the collapse
+        # is guarded: a second instance built from the same node (an exploration
+        # policy alongside the task one) would otherwise look for `.disc` on an
+        # already-collapsed node and raise.
         config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
-        self.act_discrete = False
-        if hasattr(act_space, "multi_discrete"):
-            config.actor.dist = config.actor.dist.multi_disc
-            self.act_discrete = True
-        elif hasattr(act_space, "discrete"):
-            config.actor.dist = config.actor.dist.disc
-            self.act_discrete = True
-        else:
-            config.actor.dist = config.actor.dist.cont
+        self.act_discrete = hasattr(act_space, "multi_discrete") or hasattr(act_space, "discrete")
+        if "cont" in config.actor.dist:
+            if hasattr(act_space, "multi_discrete"):
+                config.actor.dist = config.actor.dist.multi_disc
+            elif hasattr(act_space, "discrete"):
+                config.actor.dist = config.actor.dist.disc
+            else:
+                config.actor.dist = config.actor.dist.cont
 
         # `log_prob` is the only goal type conditioning the policy on the
-        # acceptance threshold; it appends a one-hot of the threshold bin.
-        uses_threshold = bool(getattr(config, "uses_threshold", False))
-        self.threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if uses_threshold else 0
+        # acceptance threshold; it appends a one-hot of the threshold bin. The
+        # threshold describes the *goal* acceptance criterion, so a goal-agnostic
+        # policy (goal_size=0, e.g. an explorer) takes neither.
         self.goal_size = int(goal_size)
+        uses_threshold = bool(getattr(config, "uses_threshold", False)) and self.goal_size > 0
+        self.threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if uses_threshold else 0
         self.input_size = feat_size + self.goal_size + self.threshold_bins
 
         # Construction order is load-bearing: it fixes the order of RNG draws in
@@ -100,13 +104,16 @@ class ActorCritic(nn.Module):
 
         `feat` is (..., F) and `goal` carries the same leading dims in any
         layout — (..., K) or (..., S, K) — so it is flattened to (..., G).
+
+        A goal-agnostic instance (`goal_size=0`) ignores `goal` entirely and is
+        conditioned on the feature alone; pass `None` for it.
         """
-        goal = goal.reshape(*feat.shape[:-1], -1)
-        out = torch.cat([feat, goal], dim=-1)
+        parts = [feat]
+        if self.goal_size > 0:
+            parts.append(goal.reshape(*feat.shape[:-1], -1))
         if self.threshold_bins > 0:
-            threshold = self.threshold_onehot.expand(*feat.shape[:-1], -1)
-            out = torch.cat([out, threshold], dim=-1)
-        return out
+            parts.append(self.threshold_onehot.expand(*feat.shape[:-1], -1))
+        return torch.cat(parts, dim=-1) if len(parts) > 1 else feat
 
     def policy(self, feat, goal):
         """Action distribution from the live actor (gradients flow)."""
@@ -127,7 +134,8 @@ class ActorCritic(nn.Module):
             imag_action: (B, T_imag, A) actions taken by the frozen actor.
             imag_reward: (B, T_imag, 1) reward per imagined step.
             imag_cont: (B, T_imag, 1) probability the episode continues.
-            goal: (B, ...) goal held fixed along the rollout.
+            goal: (B, ...) goal held fixed along the rollout, or None for a
+                goal-agnostic instance.
 
         Returns:
             (losses, metrics, ret) — `ret` is the (B, T_imag-1, 1) lambda
@@ -135,7 +143,9 @@ class ActorCritic(nn.Module):
         """
         horizon = imag_feat.shape[1]
         # (B, T_imag, ...) — the goal is constant along the rollout.
-        imag_goal = goal.unsqueeze(1).expand(-1, horizon, *([-1] * (goal.ndim - 1)))
+        imag_goal = None
+        if goal is not None:
+            imag_goal = goal.unsqueeze(1).expand(-1, horizon, *([-1] * (goal.ndim - 1)))
         imag_input = self.policy_input(imag_feat, imag_goal)
 
         imag_value = self._frozen_value(imag_input).mode

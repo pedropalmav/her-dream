@@ -87,3 +87,24 @@ class TestRandomAction:
         action = agent._random_action(4)
         assert action.shape == (4, ACT)
         assert torch.all(action >= -1.0) and torch.all(action <= 1.0)
+
+
+class TestPlan2ExploreActs:
+    def test_acts_with_the_explorer_ignoring_the_goal(self):
+        # Data collection during pretraining is goal-agnostic, so the same
+        # observation must yield the same action whatever goal is attached.
+        agent, goal_shape = make_real_dreamer(plan2explore=True)
+        obs = make_default_obs(B=2, goal_shape=goal_shape)
+        state = agent.get_initial_state(2)
+
+        def act_with(goal):
+            # `preprocess` rescales obs["image"] in place, so each call gets a
+            # copy; and obs_step rsamples the posterior, so each gets the seed.
+            torch.manual_seed(0)
+            fresh = {k: v.clone() for k, v in obs.items()}
+            fresh["goal"] = goal
+            return agent.act(fresh, state, eval=True)[0]
+
+        other_goal = torch.zeros_like(obs["goal"])
+        other_goal[..., -1] = 1.0
+        assert torch.equal(act_with(obs["goal"].clone()), act_with(other_goal))

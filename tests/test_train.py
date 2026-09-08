@@ -557,3 +557,41 @@ class TestDistillMode:
         cfg = make_config(tmp_path, train_text_only=True, mission_text=False, load_from=str(make_ckpt(tmp_path)))
         with pytest.raises(ValueError):
             train.main.__wrapped__(cfg)
+
+
+class TestLexaConfig:
+    def test_rejects_plan2explore(self, tmp_path):
+        cfg = make_config(tmp_path)
+        cfg.lexa = True
+        cfg.plan2explore = True
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            train.validate_config(cfg)
+
+    @pytest.mark.parametrize("flag", ["wm_only", "freeze_wm"])
+    def test_rejects_the_pretraining_modes(self, tmp_path, flag):
+        cfg = make_config(tmp_path)
+        cfg.lexa = True
+        setattr(cfg, flag, True)
+        with pytest.raises(ValueError, match="lexa=True is exclusive"):
+            train.validate_config(cfg)
+
+    def test_warns_when_the_reward_is_not_temporal(self, tmp_path, capsys):
+        cfg = make_config(tmp_path)
+        cfg.lexa = True
+        cfg.model.imag_reward_source = "goal"
+        train.validate_config(cfg)
+        assert "imag_reward_source=temporal" in capsys.readouterr().out
+
+    def test_silent_with_the_temporal_reward(self, tmp_path, capsys):
+        cfg = make_config(tmp_path)
+        cfg.lexa = True
+        cfg.model.imag_reward_source = "temporal"
+        train.validate_config(cfg)
+        assert "WARNING" not in capsys.readouterr().out
+
+    def test_drops_the_distance_predictor_when_absent(self):
+        # A LEXA checkpoint loaded by an agent using the analytic goal reward.
+        agent = SimpleNamespace()
+        agent.state_dict = lambda: {"rssm.w": torch.zeros(4, 4)}
+        ckpt = {"rssm.w": torch.ones(4, 4), "temporal_distance.head.last.weight": torch.ones(2)}
+        assert set(train._drop_optional_absent(agent, ckpt)) == {"rssm.w"}

@@ -269,9 +269,57 @@ class TestPlan2Explore:
 
     @pytest.mark.parametrize("flag", ["wm_only", "freeze_wm"])
     def test_exclusive_with_the_other_pretraining_modes(self, flag):
-        with pytest.raises(ValueError, match="plan2explore is exclusive"):
+        with pytest.raises(ValueError, match="exclusive with wm_only"):
             make_real_dreamer(plan2explore=True, **{flag: True})
 
     def test_exclusive_with_train_text_only(self):
-        with pytest.raises(ValueError, match="plan2explore is exclusive"):
+        with pytest.raises(ValueError, match="exclusive with wm_only"):
             make_real_dreamer(plan2explore=True, train_text_only=True, mission_text=True)
+
+
+class TestLexa:
+    """LEXA owns the explorer *and* trains the achiever alongside it."""
+
+    def test_builds_every_component(self):
+        agent, _ = make_real_dreamer(lexa=True, model__imag_reward_source="temporal")
+        for name in ("explorer", "disag", "temporal_distance", "ac"):
+            assert hasattr(agent, name)
+
+    def test_optimizer_trains_both_actor_critics(self):
+        agent, _ = make_real_dreamer(lexa=True, model__imag_reward_source="temporal")
+        groups = {n.split(".")[0] for n in agent._named_params}
+        assert {"actor", "value", "explore_actor", "explore_value"} <= groups
+
+    def test_optimizer_trains_the_ensemble_and_the_distance(self):
+        agent, _ = make_real_dreamer(lexa=True, model__imag_reward_source="temporal")
+        groups = {n.split(".")[0] for n in agent._named_params}
+        assert {"disag", "temporal_distance"} <= groups
+
+    def test_is_exclusive_with_plan2explore(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            make_real_dreamer(lexa=True, plan2explore=True)
+
+    @pytest.mark.parametrize("flag", ["wm_only", "freeze_wm"])
+    def test_is_exclusive_with_the_pretraining_modes(self, flag):
+        with pytest.raises(ValueError, match="exclusive with wm_only"):
+            make_real_dreamer(lexa=True, **{flag: True})
+
+
+class TestTemporalRewardSource:
+    """`imag_reward_source=temporal` is an axis of its own, usable without LEXA."""
+
+    def test_builds_the_predictor(self):
+        agent, _ = make_real_dreamer(model__imag_reward_source="temporal")
+        assert hasattr(agent, "temporal_distance")
+
+    def test_absent_by_default(self, default_dreamer):
+        assert not hasattr(default_dreamer, "temporal_distance")
+
+    def test_sees_a_state_and_a_goal(self):
+        agent, _ = make_real_dreamer(model__imag_reward_source="temporal")
+        first = next(m for m in agent.temporal_distance.head.modules() if isinstance(m, torch.nn.Linear))
+        assert first.in_features == 2 * agent.rssm.flat_stoch
+
+    def test_unknown_reward_source_still_raises(self):
+        with pytest.raises(ValueError, match="Unknown imag_reward_source"):
+            make_real_dreamer(model__imag_reward_source="disagreement")

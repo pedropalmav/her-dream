@@ -14,6 +14,7 @@ import her_dream.goals as goals
 import her_dream.networks as networks
 import her_dream.rssm as rssm
 import her_dream.tools as tools
+from her_dream.actor_critic import ActorCritic
 from her_dream.networks import Projector
 from her_dream.optim import LaProp, clip_grad_agc_
 from her_dream.tools import to_f32
@@ -23,13 +24,9 @@ class Dreamer(nn.Module):
     def __init__(self, config, obs_space, act_space, reward_function):
         super().__init__()
         self.device = torch.device(config.device)
-        self.act_entropy = float(config.act_entropy)
         self.kl_free = float(config.kl_free)
         self.imag_horizon = int(config.imag_horizon)
         self.goal_imag_horizon = int(config.goal_imag_horizon)
-        self.horizon = int(config.horizon)
-        self.lamb = float(config.lamb)
-        self.return_ema = networks.ReturnEMA(device=self.device)
         self.act_dim = act_space.n if hasattr(act_space, "n") else sum(act_space.shape)
         self.rep_loss = str(config.rep_loss)
         # Vanilla-Dreamer world-model heads (off by default). The reward head is a
@@ -86,36 +83,20 @@ class Dreamer(nn.Module):
         if self.use_cont_head:
             self.cont = networks.MLPHead(config.cont, self.rssm.feat_size)
 
-        config.actor.shape = (act_space.n,) if hasattr(act_space, "n") else tuple(map(int, act_space.shape))
-        self.act_discrete = False
-        if hasattr(act_space, "multi_discrete"):
-            config.actor.dist = config.actor.dist.multi_disc
-            self.act_discrete = True
-        elif hasattr(act_space, "discrete"):
-            config.actor.dist = config.actor.dist.disc
-            self.act_discrete = True
-        else:
-            config.actor.dist = config.actor.dist.cont
-
-        # Actor-critic components
-        goal_shape = goals.goal_size(self._goal_spec, self.rssm)
-        threshold_bins = int(round(1.0 / config.prob_threshold_step)) + 1 if self._goal_spec.uses_threshold else 0
-        self.threshold_bins = threshold_bins
-        self.actor = networks.MLPHead(config.actor, self.rssm.feat_size + goal_shape + threshold_bins)
-        self.value = networks.MLPHead(config.critic, self.rssm.feat_size + goal_shape + threshold_bins)
-        if threshold_bins > 0:
-            idx = int(round(config.prob_threshold / config.prob_threshold_step))
-            t_oh = torch.zeros(threshold_bins)
-            t_oh[idx] = 1.0
-            self.register_buffer("threshold_onehot", t_oh)  # shape (threshold_bins,)
-        self.slow_target_update = int(config.slow_target_update)
-        self.slow_target_fraction = float(config.slow_target_fraction)
-        self._slow_value = copy.deepcopy(self.value)
-        for param in self._slow_value.parameters():
-            param.requires_grad = False
-        self._slow_value_updates = 0
+        # Actor-critic components. Everything the policy and the critic need —
+        # their frozen clones, the slow target, the return EMA and the goal /
+        # threshold input layout — lives in this sub-module, so a second one
+        # (an exploration policy) can be added without touching Dreamer.
+        self.ac = ActorCritic(
+            config,
+            self.rssm.feat_size,
+            act_space,
+            goals.goal_size(self._goal_spec, self.rssm),
+        )
+        self.act_discrete = self.ac.act_discrete
 
         self._loss_scales = dict(config.loss_scales)
+        self._loss_scales.update(self.ac.loss_scales(self._loss_scales))
         self._log_grads = bool(config.log_grads)
 
         modules = {}
@@ -128,8 +109,7 @@ class Dreamer(nn.Module):
             if self.use_cont_head:
                 modules["cont"] = self.cont
         if not self.wm_only and not self.train_text_only:
-            modules["actor"] = self.actor
-            modules["value"] = self.value
+            modules.update(self.ac.optim_modules())
 
         # TODO: Create a method for this block
         if self.rep_loss == "dreamer":
@@ -238,46 +218,14 @@ class Dreamer(nn.Module):
             print("Compiling update function with torch.compile...")
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
 
-    def _update_slow_target(self):
-        """Update slow-moving value target network."""
-        if self._slow_value_updates % self.slow_target_update == 0:
-            with torch.no_grad():
-                mix = self.slow_target_fraction
-                for v, s in zip(self.value.parameters(), self._slow_value.parameters()):
-                    s.data.copy_(mix * v.data + (1 - mix) * s.data)
-        self._slow_value_updates += 1
-
-    def train(self, mode=True):
-        super().train(mode)
-        # slow_value should be always eval mode
-        self._slow_value.train(False)
-        return self
-
-    @staticmethod
-    def _freeze_clone(module):
-        """Deep-copy `module` into a no-grad clone sharing its parameter storage.
-
-        NOTE: "requires_grad" affects whether a parameter is updated, not whether
-        gradients flow through its operations. Sharing `.data` keeps the clone in
-        lockstep with the live module without re-copying every step.
-        """
-        clone = copy.deepcopy(module)
-        for (name_orig, param_orig), (name_new, param_new) in zip(module.named_parameters(), clone.named_parameters()):
-            assert name_orig == name_new
-            param_new.data = param_orig.data
-            param_new.requires_grad_(False)
-        return clone
-
     def clone_and_freeze(self):
-        self._frozen_encoder = self._freeze_clone(self.encoder)
-        self._frozen_rssm = self._freeze_clone(self.rssm)
-        self._frozen_actor = self._freeze_clone(self.actor)
-        self._frozen_value = self._freeze_clone(self.value)
-        self._frozen_slow_value = self._freeze_clone(self._slow_value)
+        self._frozen_encoder = tools.freeze_clone(self.encoder)
+        self._frozen_rssm = tools.freeze_clone(self.rssm)
+        self.ac.clone_and_freeze()
         if self.use_reward_head:
-            self._frozen_reward = self._freeze_clone(self.reward)
+            self._frozen_reward = tools.freeze_clone(self.reward)
         if self.use_cont_head:
-            self._frozen_cont = self._freeze_clone(self.cont)
+            self._frozen_cont = tools.freeze_clone(self.cont)
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -329,9 +277,7 @@ class Dreamer(nn.Module):
         freezes the actor/value and explicitly keeps the text encoder trainable.
         """
         self._apply_freeze_wm()  # freezes encoder/rssm/rep modules + text encoder
-        for module in (self.actor, self.value):
-            for param in module.parameters():
-                param.requires_grad_(False)
+        self.ac.freeze()
         # Re-enable the text encoder, which _apply_freeze_wm just disabled.
         for param in self.text_encoder.parameters():
             param.requires_grad_(True)
@@ -364,13 +310,8 @@ class Dreamer(nn.Module):
         if random:
             action = self._random_action(B)
         else:
-            # (B, F)
-            goal = obs["goal"].reshape(feat.shape[0], -1)
-            policy_input = torch.cat([feat, goal], dim=-1)
-            if self.threshold_bins > 0:
-                t = self.threshold_onehot.expand(feat.shape[0], -1)
-                policy_input = torch.cat([policy_input, t], dim=-1)
-            action_dist = self._frozen_actor(policy_input)
+            # (B, A)
+            action_dist = self.ac.frozen_policy(feat, obs["goal"])
             # (B, A)
             action = action_dist.mode if eval else action_dist.rsample()
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
@@ -516,7 +457,7 @@ class Dreamer(nn.Module):
         data, index, initial = replay_buffer.sample()
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        self._update_slow_target()
+        self.ac.update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
@@ -704,7 +645,7 @@ class Dreamer(nn.Module):
         )
         # (B, T, ...) -> (B*T, ...)
         goal = data["goal"].reshape(-1, *data["goal"].shape[2:])
-        imag_feat, imag_action, imag_logit = self._imagine(start, self.imag_horizon + 1, goal)
+        imag_feat, imag_action, imag_logit = self._imagine(start, self.imag_horizon + 1, goal, self.ac)
         imag_feat, imag_action, imag_logit = imag_feat.detach(), imag_action.detach(), imag_logit.detach()
 
         # (B*T, T_imag, 1)
@@ -724,63 +665,9 @@ class Dreamer(nn.Module):
         imag_reward = to_f32(imag_reward)
         imag_cont = to_f32(imag_cont)
 
-        # (B*T, T_imag, ...)
-        imag_goal = goal.unsqueeze(1).expand(
-            -1,
-            self.imag_horizon + 1,
-            *([-1] * (goal.ndim - 1)),
-        )
-        imag_goal = imag_goal.reshape(imag_goal.shape[0], imag_goal.shape[1], -1)
-        imag_input = torch.cat([imag_feat, imag_goal], dim=-1)
-        if self.threshold_bins > 0:
-            B2, Ti = imag_input.shape[:2]
-            t = self.threshold_onehot.expand(B2, Ti, -1)
-            imag_input = torch.cat([imag_input, t], dim=-1)
-        imag_value = self._frozen_value(imag_input).mode
-        imag_slow_value = self._frozen_slow_value(imag_input).mode
-        disc = 1 - 1 / self.horizon
-
-        # (B*T, T_imag, 1)
-        weight = torch.cumprod(imag_cont * disc, dim=1)
-        last = torch.zeros_like(imag_cont)
-        term = 1 - imag_cont
-        ret = self._lambda_return(
-            last, term, imag_reward, imag_value, imag_value, disc, self.lamb
-        )  # (B*T, T_imag-1, 1)
-        ret_offset, ret_scale = self.return_ema(ret)
-        # (B*T, T_imag-1, 1)
-        adv = (ret - imag_value[:, :-1]) / ret_scale
-
-        policy = self.actor(imag_input)
-        # (B*T, T_imag-1, 1)
-        logpi = policy.log_prob(imag_action)[:, :-1].unsqueeze(-1)
-        entropy = policy.entropy()[:, :-1].unsqueeze(-1)
-        losses["policy"] = torch.mean(weight[:, :-1].detach() * -(logpi * adv.detach() + self.act_entropy * entropy))
-
-        imag_value_dist = self.value(imag_input)
-        # (B*T, T_imag, 1)
-        tar_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
-        losses["value"] = torch.mean(
-            weight[:, :-1].detach()
-            * (-imag_value_dist.log_prob(tar_padded.detach()) - imag_value_dist.log_prob(imag_slow_value.detach()))[
-                :, :-1
-            ].unsqueeze(-1)
-        )
-        # log
-        ret_normed = (ret - ret_offset) / ret_scale
-        metrics["ret"] = torch.mean(ret_normed)
-        metrics["ret_005"] = self.return_ema.ema_vals[0]
-        metrics["ret_095"] = self.return_ema.ema_vals[1]
-        metrics["adv"] = torch.mean(adv)
-        metrics["adv_std"] = torch.std(adv)
-        metrics["con"] = torch.mean(imag_cont)
-        metrics["rew"] = torch.mean(imag_reward)
-        metrics["val"] = torch.mean(imag_value)
-        metrics["tar"] = torch.mean(ret)
-        metrics["slowval"] = torch.mean(imag_slow_value)
-        metrics["weight"] = torch.mean(weight)
-        metrics["action_entropy"] = torch.mean(entropy)
-        metrics.update(tools.tensorstats(imag_action, "action"))
+        imag_losses, imag_metrics, ret = self.ac.imagination_loss(imag_feat, imag_action, imag_reward, imag_cont, goal)
+        losses.update(imag_losses)
+        metrics.update(imag_metrics)
 
         # === Replay-based value learning (keep gradients through world model) ===
         last, term, reward = (
@@ -790,31 +677,9 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter)  # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        goal = data["goal"].reshape(feat.shape[0], feat.shape[1], -1)
-        value_input = torch.cat([feat, goal], dim=-1)
-        if self.threshold_bins > 0:
-            B2, T2 = value_input.shape[:2]
-            t = self.threshold_onehot.expand(B2, T2, -1)
-            value_input = torch.cat([value_input, t], dim=-1)
-        value = self._frozen_value(value_input).mode
-        slow_value = self._frozen_slow_value(value_input).mode
-        disc = 1 - 1 / self.horizon
-        weight = 1.0 - last
-        ret = self._lambda_return(last, term, reward, value, boot, disc, self.lamb)
-        ret_padded = torch.cat([ret, 0 * ret[:, -1:]], 1)
-
-        # Keep this attached to the world model so gradients can flow through
-        value_dist = self.value(value_input)
-        losses["repval"] = torch.mean(
-            weight[:, :-1]
-            * (-value_dist.log_prob(ret_padded.detach()) - value_dist.log_prob(slow_value.detach()))[:, :-1].unsqueeze(
-                -1
-            )
-        )
-        # log
-        metrics.update(tools.tensorstats(ret, "ret_replay"))
-        metrics.update(tools.tensorstats(value, "value_replay"))
-        metrics.update(tools.tensorstats(slow_value, "slow_value_replay"))
+        replay_losses, replay_metrics = self.ac.replay_value_loss(feat, data["goal"], last, term, reward, boot)
+        losses.update(replay_losses)
+        metrics.update(replay_metrics)
 
         total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
         self._scaler.scale(total_loss).backward()
@@ -836,8 +701,12 @@ class Dreamer(nn.Module):
         return self.reward_function(reward_input, goal)
 
     @torch.no_grad()
-    def _imagine(self, start, imag_horizon, goal):
-        """Roll out the policy in latent space."""
+    def _imagine(self, start, imag_horizon, goal, actor_critic):
+        """Roll out `actor_critic`'s policy in latent space.
+
+        The policy is a parameter so an exploration actor can be rolled out
+        through the same frozen world model as the task actor.
+        """
         # (B, S, K), (B, D)
         feats = []
         actions = []
@@ -847,12 +716,7 @@ class Dreamer(nn.Module):
             # (B, F)
             feat = self._frozen_rssm.get_feat(stoch, deter)
             # (B, A)
-            goal = goal.reshape(feat.shape[0], -1)
-            policy_input = torch.cat([feat, goal], dim=-1)
-            if self.threshold_bins > 0:
-                t = self.threshold_onehot.expand(feat.shape[0], -1)
-                policy_input = torch.cat([policy_input, t], dim=-1)
-            action = self._frozen_actor(policy_input).rsample()
+            action = actor_critic.frozen_policy(feat, goal).rsample()
             # Append feat and its corresponding sampled action at the same time step.
             feats.append(feat)
             actions.append(action)
@@ -862,21 +726,6 @@ class Dreamer(nn.Module):
         # Stack along sequence dim T_imag.
         # (B, T_imag, F), (B, T_imag, A), (B, T_imag, S, K)
         return torch.stack(feats, dim=1), torch.stack(actions, dim=1), torch.stack(logits, dim=1)
-
-    @torch.no_grad()
-    def _lambda_return(self, last, term, reward, value, boot, disc, lamb):
-        """
-        lamb=1 means discounted Monte Carlo return.
-        lamb=0 means fixed 1-step return.
-        """
-        assert last.shape == term.shape == reward.shape == value.shape == boot.shape
-        live = (1 - to_f32(term))[:, 1:] * disc
-        cont = (1 - to_f32(last))[:, 1:] * lamb
-        interm = reward[:, 1:] + (1 - cont) * live * boot[:, 1:]
-        out = [boot[:, -1]]
-        for i in reversed(range(live.shape[1])):
-            out.append(interm[:, i] + live[:, i] * cont[:, i] * out[-1])
-        return torch.stack(list(reversed(out))[:-1], 1)
 
     @torch.no_grad()
     def preprocess(self, data):

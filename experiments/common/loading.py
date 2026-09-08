@@ -5,6 +5,7 @@ import pathlib
 import torch
 from omegaconf import OmegaConf
 
+import her_dream.tools as tools
 from her_dream import goals
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_env
@@ -67,7 +68,7 @@ def load_agent(
     agent = Dreamer(config.model, obs_space, act_space, reward_function=reward_function).to(device)
 
     checkpoint = torch.load(logdir / "latest.pt", map_location=device)
-    agent.load_state_dict(checkpoint["agent_state_dict"], strict=strict)
+    agent.load_state_dict(tools.migrate_agent_state_dict(checkpoint["agent_state_dict"]), strict=strict)
     agent.eval()
     if freeze:
         for p in agent.parameters():

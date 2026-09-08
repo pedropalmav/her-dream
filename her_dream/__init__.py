@@ -3,6 +3,7 @@
 Public API re-exports for ergonomic use once the package is installed.
 """
 
+from her_dream.actor_critic import ActorCritic
 from her_dream.buffers import make_buffer
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_env, make_envs
@@ -12,6 +13,7 @@ from her_dream.trainer import OnlineTrainer
 
 __all__ = [
     "Dreamer",
+    "ActorCritic",
     "OnlineTrainer",
     "make_buffer",
     "make_env",

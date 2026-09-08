@@ -801,7 +801,7 @@ def load_agent(logdir, device: str | None = None):
     ).to(device)
 
     ckpt = torch.load(logdir / "latest.pt", map_location=device)
-    state = ckpt["agent_state_dict"]
+    state = tools.migrate_agent_state_dict(ckpt["agent_state_dict"])
     own = agent.state_dict()
     # Carga solo los tensores presentes y con forma coincidente: descarta
     # módulos extra del checkpoint (_frozen_*) y actor/critic con otra dimensión
@@ -809,7 +809,7 @@ def load_agent(logdir, device: str | None = None):
     loadable = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
     agent.load_state_dict(loadable, strict=False)
 
-    wm_missing = [k for k in own if (k.startswith("encoder.") or k.startswith("her_dream.rssm.")) and k not in loadable]
+    wm_missing = [k for k in own if k.startswith(("encoder.", "rssm.")) and k not in loadable]
     if wm_missing:
         print(f"[warn] {len(wm_missing)} claves del world model NO se cargaron, p.ej. {wm_missing[:3]}")
     agent.eval()

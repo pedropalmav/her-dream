@@ -59,7 +59,8 @@ def main(eval_cfg):
         reward_function=reward_function,
     ).to(config.device)
 
-    agent.load_state_dict(torch.load(experiment_dir / "latest.pt", map_location=config.device)["agent_state_dict"])
+    ckpt = torch.load(experiment_dir / "latest.pt", map_location=config.device)
+    agent.load_state_dict(tools.migrate_agent_state_dict(ckpt["agent_state_dict"]))
     agent.eval()
 
     manual_ctrl = ManualControl(act_space.shape[0]) if eval_cfg.manual_control else None

@@ -31,6 +31,7 @@ from tensordict.base import TensorDictBase  # noqa: E402
 TensorDictBase.pin_memory = lambda self, *a, **k: self
 
 import her_dream.goals as goals  # noqa: E402
+import her_dream.tools as tools  # noqa: E402
 from experiments.common import onehot_action  # noqa: E402
 from her_dream.dreamer import Dreamer  # noqa: E402
 from her_dream.envs import make_env  # noqa: E402
@@ -61,7 +62,7 @@ def build(env_name, device="cpu"):
     reward_function = make_reward(config)
     agent = Dreamer(config.model, env.observation_space, env.action_space, reward_function=reward_function).to(device)
     state = torch.load(CKPT, map_location=device)
-    agent.load_state_dict(state["agent_state_dict"], strict=False)
+    agent.load_state_dict(tools.migrate_agent_state_dict(state["agent_state_dict"]), strict=False)
     agent.eval()
     for p in agent.parameters():
         p.requires_grad_(False)

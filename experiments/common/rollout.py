@@ -56,19 +56,17 @@ def scripted_policy(action_indices: list):
 def actor_policy(agent, goal: torch.Tensor, eval: bool = True):
     """Act with the trained actor, conditioned on a fixed (1, S, K) one-hot goal.
 
-    Mirrors `Dreamer.act`'s policy branch: the actor sees `[feat, flat(goal)]`
-    and its `mode` is taken when `eval` (its sample otherwise). Unlike `act`, it
+    Mirrors `Dreamer.act`'s policy branch: it reuses the agent's own
+    `ActorCritic.policy` (so the `[feat, flat(goal)]` layout stays in one place)
+    and takes its `mode` when `eval`, its sample otherwise. Unlike `act`, it
     reads the latent state from the rollout driver rather than keeping its own,
     so the posterior chain stays the single source of truth.
     """
-    if agent.threshold_bins > 0:
-        raise NotImplementedError("actor_policy does not handle log_prob's threshold_bins input")
 
     def policy(t: int, n_actions: int, state) -> np.ndarray:
         stoch, deter = state
         feat = agent.rssm.get_feat(stoch, deter)
-        policy_input = torch.cat([feat, goal.reshape(feat.shape[0], -1)], dim=-1)
-        dist = agent.actor(policy_input)
+        dist = agent.ac.policy(feat, goal)
         action = dist.mode if eval else dist.rsample()
         return action[0].detach().cpu().numpy().astype(np.float32)
 

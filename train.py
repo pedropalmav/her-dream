@@ -89,16 +89,12 @@ def validate_config(config):
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
 
 
-# Actor/critic parameters, including the frozen inference clones and the slow
-# critic target. `reset_actor_critic=True` drops all of them from the checkpoint.
-_ACTOR_CRITIC_PREFIXES = (
-    "actor.",
-    "value.",
-    "_slow_value.",
-    "_frozen_actor.",
-    "_frozen_value.",
-    "_frozen_slow_value.",
-)
+# Everything the `ActorCritic` sub-module owns: actor, critic, their frozen
+# inference clones, the slow critic target and the return EMA.
+# `reset_actor_critic=True` drops all of it from the checkpoint. Note the return
+# EMA is included, so the return normalizer is reset alongside the policy rather
+# than carrying a stale scale onto a freshly initialised critic.
+_ACTOR_CRITIC_PREFIXES = ("ac.",)
 
 # The vanilla-Dreamer reward/continue heads, which this agent builds only when
 # `model.use_reward_head` / `model.use_cont_head` are on. They can therefore be
@@ -191,7 +187,9 @@ def load_checkpoint(agent, config):
         raise FileNotFoundError(f"No checkpoint at {ckpt_path}.")
     print("Loading agent state_dict from", config.load_from)
     state = torch.load(ckpt_path, map_location=config.device)
-    ckpt_sd = state["agent_state_dict"]
+    # Checkpoints written before the actor/critic moved into `Dreamer.ac` use the
+    # old flat key layout; the migration is a no-op on current ones.
+    ckpt_sd = tools.migrate_agent_state_dict(state["agent_state_dict"])
     if getattr(config, "reset_actor_critic", False):
         agent.load_state_dict(_world_model_state_dict(agent, ckpt_sd), strict=False)
     else:

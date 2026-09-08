@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import torch
 from torch import nn
@@ -55,3 +57,18 @@ def tensorstats(tensor, prefix):
         f"{prefix}_min": torch.min(tensor),
         f"{prefix}_max": torch.max(tensor),
     }
+
+
+def freeze_clone(module):
+    """Deep-copy `module` into a no-grad clone sharing its parameter storage.
+
+    NOTE: "requires_grad" affects whether a parameter is updated, not whether
+    gradients flow through its operations. Sharing `.data` keeps the clone in
+    lockstep with the live module without re-copying every step.
+    """
+    clone = copy.deepcopy(module)
+    for (name_orig, param_orig), (name_new, param_new) in zip(module.named_parameters(), clone.named_parameters()):
+        assert name_orig == name_new
+        param_new.data = param_orig.data
+        param_new.requires_grad_(False)
+    return clone

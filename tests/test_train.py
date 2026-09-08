@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
+import her_dream.tools as tools
 import train
 
 
@@ -407,10 +408,26 @@ class TestResetActorCritic:
         return agent
 
     def test_keeps_world_model_and_drops_actor_critic(self):
-        agent = self.agent_with({"rssm.w": (4, 4), "encoder.w": (2,), "actor.mlp.w": (3, 8)})
-        ckpt = {"rssm.w": torch.ones(4, 4), "encoder.w": torch.ones(2), "actor.mlp.w": torch.ones(3, 5)}
+        agent = self.agent_with({"rssm.w": (4, 4), "encoder.w": (2,), "ac.actor.mlp.w": (3, 8)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "encoder.w": torch.ones(2), "ac.actor.mlp.w": torch.ones(3, 5)}
         kept = train._world_model_state_dict(agent, ckpt)
         assert set(kept) == {"rssm.w", "encoder.w"}
+
+    def test_drops_the_return_ema_with_the_actor_critic(self):
+        # The return normalizer lives on the ActorCritic, so resetting the policy
+        # resets its return scale too rather than carrying a stale one over.
+        agent = self.agent_with({"rssm.w": (4, 4), "ac.return_ema.ema_vals": (2,)})
+        ckpt = {"rssm.w": torch.ones(4, 4), "ac.return_ema.ema_vals": torch.ones(2)}
+        assert set(train._world_model_state_dict(agent, ckpt)) == {"rssm.w"}
+
+    def test_legacy_flat_checkpoint_is_migrated_before_the_split(self):
+        # A pre-`ActorCritic` checkpoint uses flat keys; once migrated it splits
+        # exactly like a current one instead of tripping the "no counterpart" guard.
+        agent = self.agent_with({"rssm.w": (4, 4), "ac.actor.mlp.w": (3, 8)})
+        legacy = {"rssm.w": torch.ones(4, 4), "actor.mlp.w": torch.ones(3, 8), "threshold_onehot": torch.ones(3)}
+        migrated = tools.migrate_agent_state_dict(legacy)
+        assert set(migrated) == {"rssm.w", "ac.actor.mlp.w", "ac.threshold_onehot"}
+        assert set(train._world_model_state_dict(agent, migrated)) == {"rssm.w"}
 
     def test_drops_heads_absent_from_the_agent(self):
         # Checkpoint trained with the heads, agent built without them.

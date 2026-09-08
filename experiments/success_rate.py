@@ -286,14 +286,6 @@ def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip
     """Run the whole suite against one already-loaded checkpoint, or None if it cannot be driven."""
     if "goal" not in str(env_cfg.task):
         print(f"  ! {env_cfg.task} is not a goal-grid task; the layout override will not apply")
-    if agent.threshold_bins > 0:
-        # Skipping rather than aborting: the natural invocation is a glob over a
-        # whole family of runs, and one log_prob run in it must not cost the rest.
-        print(
-            f"  ! skipped: goal_type={config.goal_type} has threshold_bins>0, which the shared "
-            "actor_policy cannot drive — see experiments/common/rollout.py"
-        )
-        return None
     size = int(env_cfg.env_size)
     spec = goals.make_goal_spec(config.model)
     S = agent.rssm._stoch

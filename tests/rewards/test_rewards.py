@@ -13,7 +13,9 @@ from her_dream.rewards import (
     make_reward,
     max_cosine_reward,
     prob_reward,
+    reward_offset,
     row_by_row_reward,
+    with_reward_offset,
 )
 
 from .conftest import B, K, S, T, make_dist_mock
@@ -60,6 +62,65 @@ class TestMakeReward:
         config = SimpleNamespace(goal_type="unknown")
         with pytest.raises(ValueError):
             make_reward(config)
+
+
+class TestRewardOffset:
+    """`reward_offset` is a constant per-step baseline layered on top of whatever the
+    goal type's reward returns, so an episodic env can shift the {-1, 0} rewards to
+    {0, 1} without every reward function growing a parameter."""
+
+    def _match_and_mismatch(self):
+        """(state, goal) where batch row 0 matches the goal exactly and row 1 does not."""
+        goal = F.one_hot(torch.zeros(S, dtype=torch.long), K).float()  # (S, K)
+        state = goal.unsqueeze(0).repeat(B, 1, 1)  # (B, S, K)
+        state[1, 0] = F.one_hot(torch.tensor(1), K).float()  # break one group
+        return state, goal
+
+    def test_zero_offset_returns_the_function_itself(self):
+        assert with_reward_offset(full_goal_reward, 0.0) is full_goal_reward
+
+    def test_zero_offset_keeps_dtype(self):
+        """The exact-match rewards return int64; a float offset would promote them."""
+        state, goal = self._match_and_mismatch()
+        assert with_reward_offset(full_goal_reward, 0.0)(state, goal).dtype == full_goal_reward(state, goal).dtype
+
+    def test_shifts_every_value_by_the_offset(self):
+        state, goal = self._match_and_mismatch()
+        shifted = with_reward_offset(full_goal_reward, 1.0)(state, goal)
+        assert torch.allclose(shifted, torch.tensor([[1.0], [0.0]]))
+
+    def test_shift_preserves_dense_spacing(self):
+        """row_by_row is dense in [-1, 0]; the offset moves the range, not the shape."""
+        state, goal = self._match_and_mismatch()
+        bare = row_by_row_reward(state, goal)
+        shifted = with_reward_offset(row_by_row_reward, 1.0)(state, goal)
+        assert torch.allclose(shifted, bare + 1.0)
+        assert torch.all(shifted >= 0)
+
+    def test_forwards_extra_arguments(self):
+        state, goal = torch.randn(B, S, K), torch.randn(S, K)
+        shifted = with_reward_offset(max_cosine_reward, 0.5)(state, goal, eps=1e-6)
+        assert torch.allclose(shifted, max_cosine_reward(state, goal, eps=1e-6) + 0.5)
+
+    def test_make_reward_applies_the_configured_offset(self):
+        state, goal = self._match_and_mismatch()
+        config = SimpleNamespace(goal_type="full", reward_offset=1.0)
+        assert torch.allclose(make_reward(config)(state, goal), torch.tensor([[1.0], [0.0]]))
+
+    def test_make_reward_applies_it_over_a_bound_reward(self):
+        """log_prob's fn already closes over its threshold; the offset stacks on top."""
+        prob_threshold = 0.5
+        config = SimpleNamespace(goal_type="log_prob", prob_threshold=prob_threshold, reward_offset=1.0)
+        dist = make_dist_mock(torch.randn(B, S, K), torch.full((B,), math.log(prob_threshold)))
+        assert torch.all(make_reward(config)(dist, torch.zeros(S, K)) == 1)
+
+    def test_missing_key_defaults_to_zero(self):
+        """Configs saved before the key existed (evaluate.py, zflow, experiments/)."""
+        assert reward_offset(SimpleNamespace(goal_type="full")) == 0.0
+        assert make_reward(SimpleNamespace(goal_type="full")) is full_goal_reward
+
+    def test_reads_the_key_as_a_float(self):
+        assert reward_offset(SimpleNamespace(goal_type="full", reward_offset=1)) == 1.0
 
 
 class TestFirstRowReward:

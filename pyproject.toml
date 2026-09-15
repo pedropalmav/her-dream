@@ -11,6 +11,19 @@ requires-python = ">=3.11"
 dependencies = [
     "ale-py==0.11.2",
     "av>=17.0.0",
+    # The grid environments shared with the sibling cookie-env project. Pinned to a
+    # commit rather than a tag because the lava envs still live on cookie-env's
+    # `feat/lava-grid` / `feat/lava-positions`; move this to a tag once they land on
+    # its main. This SHA is the one that carries `LavaGrid.lava_pos`, which
+    # envs/__init__.py, envs/goal_image.py and experiments/common/envs.py require.
+    #
+    # Unlike the first attempt at this dependency (#67/#70, reverted in #72), it no
+    # longer drags the stack along. cookie-env now requires Python >=3.11 and
+    # declares lower-bound-only deps on what it actually imports (gymnasium>=1.2.1,
+    # minigrid>=3.0.0, numpy>=1.26.0, pygame) — all satisfied by the pins below, so
+    # nothing here moves. Version floors that get in the way are lowered on the
+    # cookie-env side; this file stays the fixed floor.
+    "cookie-env @ git+https://github.com/pedropalmav/cookie-env.git@900ccd9499103a5cbeb61168901de0489fa88662",
     "crafter==1.8.0",
     "dash>=4.1.0",
     "dm-control==1.0.28",

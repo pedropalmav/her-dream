@@ -46,7 +46,7 @@ import her_dream.tools as tools
 from her_dream.buffers import make_buffer
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_envs
-from her_dream.rewards import make_reward
+from her_dream.rewards import make_reward, reward_offset
 from her_dream.trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
@@ -99,6 +99,33 @@ def validate_config(config):
 
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
+
+    _validate_terminating_env(config)
+
+
+# Suites whose episodes can end on something the agent does, rather than only on
+# the time limit. Kept as a tuple so adding one is a single edit.
+_TERMINATING_SUITES = ("lava-grid",)
+
+
+def _validate_terminating_env(config):
+    """Warn when an env that can terminate runs under the historical rewards.
+
+    A warning, not an error, on purpose: running lava under {-1, 0} is the
+    measurement that motivated the offset in the first place, so it has to stay
+    reachable.
+    """
+    suite = str(getattr(config.env, "task", "")).split("_", 1)[0]
+    if suite not in _TERMINATING_SUITES:
+        return
+
+    if reward_offset(config) == 0.0:
+        print(
+            f"[train] WARNING: the {suite} suite can terminate (stepping into lava) but "
+            "reward_offset=0.0, so the reward stays in {-1, 0}. Ending an episode then stops the "
+            "accumulation of -1s and is worth more than surviving it — the agent is rewarded for "
+            "dying. Set reward_offset=1.0 unless measuring exactly that."
+        )
 
 
 # Everything the `ActorCritic` sub-module owns: actor, critic, their frozen

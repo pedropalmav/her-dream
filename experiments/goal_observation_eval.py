@@ -97,9 +97,10 @@ from experiments.common import (  # noqa: E402
     agent_pose,
     dump_json,
     encode_goal_image,
-    fixed_goal_cfg,
     groups_matched,
+    has_lava,
     load_agent,
+    pinned_layout_cfg,
     posterior_rollout,
     random_policy,
     reward_of,
@@ -119,34 +120,40 @@ OUT = pathlib.Path(__file__).resolve().parent / "out"
 # ---------------------------------------------------------------- BFS oracle
 
 
-def _walkable(size: int, x: int, y: int) -> bool:
+def _walkable(size: int, x: int, y: int, lava=()) -> bool:
     """Can the agent stand on cell (x, y)? The goal-grid rooms are a bordered box
     with a single overlappable goal tile and no interior walls, so every interior
-    cell is walkable — no grid read (hence no env reset) needed."""
-    return 1 <= x <= size - 2 and 1 <= y <= size - 2
+    cell is walkable — no grid read (hence no env reset) needed.
+
+    `lava` keeps that property on the lava suite: the caller pins those cells (via
+    `pinned_layout_cfg`), so it already knows them without resetting anything. They
+    are excluded because stepping onto one ends the episode — an oracle that routed
+    through lava would kill the very run it is supposed to be driving."""
+    return 1 <= x <= size - 2 and 1 <= y <= size - 2 and (x, y) not in lava
 
 
-def _successors(size: int, state):
+def _successors(size: int, state, lava):
     """(action, next_state) for the three navigation actions from `state`."""
     x, y, d = state
     yield TURN_LEFT, (x, y, (d - 1) % 4)
     yield TURN_RIGHT, (x, y, (d + 1) % 4)
     dx, dy = DIR_TO_VEC[d]
     nx, ny = x + int(dx), y + int(dy)
-    if _walkable(size, nx, ny):
+    if _walkable(size, nx, ny, lava):
         yield FORWARD, (nx, ny, d)
 
 
-def bfs_plan(size, start_pos, start_dir, target_pos, target_dir):
+def bfs_plan(size, start_pos, start_dir, target_pos, target_dir, lava=()):
     """Shortest action sequence from the start pose to the target pose.
 
     BFS over `(x, y, dir)` rather than over cells: the target direction is part
     of the goal state (the WM encoder sees `direction`, so the goal z fixes it),
-    and turning costs steps. `target_dir=None` accepts any facing. Returns the
-    list of action indices, or None if unreachable.
+    and turning costs steps. `target_dir=None` accepts any facing. `lava` cells are
+    impassable. Returns the list of action indices, or None if unreachable.
     """
     start = (int(start_pos[0]), int(start_pos[1]), int(start_dir))
     tx, ty = int(target_pos[0]), int(target_pos[1])
+    lava = {(int(x), int(y)) for x, y in lava}
 
     def is_target(s):
         return (s[0], s[1]) == (tx, ty) and (target_dir is None or s[2] == int(target_dir))
@@ -161,7 +168,7 @@ def bfs_plan(size, start_pos, start_dir, target_pos, target_dir):
                 state, action = parent[state]
                 plan.append(action)
             return plan[::-1]
-        for action, nxt in _successors(size, state):
+        for action, nxt in _successors(size, state, lava):
             if nxt not in parent:
                 parent[nxt] = (state, action)
                 queue.append(nxt)
@@ -171,33 +178,56 @@ def bfs_plan(size, start_pos, start_dir, target_pos, target_dir):
 # ------------------------------------------------------------ goal machinery
 
 
-def _sample_cell(size: int, rng) -> tuple:
-    """A uniformly random interior cell `(x, y)`."""
+def _sample_cell(size: int, rng, avoid=()) -> tuple:
+    """A uniformly random interior cell `(x, y)`, excluding `avoid`."""
     interior = np.arange(1, size - 1)
-    return int(rng.choice(interior)), int(rng.choice(interior))
+    blocked = {(int(x), int(y)) for x, y in avoid}
+    while True:
+        cell = int(rng.choice(interior)), int(rng.choice(interior))
+        if cell not in blocked:
+            return cell
+
+
+def _sample_lava(size: int, n_lava: int, rng, avoid=()) -> list:
+    """`n_lava` distinct interior cells, avoiding `avoid` (the square and the spawn).
+
+    The eval picks the hazards itself instead of letting the env resample them,
+    because every layer below it needs a layout that holds still: the oracle plans a
+    route around them, and the goal image has to depict the same grid the agent is
+    standing in.
+    """
+    blocked = {(int(x), int(y)) for x, y in avoid}
+    cells = []
+    for _ in range(int(n_lava)):
+        cell = _sample_cell(size, rng, avoid=blocked)
+        blocked.add(cell)
+        cells.append(cell)
+    return cells
 
 
 def _episode_layout(mode: str, env_cfg, rng):
     """Read this episode's layout off the config and pick the goal-image target.
 
-    `evaluate` has already sampled the spawn and green-square positions into
+    `evaluate` has already sampled the spawn, green-square and lava positions into
     `env_cfg` and built the env from it, so here we just read them back and choose
     the target the goal image depicts: the green square (`square` mode, the real
     task) or an arbitrary interior cell (`random` mode). Returns `(size, spawn_pos,
-    spawn_dir, square, target_pos, target_dir)`.
+    spawn_dir, square, target_pos, target_dir, lava)`.
     """
     size = int(env_cfg.env_size)
     spawn_pos = (int(env_cfg.agent_start_pos_x), int(env_cfg.agent_start_pos_y))
     spawn_dir = int(env_cfg.agent_start_dir)
     square = (int(env_cfg.goal_pos_x), int(env_cfg.goal_pos_y))
+    lava = [(int(x), int(y)) for x, y in (env_cfg.get("lava_pos") or [])]
 
     if mode == "square":
         target_pos = square
     elif mode == "random":
-        target_pos = _sample_cell(size, rng)
+        # A target on lava is a state the agent dies on reaching, not one to hand it.
+        target_pos = _sample_cell(size, rng, avoid=lava)
     else:
         raise ValueError(f"unknown target mode: {mode}")
-    return size, spawn_pos, spawn_dir, square, target_pos, int(rng.integers(4))
+    return size, spawn_pos, spawn_dir, square, target_pos, int(rng.integers(4)), lava
 
 
 # --------------------------------------------------------------- the layers
@@ -263,9 +293,9 @@ def _drive(agent, spec, env, seed, policy, target_pos, target_dir, goal, device,
 
 def run_episode(agent, spec, env, task, env_cfg, mode, seed, rng, max_steps, device):
     """One episode: read the chosen layout off the config, build the goal, run the layers."""
-    size, spawn_pos, spawn_dir, square, target_pos, target_dir = _episode_layout(mode, env_cfg, rng)
+    size, spawn_pos, spawn_dir, square, target_pos, target_dir, lava = _episode_layout(mode, env_cfg, rng)
 
-    plan = bfs_plan(size, spawn_pos, spawn_dir, target_pos, target_dir)
+    plan = bfs_plan(size, spawn_pos, spawn_dir, target_pos, target_dir, lava=lava)
     if plan is None:
         return None
     goal = encode_goal_image(agent, env, target_pos, target_dir)
@@ -276,6 +306,7 @@ def run_episode(agent, spec, env, task, env_cfg, mode, seed, rng, max_steps, dev
         "spawn": [list(spawn_pos), spawn_dir],
         "target": [list(target_pos), target_dir],
         "green_square": [int(v) for v in square],
+        "lava": [[int(x), int(y)] for x, y in lava],
         "oracle": _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device),
         "policy": _drive(
             agent, spec, env, seed, actor_policy(agent, goal), target_pos, target_dir, goal, device, max_steps
@@ -336,6 +367,10 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
     task = env_cfg.task
     random_goal = "fixed" not in task
     size = int(env_cfg.env_size)
+    # A lava run keeps its own env (its WM never saw a lava-free grid), which means
+    # the eval also has to choose the hazards — see `_sample_lava`.
+    lava_run = has_lava(env_cfg)
+    n_lava = int(env_cfg.get("n_lava", 0)) if lava_run else 0
     # Same sub-config Dreamer builds its own spec from, so the eval routes states
     # and goals exactly as the run did while training.
     spec = goals.make_goal_spec(config.model)
@@ -350,9 +385,13 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
             spawn_pos = _sample_cell(size, rng)
             spawn_dir = int(rng.integers(4))
             square = _sample_cell(size, rng) if random_goal else None
-            # 2.2 Build a fixed-goal env carrying this episode's layout.
-            episode_cfg = fixed_goal_cfg(
-                env_cfg, goal_pos=square, agent_start_pos=spawn_pos, agent_start_dir=spawn_dir
+            #     Lava last, so it avoids both — a hazard on the square or the spawn
+            #     is a layout the env refuses to build.
+            occupied = [c for c in (spawn_pos, square) if c is not None]
+            lava = _sample_lava(size, n_lava, rng, avoid=occupied) if lava_run else None
+            # 2.2 Build an env carrying this episode's layout, pinned in full.
+            episode_cfg = pinned_layout_cfg(
+                env_cfg, goal_pos=square, agent_start_pos=spawn_pos, agent_start_dir=spawn_dir, lava_pos=lava
             )
             env = make_env(episode_cfg, 0)
             # 2.3 run_episode reads the layout back off episode_cfg.

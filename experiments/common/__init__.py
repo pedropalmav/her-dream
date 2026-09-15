@@ -7,7 +7,7 @@ Import the pieces you need, e.g.::
 """
 
 from .cli import add_common_args
-from .envs import agent_pose, fixed_goal_cfg, goal_pos, unwrap_env
+from .envs import agent_pose, goal_pos, has_lava, lava_pos, pinned_layout_cfg, suite_of, unwrap_env
 from .io import dump_json, experiment_outdir, save_fig
 from .loading import env_factory, load_agent
 from .metrics import (
@@ -25,7 +25,10 @@ from .rollout import Step, actor_policy, posterior_rollout, random_policy, scrip
 __all__ = [
     "add_common_args",
     "agent_pose",
-    "fixed_goal_cfg",
+    "has_lava",
+    "lava_pos",
+    "pinned_layout_cfg",
+    "suite_of",
     "goal_pos",
     "unwrap_env",
     "dump_json",

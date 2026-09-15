@@ -25,10 +25,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from hydra import compose, initialize_config_dir  # noqa: E402
-from tensordict.base import TensorDictBase  # noqa: E402
-
-# MPS pin_memory stub (harmless on CPU), kept for parity with local smoke tests.
-TensorDictBase.pin_memory = lambda self, *a, **k: self
 
 import her_dream.goals as goals  # noqa: E402
 import her_dream.tools as tools  # noqa: E402

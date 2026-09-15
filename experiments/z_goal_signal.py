@@ -45,10 +45,6 @@ import sys
 import numpy as np
 import torch
 from hydra import compose, initialize_config_dir
-from tensordict.base import TensorDictBase
-
-# MPS pin_memory stub (harmless on CPU), kept for parity with the other scripts.
-TensorDictBase.pin_memory = lambda self, *a, **k: self
 
 # Repo root on the path: this script imports both `experiments.*` and the
 # top-level `train` module, neither of which ships inside the her_dream package.

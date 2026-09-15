@@ -2,6 +2,8 @@ import torch
 from torchrl.data.replay_buffers import LazyTensorStorage, ReplayBuffer
 from torchrl.data.replay_buffers.samplers import SliceSampler
 
+import her_dream.tools as tools
+
 
 class Buffer:
     def __init__(self, config):
@@ -41,13 +43,7 @@ class Buffer:
         return sample_td, info
 
     def _move_sample_to_device(self, sample_td):
-        src_dev = sample_td.device
-
-        if src_dev.type == "cpu" and self.device.type == "cuda":
-            sample_td = sample_td.pin_memory().to(self.device, non_blocking=True)
-        elif src_dev != self.device:
-            sample_td = sample_td.to(self.device, non_blocking=True)
-        return sample_td
+        return tools.to_device(sample_td, self.device)
 
     def _parse_sample(self, sample_td, info):
         # The initial ones are used only to extract the latent vector

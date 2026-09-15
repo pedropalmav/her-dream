@@ -43,8 +43,9 @@ class ParallelEnv:
         Notes
         -----
         This implementation intentionally steps the environment processes on CPU.
-        The returned TensorDict is pinned in CPU memory so that the caller can
-        transfer it to GPU asynchronously (H2D with non_blocking=True).
+        The returned TensorDict is pinned in CPU memory — when, and only when, the
+        caller's device is CUDA — so that the caller can transfer it asynchronously
+        (H2D with non_blocking=True). See `tools.pin_for`.
         """
         # TODO: Soft delete new_r and new_d
         promise = [e.reset() if d else e.step(a) for e, a, d in zip(self.envs, tools.to_np(action), done)]
@@ -65,9 +66,9 @@ class ParallelEnv:
         obs_tensors = {k: torch.as_tensor(v, device="cpu") for k, v in obs_stacked.items()}
         rew_stacked = torch.as_tensor(new_r, dtype=torch.float32, device="cpu")
 
-        # Keep data on CPU; caller will .to(device, non_blocking=True) after pinning.
-        # TensorDict batch size is (B,).
-        td = TensorDict({**obs_tensors, "reward": rew_stacked}, batch_size=(self.env_num,), device="cpu").pin_memory()
+        # Keep data on CPU; the caller moves it. TensorDict batch size is (B,).
+        td = TensorDict({**obs_tensors, "reward": rew_stacked}, batch_size=(self.env_num,), device="cpu")
+        td = tools.pin_for(td, self.device)
         done = torch.as_tensor(new_d, device="cpu")
         return self.lift_dim(td), done
 

@@ -31,7 +31,9 @@ uv pip install -e .
 # a local editable install (and remember the pin is what the server resolves):
 uv pip install -e ../cookie-env
 
-# Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer)
+# Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer).
+# NOTE the goal_type default is `full`, which does not learn — pass goal_type=row_by_row
+# for anything real. See "Goal-conditioned rewards" below.
 python3 train.py logdir=./logdir/test
 
 # Training with text encoder on RandomGoal environment
@@ -139,11 +141,35 @@ card — check it before assuming one is free.
 |---|---|---|
 | `first_row` | `(K,)` | 0 if `state[:, 0, :] == goal` exactly, else -1 |
 | `row_by_row` | `(S, K)` | `(matching rows / S) - 1` — dense in [-1, 0] |
-| `full` | `(S, K)` | 0 if **all S groups** match exactly, else -1 (**default; current research focus is this z-full comparison**) |
+| `full` | `(S, K)` | 0 if **all S groups** match exactly, else -1 (**config default, but a dead end in practice — see below**) |
 | `argmax_full` | `(S, K)` | like `full` but compares against `argmax` one-hot of the prior logits instead of a sample |
 | `log_prob` | `(S, K)` | 0 if `dist.log_prob(goal) >= log(prob_threshold)`, else -1 |
 | `prob` | `(S, K)` | `dist.log_prob(goal).exp()` — dense in [0, 1] |
 | `max_cosine` | `(S, K)` | max-normalized dot product `(g·s)/max(‖g‖,‖s‖)²` between the flattened latents; 1 when equal |
+
+**Do not start new work on `goal_type=full`.** It is the config default for historical
+reasons, not because it is the right choice — the exact all-groups match almost never
+fires, so the reward is a constant and there is nothing to learn from:
+
+- The match probability is the arithmetic, not bad luck: an exact 32-group
+  sample-vs-sample match has **P ≈ 4e-13** under the text encoder's distribution
+  (`text_wm_alignment`, 2026-06-02). That is what blocked the text-goal runs.
+- On `random_goal` with buffer goals, frozen-WM post-training never leaves the -1001
+  floor, while the identical recipe on `fixed_goal` reaches ≈ -430/-500 — so `full`
+  only survives where the goal cell never moves.
+- On `lava_grid`, a 5000-step run logs `episode/score 0.0` on every episode: the
+  reward never fires once.
+
+**Prefer a dense goal type.** `row_by_row` is the one with real mileage here — it is
+`(matching rows / S) - 1`, so partial agreement still produces a gradient, and it is
+what the runs in the server queue actually use. `prob` and `max_cosine` are the other
+continuous options (both already non-negative, so they need no `reward_offset`).
+
+Two honest caveats on `row_by_row`, so it is not oversold: the `row_by_row` +
+imagination runs plateau at ≈ -290 while the videos show the agent walking away from
+the green square, and `experiments/goal_observation_eval.py` exists precisely to settle
+whether that score means the task was done. A dense reward buys a gradient, not a
+guarantee that the gradient points at the task.
 
 Everything else a goal type varies is captured by a **`GoalSpec`** (`goals.py`), built from
 three descriptor keys carried in each `configs/goal_type/<type>.yaml` (never string-branch on

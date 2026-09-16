@@ -69,7 +69,8 @@ python3 train.py env=dmc_vision env.task=dmc_walker_walk
 
 # Run on a server with GPU + headless rendering (uses uv); scripts/train.sh is
 # the single generic launcher — the mode is selected by the args (load_from=,
-# train_text_only=, wm_only=, ...).
+# train_text_only=, wm_only=, ...). On the `barto` box always enqueue it instead:
+# `CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh ...` — see "Running on barto".
 bash scripts/train.sh logdir=./logdir/run/01 seed=1 env.mission_text=True
 bash scripts/train.sh logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
 
@@ -81,6 +82,54 @@ pre-commit run --all-files
 ```
 
 For headless MuJoCo environments: `export MUJOCO_GL=egl`.
+
+## Running on `barto` (the GPU box)
+
+`barto` has two RTX A6000s and runs **task spooler** (`ts`, `/usr/local/bin/ts`, v2.0.0
+with GPU support). **Never launch `scripts/train.sh` directly there — enqueue it, and
+use `ts -g` to see who holds a GPU.** The server runs one job at a time (`ts -S` → 1),
+so queued runs wait their turn instead of fighting each other for memory; the run
+history is 12–20h jobs, long enough that a collision costs a day.
+
+The established form — `execution_commands.md` is full of it, and is the place to look
+for whole run recipes:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/run/01 seed=1 env=random_goal
+```
+
+**`ts -G 1` is the part that does the work.** It reserves a GPU in the queue *and*
+assigns one, exporting `CUDA_VISIBLE_DEVICES` into the job itself — which means it
+**overrides the prefix**, it does not obey it. Measured: a job enqueued as
+`CUDA_VISIBLE_DEVICES=0 ts -G 1 ...` ran with `CUDA_VISIBLE_DEVICES=1` on GPU 1. So
+the prefix above is inert whenever `-G` is present; it is kept in the recipes out of
+habit, and copying it is harmless but buys nothing.
+
+Where the prefix *does* matter is a run that skips `ts`, because `scripts/train.sh` does
+`export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}` — with nothing in front of it,
+a direct launch pins **GPU 0** every time, which is how two runs end up on one card
+while the other A6000 sits idle. That is a reason to enqueue, not a reason to set the
+variable.
+
+To actually choose a card, use ts's own flag: **`ts -g <ids>`** pins those indices
+(without checking they are free). Otherwise let `-G 1` pick.
+
+```bash
+ts            # the queue, same as `ts -l`: id, state, exit level, runtime, GPUs, command
+ts -g         # which jobs hold which GPU ids — the "is a card free?" view
+ts -t [id]    # tail -f a job's output (last run if no id); -c for the whole log
+ts -o [id]    # path of the job's output file (/tmp/ts-out.*)
+ts -i [id]    # job info; -p pid; -s state; -F the full command it was queued with
+ts -k [id]    # SIGTERM the job; -r remove a queued one; -w block until it finishes
+ts -C         # clear finished jobs off the list
+```
+
+`-g <ids>` pins specific indices *without* checking they are free, and
+`TS_VISIBLE_DEVICES` restricts which GPUs `ts` will hand out at all. A card counts as
+available below `ts --get_gpu_free_perc` (90) percent memory used.
+
+`nvidia-smi` still shows raw utilisation, but only `ts -g` says *whose* job owns a
+card — check it before assuming one is free.
 
 ## Goal-conditioned rewards (`rewards.py`) and goal behavior (`goals.py`)
 

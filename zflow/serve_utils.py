@@ -12,6 +12,8 @@ import torch
 from PIL import Image
 from tensordict import TensorDict
 
+import her_dream.tools as tools
+
 
 def encode_image(img_np: np.ndarray) -> str:
     if img_np.dtype != np.uint8:
@@ -27,7 +29,7 @@ def make_trans(obs: dict, action: torch.Tensor, device) -> TensorDict:
         {k: torch.as_tensor(v, device="cpu").unsqueeze(0) for k, v in obs.items()},
         batch_size=(1,),
         device="cpu",
-    ).pin_memory()
-    trans = trans.to(device, non_blocking=True)
+    )
+    trans = tools.to_device(trans, device)
     trans["action"] = action
     return trans

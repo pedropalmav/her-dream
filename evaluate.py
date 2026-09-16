@@ -165,9 +165,9 @@ def run_episode(env, agent, reward_function, manual_control=None):
             {k: torch.as_tensor(v, device="cpu").unsqueeze(0) for k, v in obs.items()},
             batch_size=(1,),
             device="cpu",
-        ).pin_memory()
+        )
 
-        trans = trans_cpu.to(agent.device, non_blocking=True)
+        trans = tools.to_device(trans_cpu, agent.device)
         trans["action"] = action
         cache.append(trans.clone())
 

@@ -19,6 +19,7 @@ def make_config(tmp_path, **overrides):
         env=SimpleNamespace(goal_sample="buffer", task="random-goal_"),
         mission_text=False,
         reward_offset=0.0,
+        goal_type="full",
         model=SimpleNamespace(),
         device="cpu",
         trainer=SimpleNamespace(),
@@ -272,6 +273,16 @@ class TestTerminatingEnvValidation:
         cfg.env.goal_sample = "image"
         cfg.reward_offset = 1.0
         train.main.__wrapped__(cfg)  # must not raise
+
+    @pytest.mark.parametrize("goal_type", ["prob", "max_cosine"])
+    def test_non_negative_goal_types_do_not_warn(self, noop, cfg, capsys, goal_type):
+        """`prob` / `max_cosine` are already non-negative, so the offset has nothing
+        to fix and warning about it would be noise."""
+        cfg.env.task = "lava-grid_"
+        cfg.goal_type = goal_type
+        cfg.reward_offset = 0.0
+        train.main.__wrapped__(cfg)
+        assert "reward_offset" not in capsys.readouterr().out
 
     def test_missing_task_key_is_tolerated(self, noop, cfg):
         """Archived configs read back by evaluate.py / experiments/ predate this check."""

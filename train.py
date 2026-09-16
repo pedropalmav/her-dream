@@ -107,6 +107,11 @@ def validate_config(config):
 # the time limit. Kept as a tuple so adding one is a single edit.
 _TERMINATING_SUITES = ("lava-grid",)
 
+# Goal types whose reward is already non-negative, so ending an episode is never worth
+# more than surviving it and `reward_offset` has nothing to fix (see CLAUDE.md,
+# "reward_offset"). Warning about the offset on these would be noise.
+_NON_NEGATIVE_GOAL_TYPES = ("prob", "max_cosine")
+
 
 def _validate_terminating_env(config):
     """Warn when an env that can terminate runs under the historical rewards.
@@ -119,7 +124,7 @@ def _validate_terminating_env(config):
     if suite not in _TERMINATING_SUITES:
         return
 
-    if reward_offset(config) == 0.0:
+    if reward_offset(config) == 0.0 and str(config.goal_type) not in _NON_NEGATIVE_GOAL_TYPES:
         print(
             f"[train] WARNING: the {suite} suite can terminate (stepping into lava) but "
             "reward_offset=0.0, so the reward stays in {-1, 0}. Ending an episode then stops the "

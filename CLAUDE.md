@@ -26,7 +26,14 @@ The reusable library lives in an **installable package, `her_dream/`** (distribu
 # Install dependencies + the her_dream package, editable (Python 3.11, Ubuntu 24.04)
 uv pip install -e .
 
-# Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer)
+# The lava env comes from the sibling `cookie-env` package, which `pyproject.toml`
+# pins to a git commit. To work against an unreleased cookie-env, override it with
+# a local editable install (and remember the pin is what the server resolves):
+uv pip install -e ../cookie-env
+
+# Basic training run (env defaults to random_goal, goal_type=full, goal_sample=buffer).
+# NOTE the goal_type default is `full`, which does not learn — pass goal_type=row_by_row
+# for anything real. See "Goal-conditioned rewards" below.
 python3 train.py logdir=./logdir/test
 
 # Training with text encoder on RandomGoal environment
@@ -58,12 +65,14 @@ python3 train.py model.rep_loss=dreamer
 
 # Switch environment
 python3 train.py env=fixed_goal
+python3 train.py env=lava_grid reward_offset=1.0   # terminating env: needs the offset
 python3 train.py env=crafter
 python3 train.py env=dmc_vision env.task=dmc_walker_walk
 
 # Run on a server with GPU + headless rendering (uses uv); scripts/train.sh is
 # the single generic launcher — the mode is selected by the args (load_from=,
-# train_text_only=, wm_only=, ...).
+# train_text_only=, wm_only=, ...). On the `barto` box always enqueue it instead:
+# `CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh ...` — see "Running on barto".
 bash scripts/train.sh logdir=./logdir/run/01 seed=1 env.mission_text=True
 bash scripts/train.sh logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 freeze_wm=True
 
@@ -76,6 +85,54 @@ pre-commit run --all-files
 
 For headless MuJoCo environments: `export MUJOCO_GL=egl`.
 
+## Running on `barto` (the GPU box)
+
+`barto` has two RTX A6000s and runs **task spooler** (`ts`, `/usr/local/bin/ts`, v2.0.0
+with GPU support). **Never launch `scripts/train.sh` directly there — enqueue it, and
+use `ts -g` to see who holds a GPU.** The server runs one job at a time (`ts -S` → 1),
+so queued runs wait their turn instead of fighting each other for memory; the run
+history is 12–20h jobs, long enough that a collision costs a day.
+
+The established form — `execution_commands.md` is full of it, and is the place to look
+for whole run recipes:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 ts -G 1 bash scripts/train.sh logdir=./logdir/run/01 seed=1 env=random_goal
+```
+
+**`ts -G 1` is the part that does the work.** It reserves a GPU in the queue *and*
+assigns one, exporting `CUDA_VISIBLE_DEVICES` into the job itself — which means it
+**overrides the prefix**, it does not obey it. Measured: a job enqueued as
+`CUDA_VISIBLE_DEVICES=0 ts -G 1 ...` ran with `CUDA_VISIBLE_DEVICES=1` on GPU 1. So
+the prefix above is inert whenever `-G` is present; it is kept in the recipes out of
+habit, and copying it is harmless but buys nothing.
+
+Where the prefix *does* matter is a run that skips `ts`, because `scripts/train.sh` does
+`export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}` — with nothing in front of it,
+a direct launch pins **GPU 0** every time, which is how two runs end up on one card
+while the other A6000 sits idle. That is a reason to enqueue, not a reason to set the
+variable.
+
+To actually choose a card, use ts's own flag: **`ts -g <ids>`** pins those indices
+(without checking they are free). Otherwise let `-G 1` pick.
+
+```bash
+ts            # the queue, same as `ts -l`: id, state, exit level, runtime, GPUs, command
+ts -g         # which jobs hold which GPU ids — the "is a card free?" view
+ts -t [id]    # tail -f a job's output (last run if no id); -c for the whole log
+ts -o [id]    # path of the job's output file (/tmp/ts-out.*)
+ts -i [id]    # job info; -p pid; -s state; -F the full command it was queued with
+ts -k [id]    # SIGTERM the job; -r remove a queued one; -w block until it finishes
+ts -C         # clear finished jobs off the list
+```
+
+`-g <ids>` pins specific indices *without* checking they are free, and
+`TS_VISIBLE_DEVICES` restricts which GPUs `ts` will hand out at all. A card counts as
+available below `ts --get_gpu_free_perc` (90) percent memory used.
+
+`nvidia-smi` still shows raw utilisation, but only `ts -g` says *whose* job owns a
+card — check it before assuming one is free.
+
 ## Goal-conditioned rewards (`rewards.py`) and goal behavior (`goals.py`)
 
 `make_reward(config)` dispatches on `goal_type` (top-level config key, propagated to env/model/buffer/trainer):
@@ -84,11 +141,35 @@ For headless MuJoCo environments: `export MUJOCO_GL=egl`.
 |---|---|---|
 | `first_row` | `(K,)` | 0 if `state[:, 0, :] == goal` exactly, else -1 |
 | `row_by_row` | `(S, K)` | `(matching rows / S) - 1` — dense in [-1, 0] |
-| `full` | `(S, K)` | 0 if **all S groups** match exactly, else -1 (**default; current research focus is this z-full comparison**) |
+| `full` | `(S, K)` | 0 if **all S groups** match exactly, else -1 (**config default, but a dead end in practice — see below**) |
 | `argmax_full` | `(S, K)` | like `full` but compares against `argmax` one-hot of the prior logits instead of a sample |
 | `log_prob` | `(S, K)` | 0 if `dist.log_prob(goal) >= log(prob_threshold)`, else -1 |
 | `prob` | `(S, K)` | `dist.log_prob(goal).exp()` — dense in [0, 1] |
 | `max_cosine` | `(S, K)` | max-normalized dot product `(g·s)/max(‖g‖,‖s‖)²` between the flattened latents; 1 when equal |
+
+**Do not start new work on `goal_type=full`.** It is the config default for historical
+reasons, not because it is the right choice — the exact all-groups match almost never
+fires, so the reward is a constant and there is nothing to learn from:
+
+- The match probability is the arithmetic, not bad luck: an exact 32-group
+  sample-vs-sample match has **P ≈ 4e-13** under the text encoder's distribution
+  (`text_wm_alignment`, 2026-06-02). That is what blocked the text-goal runs.
+- On `random_goal` with buffer goals, frozen-WM post-training never leaves the -1001
+  floor, while the identical recipe on `fixed_goal` reaches ≈ -430/-500 — so `full`
+  only survives where the goal cell never moves.
+- On `lava_grid`, a 5000-step run logs `episode/score 0.0` on every episode: the
+  reward never fires once.
+
+**Prefer a dense goal type.** `row_by_row` is the one with real mileage here — it is
+`(matching rows / S) - 1`, so partial agreement still produces a gradient, and it is
+what the runs in the server queue actually use. `prob` and `max_cosine` are the other
+continuous options (both already non-negative, so they need no `reward_offset`).
+
+Two honest caveats on `row_by_row`, so it is not oversold: the `row_by_row` +
+imagination runs plateau at ≈ -290 while the videos show the agent walking away from
+the green square, and `experiments/goal_observation_eval.py` exists precisely to settle
+whether that score means the task was done. A dense reward buys a gradient, not a
+guarantee that the gradient points at the task.
 
 Everything else a goal type varies is captured by a **`GoalSpec`** (`goals.py`), built from
 three descriptor keys carried in each `configs/goal_type/<type>.yaml` (never string-branch on
@@ -133,10 +214,13 @@ worth *more* than surviving it, because termination stops the accumulation of -1
 that can perceive termination is rewarded for dying. On a lava variant of the grid env (random
 policy, `gamma=0.997`) running to the time limit returns -309 while dying returns -136, and
 through the real `_lambda_return` the terminating step has advantage **+90.4** under `{-1, 0}`
-versus **-212.1** under `{0, 1}`. Nothing here can terminate yet (`envs/crafter.py` already
-propagates `is_terminal`, and a lava env is coming), and absent termination the two schemes are
-equivalent for the optimal policy — a constant shift moves every value by `offset/(1-gamma)` and
-leaves advantages untouched — so this only changes what is learned once something can terminate.
+versus **-212.1** under `{0, 1}`. `env=lava_grid` is the env this is for — stepping into lava
+terminates, so `train.py:validate_config` prints a warning when a `lava-grid` run leaves
+`reward_offset` at 0 (a warning, not an error: running lava under `{-1, 0}` is exactly the
+measurement quoted above). Everything else here still only truncates, and absent termination the
+two schemes are equivalent for the optimal policy — a constant shift moves every value by
+`offset/(1-gamma)` and leaves advantages untouched — so this only changes what is learned once
+something can terminate.
 `prob` and `max_cosine` are already non-negative and need no offset.
 
 The goal source is `env.goal_sample`:
@@ -144,7 +228,7 @@ The goal source is `env.goal_sample`:
 - `text` — sample from the `TextEncoderGRU` given the episode's mission (requires `mission_text=True`).
 - `random` — random one-hot rows generated by the `GoalConditioned` wrapper.
 - `imagination` — at episode start, roll out the (frozen) WM for `goal_imag_horizon` (model config, defaults to `imag_horizon`=15) steps with uniformly random actions from the first observation and take the final prior `z` as the goal, so it is reachable from the current episode by construction (`Dreamer.imagine_goal`).
-- `image` — at episode start, the `GoalImageObservation` wrapper (`envs/wrappers.py`) renders the observation of a synthetic state with an auxiliary `FixedGoal` env (`envs.goal_image.GoalImageGenerator`, given an env factory): green square at the current episode's goal position, agent at a random cell. The frozen WM encodes it into `z` with one posterior step from the initial state (`Dreamer.encode_observation`). Designed for `random_goal`, where buffer-sampled goals encode the wrong square position.
+- `image` — at episode start, the `GoalImageObservation` wrapper (`envs/wrappers.py`) renders the observation of a synthetic state with an auxiliary `FixedGoal` env (`envs.goal_image.GoalImageGenerator`, given an env factory): green square at the current episode's goal position, agent at a random cell. The frozen WM encodes it into `z` with one posterior step from the initial state (`Dreamer.encode_observation`). Designed for `random_goal`, where buffer-sampled goals encode the wrong square position. On `lava_grid` the wrapper copies this episode's lava onto the auxiliary env too (cookie-env's `lava_pos`), so the rendered state is one the live episode can reach; a sampled agent is drawn from the interior minus those cells, since standing on lava is a death state rather than a goal worth handing the agent.
 
 `GoalConditioned` (`envs/wrappers.py`) adds the `goal` key to observations, keyed off the `GoalSpec`: `(K,)` one-hot `MultiBinary` for `scope=first_row`, a float `(S, K)` `Box` when `goal_repr=logit`, else `(S, K)` one-hot `MultiBinary`. Dimensions are enforced via `env.stochastic_classes = model.rssm.discrete` and `env.stochastic_rows = model.rssm.stoch` in the config.
 
@@ -158,7 +242,9 @@ A single entry point — **`train.py`** — covers three modes, selected purely 
 
 There is a single launcher script, `scripts/train.sh` (uv + headless rendering); the mode is chosen entirely by the args it forwards to `train.py` (e.g. `load_from=`, `freeze_wm=True`, `train_text_only=True mission_text=True`).
 
-Diagnostic scripts live in `experiments/` (WM/text-encoder stochasticity, posterior consistency across trajectories, `text_wm_alignment.py` which pairs missions with WM posteriors over real rollouts). `tools/`/`viz/` contain the interactive Crafter dash and trajectory replay utilities.
+Diagnostic scripts live in `experiments/` (WM/text-encoder stochasticity, posterior consistency across trajectories, `text_wm_alignment.py` which pairs missions with WM posteriors over real rollouts).
+
+**Layout control in `experiments/`**: a script that measures a WM has to dictate the grid rather than read it off a random reset, which is what `experiments/common.pinned_layout_cfg` builds. For the goal-grid runs it swaps in the pinnable `fixed-goal_` env — `random_goal` and `fixed_goal` render identically and differ only in where the square goes. **A `lava-grid` run keeps its own env**: its WM was trained on observations that contain lava, so measuring it on a lava-free grid would measure it off-distribution, silently and without erroring. The helper therefore *requires* `lava_pos` on a lava run — pinning only the square and the agent leaves the hazards resampling and pins nothing. Two consequences downstream: `goal_observation_eval.py`'s BFS oracle routes around the lava it was given (a route through it would end the episode the oracle is driving), and `goal_position_in_z.py` holds one lava layout for the whole sweep and drops those cells from it, since the square cannot stand on one. `tools/`/`viz/` contain the interactive Crafter dash and trajectory replay utilities.
 
 ## Architecture overview
 
@@ -239,6 +325,11 @@ load for an agent that does not build them (`_OPTIONAL_MODULE_PREFIXES`).
 **`envs/wrappers.py`**: `GoalConditioned` adds the `goal` key (see above). `MissionGridWrapper` adds a `mission` key encoding the text description (MAX_LEN=500, VOCAB_SIZE=46; stored as ints, one-hotted in the forward pass for memory).
 
 **Goal-grid environments** (`envs/fixed_goal.py`, `envs/random_goal.py`): minigrid-style rooms where the agent must reach a green square. They are identical except that in `fixed_goal` the green square stays at a fixed position (`env.goal_pos_x/y`) across episodes, while in `random_goal` it moves to a random cell every episode. Score -1001 is the floor (goal never reached within the 1000-step time limit); learning shows as scores rising above ~-500.
+
+**Lava environment** (`env=lava_grid`, suite `lava-grid`): the same room plus `env.n_lava` lava cells, resampled every reset after the goal and the agent so they can never spawn on either. It is **not** a module here — it is `LavaGrid` from the sibling [cookie-env](https://github.com/pedropalmav/cookie-env) package, wired up in `envs/__init__.py`; extend it there, not by cloning a copy into `envs/`. Two things make it different from every other env in this repo:
+- **It can terminate.** Stepping into lava sets `terminated`, which reaches the buffer as `is_terminal`. Reaching the green square still does not terminate (inherited from cookie-env's `GoalGrid`). Hence `reward_offset=1.0` — see above.
+- **Its own reward is discarded.** `trainer._apply_reward` overwrites `reward` with the goal-conditioned latent reward before the transition is stored, so cookie-env's `lava_penalty` would be inert and is deliberately not forwarded.
+- **Its layout has to be pinnable.** Lava resamples on every reset, which breaks anything that has to reproduce a state: the goal image, and the analysis scripts. `env.lava_pos` (cookie-env's `LavaGrid.lava_pos`) pins the cells instead — null in training, set by `GoalImageObservation` and by `experiments/common.pinned_layout_cfg`. `n_lava` only says how many to resample.
 
 **Configs**: Hydra composes from `configs/configs.yaml` (top-level), `configs/env/<env>.yaml`, `configs/model/<size>.yaml`, `configs/buffer/<type>.yaml` (`her` with her_ratio=0.8/strategy=final, or `normal`), and `configs/goal_type/<type>.yaml`. The default env is `random_goal` and default model is `size12M`. The `goal_type` group is a `# @package _global_` preset per goal type (selected with `goal_type=<type>`); each file sets the root `goal_type` scalar plus the `state_repr`/`goal_repr`/`scope`/`uses_threshold` descriptors (see the `GoalSpec` table above), which `configs.yaml` fans out to `env`/`model`/`buffer`/`trainer` like `goal_type`. `log_prob.yaml` also carries `prob_threshold`/`prob_threshold_step` (the only goal type that uses them — the model block reads them via `${oc.select:...}` so other types resolve without them). All model hyperparameters live in `configs/model/_base_.yaml`. Every run saves its composed config to `<logdir>/.hydra/config.yaml` — always check that, not the current defaults, when analyzing an old run.
 

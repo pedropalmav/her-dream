@@ -16,8 +16,10 @@ def make_config(tmp_path, **overrides):
         deterministic_run=False,
         logdir=str(tmp_path / "logdir"),
         logger=SimpleNamespace(backends=["file"]),
-        env=SimpleNamespace(goal_sample="buffer"),
+        env=SimpleNamespace(goal_sample="buffer", task="random-goal_"),
         mission_text=False,
+        reward_offset=0.0,
+        goal_type="full",
         model=SimpleNamespace(),
         device="cpu",
         trainer=SimpleNamespace(),
@@ -241,6 +243,51 @@ class TestGoalSampleAssertion:
         cfg.mission_text = False
         with pytest.raises(AssertionError):
             train.main.__wrapped__(cfg)
+
+
+class TestTerminatingEnvValidation:
+    """`lava-grid` is the first suite whose episodes can end on what the agent does."""
+
+    def test_non_terminating_suite_is_untouched(self, noop, cfg):
+        cfg.env.task = "random-goal_"
+        cfg.reward_offset = 0.0
+        train.main.__wrapped__(cfg)  # must not raise
+
+    def test_lava_with_reward_offset_passes(self, noop, cfg):
+        cfg.env.task = "lava-grid_"
+        cfg.reward_offset = 1.0
+        train.main.__wrapped__(cfg)  # must not raise
+
+    def test_lava_without_reward_offset_warns_but_runs(self, noop, cfg, capsys):
+        """A warning, not an error: running lava under {-1, 0} is the measurement
+        the offset exists for, so it has to stay reachable."""
+        cfg.env.task = "lava-grid_"
+        cfg.reward_offset = 0.0
+        train.main.__wrapped__(cfg)
+        assert "reward_offset" in capsys.readouterr().out
+
+    def test_lava_with_image_goal_sample_is_allowed(self, noop, cfg):
+        """The goal-image generator pins this episode's lava, so the rendered goal
+        is reachable and the combination is no longer rejected."""
+        cfg.env.task = "lava-grid_"
+        cfg.env.goal_sample = "image"
+        cfg.reward_offset = 1.0
+        train.main.__wrapped__(cfg)  # must not raise
+
+    @pytest.mark.parametrize("goal_type", ["prob", "max_cosine"])
+    def test_non_negative_goal_types_do_not_warn(self, noop, cfg, capsys, goal_type):
+        """`prob` / `max_cosine` are already non-negative, so the offset has nothing
+        to fix and warning about it would be noise."""
+        cfg.env.task = "lava-grid_"
+        cfg.goal_type = goal_type
+        cfg.reward_offset = 0.0
+        train.main.__wrapped__(cfg)
+        assert "reward_offset" not in capsys.readouterr().out
+
+    def test_missing_task_key_is_tolerated(self, noop, cfg):
+        """Archived configs read back by evaluate.py / experiments/ predate this check."""
+        del cfg.env.task
+        train.main.__wrapped__(cfg)  # must not raise
 
 
 class TestFactories:

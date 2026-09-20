@@ -34,6 +34,14 @@ Sobre el reward real (`full_goal_reward`, sample vs sample):
     posición (diagonal) vs posiciones DISTINTAS (fuera de diagonal). Esto
     cuantifica directamente la hipótesis en unidades del reward.
 
+En un run de lava el env NO se cambia por uno sin lava: el world model se
+entrenó sobre observaciones que la contienen, y medirlo sobre un grid limpio sería
+medirlo fuera de distribución. En cambio se fija UN layout de lava para todo el
+barrido (`lava_pos`), porque el control del experimento es que todo salvo el
+cuadrado se mantenga constante — lava resampleada por posición es justo el confound
+que el diseño elimina. Las celdas ocupadas por lava salen del barrido: el cuadrado
+no puede estar sobre una.
+
 Salida
 ──────
 Plots y JSON en {logdir}/experiments/goal_position_in_z/.
@@ -59,8 +67,9 @@ from experiments.common import (
     agent_pose,
     dump_json,
     experiment_outdir,
-    fixed_goal_cfg,
+    has_lava,
     load_agent,
+    pinned_layout_cfg,
     posterior_probs,
     save_fig,
     stack_obs,
@@ -76,14 +85,18 @@ ACT_LEFT = 0
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def collect_obs_sequence(env_cfg_resolved: dict, goal_pos: tuple[int, int], action_indices: list[int]) -> dict:
+def collect_obs_sequence(
+    env_cfg_resolved: dict, goal_pos: tuple[int, int], action_indices: list[int], lava_pos=None
+) -> dict:
     """
-    Corre `action_indices` en un FixedGoal con el cuadrado en `goal_pos` y
-    devuelve la secuencia de observaciones (numpy) y la pose del agente.
-    El env es determinista dado el plan de acciones, así que una sola pasada
-    basta para todas las repeticiones.
+    Corre `action_indices` con el cuadrado en `goal_pos` y devuelve la secuencia de
+    observaciones (numpy) y la pose del agente. El env es determinista dado el plan
+    de acciones, así que una sola pasada basta para todas las repeticiones.
+
+    `lava_pos` fija la lava (None en los runs sin lava); es el mismo layout para
+    todas las posiciones del barrido.
     """
-    env = make_env(fixed_goal_cfg(env_cfg_resolved, goal_pos=goal_pos), 0)
+    env = make_env(pinned_layout_cfg(env_cfg_resolved, goal_pos=goal_pos, lava_pos=lava_pos), 0)
     obs = env.reset()
     n_actions = env.action_space.shape[0]
 
@@ -337,6 +350,18 @@ def plot_all(
 
 
 @torch.no_grad()
+def sample_lava_layout(size: int, n_lava: int, agent_start: tuple[int, int], seed: int) -> list:
+    """Un layout de lava, fijo para todo el barrido y reproducible desde `seed`.
+
+    Evita la celda del agente. No evita las del cuadrado porque el barrido las
+    recorre todas: las que caen sobre lava simplemente salen del barrido.
+    """
+    rng = np.random.default_rng(seed)
+    interior = [(x, y) for y in range(1, size - 1) for x in range(1, size - 1) if (x, y) != agent_start]
+    picked = rng.choice(len(interior), size=min(n_lava, len(interior)), replace=False)
+    return [interior[int(i)] for i in picked]
+
+
 def run_goal_position_in_z(
     agent,
     env_cfg_resolved: dict,
@@ -344,21 +369,37 @@ def run_goal_position_in_z(
     repeats: int,
     device: str,
     outdir: Path,
+    seed: int = 0,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
     size = int(env_cfg_resolved["env_size"])
     agent_start = (int(env_cfg_resolved["agent_start_pos_x"]), int(env_cfg_resolved["agent_start_pos_y"]))
-    positions = [(x, y) for y in range(1, size - 1) for x in range(1, size - 1) if (x, y) != agent_start]
+
+    # Un solo layout de lava para todo el barrido (ver docstring del módulo).
+    lava_run = has_lava(env_cfg_resolved)
+    lava = sample_lava_layout(size, int(env_cfg_resolved.get("n_lava", 0)), agent_start, seed) if lava_run else []
+    lava_cells = set(lava)
+    positions = [
+        (x, y)
+        for y in range(1, size - 1)
+        for x in range(1, size - 1)
+        if (x, y) != agent_start and (x, y) not in lava_cells
+    ]
 
     print(
         f"\nBarrido de {len(positions)} posiciones del cuadrado verde "
         f"(interior {size - 2}x{size - 2}, agente fijo en {agent_start})"
     )
+    if lava_run:
+        print(f"Lava fija en {lava} — {len(lava_cells)} celdas excluidas del barrido")
     print(f"Trayectoria por posición: {len(action_indices)} acciones, {repeats} repeticiones (Gumbel)")
 
     # ── Observaciones por posición (env determinista, una pasada) ────────────
-    per_pos = [collect_obs_sequence(env_cfg_resolved, goal_pos, action_indices) for goal_pos in positions]
+    lava_pos = lava if lava_run else None
+    per_pos = [
+        collect_obs_sequence(env_cfg_resolved, goal_pos, action_indices, lava_pos=lava_pos) for goal_pos in positions
+    ]
     poses = {(d["agent_pos"], d["agent_dir"]) for d in per_pos}
     assert len(poses) == 1, f"La pose final del agente difiere entre posiciones del goal: {poses}"
     n_actions = per_pos[0]["n_actions"]
@@ -416,6 +457,7 @@ def run_goal_position_in_z(
         "S": S,
         "K": K,
         "positions": [list(p) for p in positions],
+        "lava": [list(c) for c in lava],
         "agent_start": list(agent_start),
         "n_actions_traj": len(action_indices),
         "inter_vr": sm["inter_vr"].tolist(),
@@ -462,4 +504,5 @@ if __name__ == "__main__":
         repeats=args.repeats,
         device=device,
         outdir=experiment_outdir(logdir, "goal_position_in_z"),
+        seed=args.seed,
     )

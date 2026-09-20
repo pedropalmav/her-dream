@@ -31,8 +31,9 @@ def with_reward_offset(reward_fn, offset: float):
     dying. Measured on a lava variant of the grid env (random policy, gamma=0.997),
     running to the time limit returns -309 while dying returns -136; through the real
     `_lambda_return` the terminating step has advantage +90.4 under ``{-1, 0}`` and
-    -212.1 under ``{0, 1}``. Nothing here can terminate yet, but `envs/crafter.py`
-    already propagates `is_terminal` and a lava env is coming.
+    -212.1 under ``{0, 1}``. That lava env now exists — ``env=lava_grid``, cookie-env's
+    `LavaGrid` — and `train.py:validate_config` warns when such a run leaves the offset
+    at 0.
 
     Absent termination the two schemes are equivalent for the optimal policy: a
     constant shift moves every value by ``offset/(1-gamma)`` and leaves advantages

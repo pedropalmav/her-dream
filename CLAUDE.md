@@ -202,7 +202,7 @@ a no-op on current ones.
 
 **`plan2explore.py` — `Disagreement` class**: an ensemble of `disag.models`
 one-step predictors, each mapping `feat ++ action` to the next latent
-(`disag.target`: `stoch` | `deter` | `feat`). Their spread is the intrinsic
+(`disag.target`: `stoch` | `logit` | `prob` | `deter` | `feat`; `prob` = per-group `softmax(logit)`). Their spread is the intrinsic
 reward:
 - `loss(feat, action, target)` — one-step prediction error, summed over members.
   Inputs *and* targets are detached, so the ensemble never shapes the

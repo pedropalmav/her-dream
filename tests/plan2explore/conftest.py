@@ -44,5 +44,6 @@ def batch():
         feat=torch.randn(B, T, F),
         action=torch.nn.functional.one_hot(torch.randint(0, A, (B, T)), A).float(),
         stoch=torch.randn(B, T, S, K),
+        logit=torch.randn(B, T, S, K),
         deter=torch.randn(B, T, D),
     )

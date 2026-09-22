@@ -56,7 +56,8 @@ loss_scales:
 disag:
   models: 8 # ensemble members; >=2. The intrinsic-reward forward is the memory
   # hot spot of a pretraining step, so drop this first if it OOMs.
-  target: stoch # stoch|deter|feat — what each member predicts one step ahead
+  target: stoch # stoch|logit|prob|deter|feat — what each member predicts one step ahead;
+  # prob = per-group softmax(logit), the noise-free expectation of stoch
   action_cond: True # condition the prediction on the action driving the step
   offset: 1 # predict this many steps ahead
   log: False # take log(disagreement); flip if disag_raw is far from O(1)

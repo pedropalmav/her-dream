@@ -606,7 +606,7 @@ class Dreamer(nn.Module):
             # Same placement rationale as the heads: trained whenever the world
             # model is, skipped under freeze_wm / train_text_only.
             if self.plan2explore:
-                target = self.disag.target_from(post_stoch, post_deter, feat)
+                target = self.disag.target_from(post_stoch, post_deter, feat, post_logit)
                 losses["disag"], disag_metrics = self.disag.loss(feat, data["action"], target)
                 metrics.update(disag_metrics)
 

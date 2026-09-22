@@ -18,6 +18,7 @@ from her_dream.actor_critic import ActorCritic
 from her_dream.networks import Projector
 from her_dream.optim import LaProp, clip_grad_agc_
 from her_dream.plan2explore import Disagreement
+from her_dream.temporal_distance import TemporalDistance
 from her_dream.tools import to_f32
 
 
@@ -37,8 +38,10 @@ class Dreamer(nn.Module):
         self.use_reward_head = bool(getattr(config, "use_reward_head", False))
         self.use_cont_head = bool(getattr(config, "use_cont_head", False))
         self.imag_reward_source = str(getattr(config, "imag_reward_source", "goal"))
-        if self.imag_reward_source not in ("goal", "head"):
-            raise ValueError(f"Unknown imag_reward_source {self.imag_reward_source!r}; expected 'goal' or 'head'.")
+        if self.imag_reward_source not in ("goal", "head", "temporal"):
+            raise ValueError(
+                f"Unknown imag_reward_source {self.imag_reward_source!r}; expected 'goal', 'head' or 'temporal'."
+            )
         if self.imag_reward_source == "head" and not self.use_reward_head:
             raise ValueError("imag_reward_source='head' requires use_reward_head=True.")
         self.goal_type = str(config.goal_type)
@@ -61,8 +64,17 @@ class Dreamer(nn.Module):
         # actor-critic collects the data. The task actor-critic is left untouched
         # and trained afterwards on the frozen world model (load_from + freeze_wm).
         self.plan2explore = bool(getattr(config, "plan2explore", False))
-        if self.plan2explore and (self.wm_only or self.freeze_wm or self.train_text_only):
-            raise ValueError("plan2explore is exclusive with wm_only, freeze_wm and train_text_only.")
+        # LEXA: the same explorer and ensemble, but the goal achiever is trained
+        # alongside it in imagination instead of afterwards, and the explorer only
+        # collects part of the data.
+        self.lexa = bool(getattr(config, "lexa", False))
+        # Both modes own the explorer; LEXA additionally trains the achiever.
+        self.explores = self.plan2explore or self.lexa
+        if self.plan2explore and self.lexa:
+            raise ValueError("plan2explore and lexa are mutually exclusive; lexa already trains the explorer.")
+        if self.explores and (self.wm_only or self.freeze_wm or self.train_text_only):
+            raise ValueError("plan2explore/lexa are exclusive with wm_only, freeze_wm and train_text_only.")
+        self.explore_every_ep = int(getattr(config, "explore_every_ep", 2))
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -106,13 +118,15 @@ class Dreamer(nn.Module):
         # Built after `self.ac` on purpose: construction order fixes the RNG
         # stream and the shared optimizer's parameter order, so an agent without
         # Plan2Explore is bit-identical to one from before this existed.
-        if self.plan2explore:
+        if self.explores:
             self.explorer = ActorCritic(config, self.rssm.feat_size, act_space, 0, name="explore")
             self.disag = Disagreement(config, self.rssm.feat_size, self.act_dim, self.rssm)
+        if self.imag_reward_source == "temporal":
+            self.temporal_distance = TemporalDistance(config, self.rssm.flat_stoch)
 
         self._loss_scales = dict(config.loss_scales)
         self._loss_scales.update(self.ac.loss_scales(self._loss_scales))
-        if self.plan2explore:
+        if self.explores:
             self._loss_scales.update(self.explorer.loss_scales(self._loss_scales))
         self._log_grads = bool(config.log_grads)
 
@@ -125,12 +139,15 @@ class Dreamer(nn.Module):
                 modules["reward"] = self.reward
             if self.use_cont_head:
                 modules["cont"] = self.cont
-        if self.plan2explore:
-            # Pretraining trains the world model, the ensemble and the explorer;
-            # the task actor-critic stays at its init and is trained later.
+        if self.explores:
+            # Both modes train the world model, the ensemble and the explorer.
+            # plan2explore stops there and leaves the achiever for a later run;
+            # LEXA trains it here too, in imagination.
             modules["disag"] = self.disag
             modules.update(self.explorer.optim_modules())
-        elif not self.wm_only and not self.train_text_only:
+        if self.imag_reward_source == "temporal" and not self.freeze_wm and not self.train_text_only:
+            modules["temporal_distance"] = self.temporal_distance
+        if not self.wm_only and not self.plan2explore and not self.train_text_only:
             modules.update(self.ac.optim_modules())
 
         # TODO: Create a method for this block
@@ -244,7 +261,7 @@ class Dreamer(nn.Module):
         self._frozen_encoder = tools.freeze_clone(self.encoder)
         self._frozen_rssm = tools.freeze_clone(self.rssm)
         self.ac.clone_and_freeze()
-        if self.plan2explore:
+        if self.explores:
             self.explorer.clone_and_freeze()
         if self.use_reward_head:
             self._frozen_reward = tools.freeze_clone(self.reward)
@@ -278,9 +295,10 @@ class Dreamer(nn.Module):
         if self.use_cont_head:
             for param in self.cont.parameters():
                 param.requires_grad_(False)
-        if hasattr(self, "disag"):
-            for param in self.disag.parameters():
-                param.requires_grad_(False)
+        for name in ("disag", "temporal_distance"):
+            if hasattr(self, name):
+                for param in getattr(self, name).parameters():
+                    param.requires_grad_(False)
         if self.rep_loss == "dreamer" and hasattr(self, "decoder"):
             for param in self.decoder.parameters():
                 param.requires_grad_(False)
@@ -310,12 +328,17 @@ class Dreamer(nn.Module):
             param.requires_grad_(True)
 
     @torch.no_grad()
-    def act(self, obs, state, eval=False, random=False):
+    def act(self, obs, state, eval=False, random=False, explore=None):
         """Policy inference step.
 
         When `random=True`, the actor is bypassed and a uniform one-hot action
         is sampled. The WM forward pass (encoder + obs_step) still runs so the
         agent_state (stoch/deter) is updated consistently for the buffer.
+
+        `explore` is a (B,) bool mask selecting the exploration policy per env,
+        which is how LEXA splits data collection between the explorer and the
+        achiever. It is ignored unless an explorer exists; `None` means "all
+        explorer" under Plan2Explore pretraining and "all achiever" otherwise.
         """
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
@@ -334,15 +357,7 @@ class Dreamer(nn.Module):
         feat = self._frozen_rssm.get_feat(stoch, deter)
 
         B = stoch.shape[0]
-        if random:
-            action = self._random_action(B)
-        else:
-            # Pretraining collects data with the goal-agnostic explorer.
-            actor_critic, goal = (self.explorer, None) if self.plan2explore else (self.ac, obs["goal"])
-            # (B, A)
-            action_dist = actor_critic.frozen_policy(feat, goal)
-            # (B, A)
-            action = action_dist.mode if eval else action_dist.rsample()
+        action = self._random_action(B) if random else self._policy_action(feat, obs.get("goal"), eval, explore)
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
         if goals.stashes_logit(self._goal_spec):
             state_dict["logit"] = logit
@@ -354,6 +369,24 @@ class Dreamer(nn.Module):
             ),
             {"obs_step_sample_log_prob": obs_step_sample_log_prob},
         )
+
+    def _policy_action(self, feat, goal, eval, explore):
+        """Sample an action from the achiever, the explorer, or a mix of both."""
+
+        def sample(actor_critic, goal):
+            dist = actor_critic.frozen_policy(feat, goal)
+            return dist.mode if eval else dist.rsample()
+
+        if self.plan2explore:
+            # Pretraining collects everything with the goal-agnostic explorer.
+            return sample(self.explorer, None)
+        if not self.lexa or explore is None or not explore.any():
+            return sample(self.ac, goal)
+        if explore.all():
+            return sample(self.explorer, None)
+        # Mixed batch: envs run independent episodes, so both policies run and
+        # the mask picks per env.
+        return torch.where(explore.reshape(-1, 1), sample(self.explorer, None), sample(self.ac, goal))
 
     @torch.no_grad()
     def imagine_goal(self, obs):
@@ -486,10 +519,13 @@ class Dreamer(nn.Module):
         data, index, initial = replay_buffer.sample()
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        # Only the actor-critic being trained: Plan2Explore pretraining leaves the
-        # task one untouched, and mixing an untrained critic into its own target
-        # would just accumulate rounding drift.
-        (self.explorer if self.plan2explore else self.ac).update_slow_target()
+        # Only the actor-critics being trained: Plan2Explore pretraining leaves
+        # the achiever untouched, and mixing an untrained critic into its own
+        # target would just accumulate rounding drift. LEXA trains both.
+        if self.explores:
+            self.explorer.update_slow_target()
+        if not self.plan2explore:
+            self.ac.update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
@@ -605,7 +641,7 @@ class Dreamer(nn.Module):
             # === Plan2Explore ensemble (optional) ===
             # Same placement rationale as the heads: trained whenever the world
             # model is, skipped under freeze_wm / train_text_only.
-            if self.plan2explore:
+            if self.explores:
                 target = self.disag.target_from(post_stoch, post_deter, feat)
                 losses["disag"], disag_metrics = self.disag.loss(feat, data["action"], target)
                 metrics.update(disag_metrics)
@@ -671,10 +707,12 @@ class Dreamer(nn.Module):
         # === Imagination rollout for actor-critic ===
         # Skipped entirely in wm_only mode: actor and value are frozen, so
         # policy/value/repval losses would only waste compute.
-        if self.plan2explore:
+        if self.explores:
             explore_losses, explore_metrics = self._explore_losses(post_stoch, post_deter)
             losses.update(explore_losses)
             metrics.update(explore_metrics)
+        if self.plan2explore:
+            # Pretraining stops here: the achiever is trained in a later run.
             total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
             self._scaler.scale(total_loss).backward()
             metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
@@ -711,6 +749,22 @@ class Dreamer(nn.Module):
         imag_losses, imag_metrics, ret = self.ac.imagination_loss(imag_feat, imag_action, imag_reward, imag_cont, goal)
         losses.update(imag_losses)
         metrics.update(imag_metrics)
+
+        # The temporal-distance predictor learns on the same imagined rollout it
+        # scores, so it is fitted to the distribution the reward is read on.
+        if self.imag_reward_source == "temporal":
+            losses["temporal"], temporal_metrics = self.temporal_distance.loss(imag_stoch)
+            metrics.update(temporal_metrics)
+
+        if self.lexa:
+            # LEXA trains the achiever purely in imagination. The replay-value
+            # loss is fed data["reward"], the analytic goal reward, which is not
+            # the objective the achiever is being trained on here.
+            total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
+            self._scaler.scale(total_loss).backward()
+            metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
+            metrics.update({"opt/loss": total_loss})
+            return (post_stoch, post_deter), metrics
 
         # === Replay-based value learning (keep gradients through world model) ===
         last, term, reward = (
@@ -768,10 +822,14 @@ class Dreamer(nn.Module):
 
         This is the seam the exploration objectives plug into: "goal" is the
         analytic goal reward from `rewards.make_reward`, "head" is the learned
-        reward predictor. Returns (B*T, T_imag, 1).
+        reward predictor, "temporal" is LEXA's learned steps-to-goal.
+        Returns (B*T, T_imag, 1).
         """
         if self.imag_reward_source == "head":
             return self._frozen_reward(imag_feat).mode
+        if self.imag_reward_source == "temporal":
+            # LEXA's goal-reaching reward: minus the predicted steps to the goal.
+            return -self.temporal_distance.distance(imag_stoch, goal)
         reward_input = goals.reward_state(self._goal_spec, stoch=imag_stoch, logit=imag_logit, rssm=self.rssm)
         return self.reward_function(reward_input, goal)
 

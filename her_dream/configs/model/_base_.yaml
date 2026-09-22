@@ -16,7 +16,8 @@ use_cont_head: False
 # Where the imagination rollout gets its reward from:
 #   goal -> reward_function(reward_state(...), goal), the analytic goal reward
 #   head -> the learned reward head (requires use_reward_head=True)
-imag_reward_source: goal # goal|head
+#   temporal -> LEXA's learned steps-to-goal (see `temporal_distance` below)
+imag_reward_source: goal # goal|head|temporal
 goal_type: ${goal_type}
 wm_only: False
 freeze_wm: False
@@ -25,6 +26,12 @@ train_text_only: False
 # one-step predictors and a goal-agnostic explorer driven by their
 # disagreement. Post-train the achiever afterwards with load_from+freeze_wm.
 plan2explore: False
+# LEXA: the same explorer and ensemble, but the goal achiever is trained
+# alongside it in imagination (reward from `imag_reward_source`, normally
+# `temporal`) instead of in a later run. The explorer drives every
+# `explore_every_ep`-th episode of data collection; 0 means achiever only.
+lexa: False
+explore_every_ep: 2
 
 lr: 4e-5
 agc: 0.3
@@ -48,6 +55,7 @@ loss_scales:
   value: 1.0
   repval: 0.3
   disag: 1.0
+  temporal: 1.0
   swav: 1.0
   temp: 1.0
   norm: 1.0
@@ -74,6 +82,22 @@ disag:
     outscale: 1.0
     symlog_inputs: False
     name: "disag"
+
+temporal_distance:
+  num_positives: 256 # pairs drawn per step from the imagined rollout
+  neg_sampling_factor: 0.1 # extra cross-trajectory pairs, labelled maximally far
+  head:
+    shape: [1] # regression on the normalised step count, as in LEXA
+    layers: 4
+    units: ${model.units}
+    act: ${model.act}
+    norm: ${model.norm}
+    device: ${device}
+    dist:
+      name: "identity"
+    outscale: 1.0
+    symlog_inputs: False
+    name: "temporal_distance"
 
 r2dreamer:
   lambd: 5e-4

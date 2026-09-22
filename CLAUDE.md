@@ -13,7 +13,7 @@ A PyTorch implementation of **R2-Dreamer** (ICLR 2026) extended with goal-condit
 
 The reusable library lives in an **installable package, `her_dream/`** (distribution name `her-dream`, defined in `pyproject.toml`). Install it editable with **`uv pip install -e .`**; this replaces the old `sys.path`/CWD-based imports, so `import her_dream` (and `from her_dream.dreamer import Dreamer`, `from her_dream.envs import make_envs`, …) works from any directory.
 
-- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py plan2explore.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
+- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py plan2explore.py temporal_distance.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
 - **Repo-root scripts** (kept out of the package, but they `import her_dream`): `train.py`, `evaluate.py`, `eval_text_goal.py`, `export.py`, `visualization.py`, and the `experiments/`, `viz/`, `zflow/`, `scripts/`, `tests/` directories.
 - **Convention for this doc**: paths naming a library module (e.g. `dreamer.py`, `envs/wrappers.py`, `configs/goal_type/full.yaml`) are relative to `her_dream/` — i.e. `her_dream/dreamer.py`, `her_dream/configs/…`. Root-level things (`train.py`, `experiments/`, `scripts/`, `docs/`) are named as-is.
 - Because `configs/` now ships inside the package, the Hydra entry points (`train.py`, `evaluate.py`) resolve it via `pathlib.Path(her_dream.__file__).parent / "configs"` rather than a path relative to the script.
@@ -43,6 +43,10 @@ python3 train.py logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 free
 # post-training path — the checkpoint's explorer/ensemble are dropped on load).
 python3 train.py logdir=./logdir/p2e/01 plan2explore=True
 python3 train.py logdir=./logdir/p2e/achiever load_from=./logdir/p2e/01 freeze_wm=True
+
+# LEXA: explorer and achiever trained together in one run, the achiever driven
+# by the learned temporal distance rather than an exact z match.
+python3 train.py logdir=./logdir/lexa/01 lexa=True model.imag_reward_source=temporal
 
 # Distill the text encoder against a frozen WM
 python3 train.py logdir=./logdir/distill/01 load_from=./logdir/wm_only/01 train_text_only=True mission_text=True
@@ -131,6 +135,7 @@ A single entry point — **`train.py`** — covers three modes, selected purely 
 - **From-scratch** (default, `load_from=null`) — end-to-end training (WM + actor/critic). With `wm_only=True` it trains only the WM with random actions.
 - **Post-training** (`load_from=<logdir>`) — loads a checkpoint, optionally freezes the WM (`freeze_wm=True`), and trains actor/critic on top. Used to isolate "is the WM or the policy the problem".
 - **Plan2Explore pretraining** (`plan2explore=True`) — trains the WM, a disagreement ensemble and a goal-agnostic *explorer* actor-critic; the task actor-critic is left at its init. Exclusive with the other modes and takes no `load_from`. Phase 2 is plain post-training on the result.
+- **LEXA** (`lexa=True`, normally with `model.imag_reward_source=temporal`) — the same explorer and ensemble, but the achiever is trained *alongside* it in imagination instead of in a later run, and data collection alternates: the explorer drives every `model.explore_every_ep`-th episode (default 2), the achiever the rest. The achiever gets no `repval` loss, since that one is fed the analytic goal reward rather than the objective it is being trained on.
 - **Text distillation** (`train_text_only=True load_from=<logdir> mission_text=True`) — trains only the `TextEncoderGRU` (KL against a frozen WM posterior); WM and actor/critic stay fixed.
 
 There is a single launcher script, `scripts/train.sh` (uv + headless rendering); the mode is chosen entirely by the args it forwards to `train.py` (e.g. `load_from=`, `freeze_wm=True`, `train_text_only=True mission_text=True`).
@@ -201,6 +206,26 @@ with `goal_size=0` and `name="explore"`) and `self.disag`; `act` collects data
 with the explorer, and only the WM, the ensemble and the explorer are optimized.
 Checkpoints therefore carry `explorer.*` / `disag.*`, which `train.py` drops on
 load for an agent that does not build them (`_OPTIONAL_MODULE_PREFIXES`).
+
+**`temporal_distance.py` — `TemporalDistance` class**: LEXA's goal-reaching
+reward. An MLP over `[flat(stoch), flat(goal)]` regressing the normalised number
+of steps between the two, selected with `imag_reward_source=temporal` (an axis
+independent of `lexa` — it works in an ordinary run too).
+- `loss(stoch)` — pairs drawn from the same imagined trajectory, labelled
+  `(j - i) / (T - 1)`, plus `neg_sampling_factor` extra cross-trajectory pairs
+  labelled maximally distant so the predictor cannot collapse to a constant.
+  Latents are detached, so it never shapes the representation.
+- `distance(stoch, goal)` — the reward is its negation.
+
+Why it exists: with `goal_type=full` the analytic reward needs an exact 32-group
+`z` match, which is ~never satisfied (P ≈ 4e-13 under the text encoder — see the
+investigation notes below). A learned distance gives the achiever a gradient
+everywhere instead of an all-or-nothing signal.
+
+Note the predictor sits slightly above its positive-pair labels in practice: the
+negatives carry equal loss weight while being a tenth of the samples (LEXA sums
+the two means). That is a constant-ish bias, which `ReturnEMA` absorbs;
+`temporal_distance.neg_sampling_factor` is the knob.
 
 **`rssm.py` — `RSSM` class**: Manages the latent state `(stoch, deter)`.
 - `stoch` shape: `(B, S, K)` — S groups, K categories (e.g. 32×16).

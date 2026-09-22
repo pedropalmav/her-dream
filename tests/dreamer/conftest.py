@@ -256,6 +256,23 @@ class StubReplayBuffer:
         self.update_calls.append((index, stoch, deter))
 
 
+class VariedReplayBuffer(StubReplayBuffer):
+    """`StubReplayBuffer` with a varying `direction`.
+
+    The stub emits a constant-zero direction, so the MLP half of the embedding is
+    identical across the batch -> std 0 -> the r2dreamer Barlow loss divides by
+    (0 + 1e-8), which underflows to 0 in fp16 and yields NaN. A NaN loss makes
+    GradScaler skip every optimizer step, so any test asserting that parameters
+    move needs this instead. Real rollouts have a varying direction.
+    """
+
+    def sample(self):
+        data, index, initial = super().sample()
+        idx = torch.randint(0, 4, (self.B, self.T))
+        data["direction"] = torch.nn.functional.one_hot(idx, 4).float()
+        return data, index, initial
+
+
 def make_real_dreamer(goal_type="full", act="discrete", **cfg_overrides):
     """Build a genuine tiny `Dreamer` and return `(agent, goal_shape)`.
 

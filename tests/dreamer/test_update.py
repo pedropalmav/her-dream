@@ -18,7 +18,7 @@ assert the returned metrics structure and the replay write-back instead.
 import pytest
 import torch
 
-from tests.dreamer.conftest import StubReplayBuffer, make_real_dreamer
+from tests.dreamer.conftest import StubReplayBuffer, VariedReplayBuffer, make_real_dreamer
 
 
 def _run_once(agent, goal_shape, mission=False):
@@ -287,3 +287,63 @@ class TestPlan2Explore:
     def test_runs_with_the_continue_head(self):
         _, metrics = self._step(model__use_cont_head=True)
         assert {"loss/con", "loss/explore_policy"} <= set(metrics)
+
+
+class TestLexaUpdate:
+    """One LEXA step trains the world model, both policies and both predictors."""
+
+    @staticmethod
+    def _step(**overrides):
+        agent, goal_shape = make_real_dreamer(lexa=True, model__imag_reward_source="temporal", **overrides)
+        return agent, agent.update(StubReplayBuffer(goal_shape))
+
+    def test_reports_both_policies(self):
+        _, metrics = self._step()
+        assert {"loss/policy", "loss/value", "loss/explore_policy", "loss/explore_value"} <= set(metrics)
+
+    def test_reports_both_predictors(self):
+        _, metrics = self._step()
+        assert {"loss/disag", "loss/temporal"} <= set(metrics)
+
+    def test_skips_the_replay_value_loss(self):
+        # LEXA trains the achiever purely in imagination; repval is fed the
+        # analytic goal reward, which is not the objective here.
+        _, metrics = self._step()
+        assert "loss/repval" not in metrics
+
+    def test_the_achiever_reward_comes_from_the_distance_not_the_goal_match(self):
+        # goal_type=full scores an exact 32-group z match, so its analytic reward
+        # is -1 almost surely. The temporal reward is a learned continuous value.
+        agent, goal_shape = make_real_dreamer(lexa=True)
+        analytic = agent.update(StubReplayBuffer(goal_shape))
+        assert float(analytic["rew"]) == pytest.approx(-1.0)
+
+        _, temporal = self._step()
+        assert float(temporal["rew"]) != pytest.approx(-1.0)
+        assert torch.isfinite(torch.as_tensor(float(temporal["rew"])))
+
+    def test_the_explorer_reward_is_still_the_disagreement(self):
+        _, metrics = self._step()
+        assert float(metrics["explore_rew"]) == pytest.approx(float(metrics["disag_raw"]), rel=1e-4)
+
+    def test_every_component_trains(self):
+        agent, goal_shape = make_real_dreamer(lexa=True, model__imag_reward_source="temporal")
+        buf = VariedReplayBuffer(goal_shape)
+        parts = {
+            "achiever": agent.ac,
+            "explorer": agent.explorer,
+            "ensemble": agent.disag,
+            "distance": agent.temporal_distance,
+        }
+        before = {n: [p.detach().clone() for p in m.parameters()] for n, m in parts.items()}
+        for _ in range(25):
+            agent.update(buf)
+        for name, snapshot in before.items():
+            moved = any(not torch.equal(b, p.detach()) for b, p in zip(snapshot, parts[name].parameters()))
+            assert moved, f"{name} never updated"
+
+    def test_temporal_reward_works_without_lexa(self):
+        # The reward source is orthogonal to the training structure.
+        agent, goal_shape = make_real_dreamer(model__imag_reward_source="temporal")
+        metrics = agent.update(StubReplayBuffer(goal_shape))
+        assert {"loss/temporal", "loss/policy", "loss/repval"} <= set(metrics)

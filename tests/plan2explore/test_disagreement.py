@@ -17,7 +17,9 @@ class TestConstruction:
         first = next(disag.heads[0].parameters())
         assert not any(torch.equal(first, next(h.parameters())) for h in disag.heads[1:])
 
-    @pytest.mark.parametrize("target, size", [("stoch", S * K), ("deter", D), ("feat", F)])
+    @pytest.mark.parametrize(
+        "target, size", [("stoch", S * K), ("logit", S * K), ("prob", S * K), ("deter", D), ("feat", F)]
+    )
     def test_target_selects_the_prediction_width(self, target, size):
         assert make_disag(model__disag__target=target).target_size == size
 
@@ -41,27 +43,47 @@ class TestConstruction:
 
 class TestTargetFrom:
     def test_stoch_target_is_flattened(self, disag, batch):
-        out = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        out = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         assert out.shape == (B, T, S * K)
         assert torch.equal(out, batch.stoch.reshape(B, T, S * K))
 
+    def test_logit_target_is_flattened(self, batch):
+        d = make_disag(model__disag__target="logit")
+        out = d.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
+        assert torch.equal(out, batch.logit.reshape(B, T, S * K))
+
+    def test_prob_target_is_the_per_group_softmax(self, batch):
+        d = make_disag(model__disag__target="prob")
+        out = d.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
+        assert out.shape == (B, T, S * K)
+        assert torch.allclose(out, torch.softmax(batch.logit, dim=-1).reshape(B, T, S * K))
+        assert torch.allclose(out.reshape(B, T, S, K).sum(-1), torch.ones(B, T, S))
+
+    def test_prob_target_ignores_a_per_group_logit_shift(self, batch):
+        # The reason to prefer prob over logit: equivalent logits give one target.
+        d = make_disag(model__disag__target="prob")
+        shifted = batch.logit + torch.randn(B, T, S, 1)
+        a = d.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
+        b = d.target_from(batch.stoch, batch.deter, batch.feat, shifted)
+        assert torch.allclose(a, b, atol=1e-6)
+
     def test_deter_target_passes_through(self, batch):
         d = make_disag(model__disag__target="deter")
-        assert torch.equal(d.target_from(batch.stoch, batch.deter, batch.feat), batch.deter)
+        assert torch.equal(d.target_from(batch.stoch, batch.deter, batch.feat, batch.logit), batch.deter)
 
     def test_feat_target_passes_through(self, batch):
         d = make_disag(model__disag__target="feat")
-        assert torch.equal(d.target_from(batch.stoch, batch.deter, batch.feat), batch.feat)
+        assert torch.equal(d.target_from(batch.stoch, batch.deter, batch.feat, batch.logit), batch.feat)
 
 
 class TestLoss:
     def test_returns_a_scalar(self, disag, batch):
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         loss, _ = disag.loss(batch.feat, batch.action, target)
         assert loss.ndim == 0
 
     def test_reports_the_per_member_error(self, disag, batch):
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         _, metrics = disag.loss(batch.feat, batch.action, target)
         assert "disag_pred_err" in metrics
 
@@ -76,7 +98,7 @@ class TestLoss:
 
         disag.heads = torch.nn.ModuleList([_Lambda(spy)])
         disag.models = 1
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         disag.loss(batch.feat, batch.action, target)
 
         inputs = seen["inputs"]
@@ -86,7 +108,7 @@ class TestLoss:
 
     def test_target_is_shifted_forward(self, disag, batch):
         # The loss must compare against the *next* latent, not the current one.
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         shifted = target[:, disag.offset :]
         assert shifted.shape[1] == T - disag.offset
         assert torch.equal(shifted[:, 0], target[:, disag.offset])
@@ -95,20 +117,30 @@ class TestLoss:
         # Both sides are detached: the ensemble is a probe, never a shaping loss.
         feat = batch.feat.clone().requires_grad_(True)
         stoch = batch.stoch.clone().requires_grad_(True)
-        target = disag.target_from(stoch, batch.deter, feat)
+        logit = batch.logit.clone().requires_grad_(True)
+        target = disag.target_from(stoch, batch.deter, feat, logit)
         loss, _ = disag.loss(feat, batch.action, target)
         loss.backward()
         assert feat.grad is None
         assert stoch.grad is None
+        assert logit.grad is None
+
+    @pytest.mark.parametrize("target", ["logit", "prob"])
+    def test_logit_targets_do_not_reach_the_world_model(self, target, batch):
+        d = make_disag(model__disag__target=target)
+        logit = batch.logit.clone().requires_grad_(True)
+        loss, _ = d.loss(batch.feat, batch.action, d.target_from(batch.stoch, batch.deter, batch.feat, logit))
+        loss.backward()
+        assert logit.grad is None
 
     def test_gradient_reaches_every_member(self, disag, batch):
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         loss, _ = disag.loss(batch.feat, batch.action, target)
         loss.backward()
         assert all(any(p.grad is not None and p.grad.abs().sum() > 0 for p in h.parameters()) for h in disag.heads)
 
     def test_training_reduces_the_loss(self, disag, batch):
-        target = disag.target_from(batch.stoch, batch.deter, batch.feat)
+        target = disag.target_from(batch.stoch, batch.deter, batch.feat, batch.logit)
         opt = torch.optim.Adam(disag.parameters(), lr=1e-2)
         first = None
         for _ in range(20):

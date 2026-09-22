@@ -52,6 +52,13 @@ Usage — the trained checkpoints, on the GPU box:
                  logdir/random_goal/posttrain_frozenwm_normalbuf_goalbuf/01 \
         --device cuda
 
+LEXA runs (`lexa=True`) load like any other: the policy scored is the goal
+*achiever* (`agent.ac`), never the goal-agnostic explorer. Their reported
+`mean_reward` is still the run's analytic goal reward — a diagnostic there, not
+the learned temporal distance the achiever was actually trained on.
+
+    uv run python3 experiments/success_rate.py --logdir logdir/full_train/random_goal/lexa/* --device cuda
+
 Results go to `experiments/out/success_rate_<suite>.{json,png}`, plus a per-cell
 success map (`..._map.png`) whenever the suite has a sweep block. Runs whose room
 layout differs from the suite's are skipped rather than silently mixed in.
@@ -314,6 +321,8 @@ def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip
     meta = {
         "goal_type": config.get("goal_type"),
         "goal_sample": config.env.get("goal_sample"),
+        "lexa": bool(config.get("lexa", False)),
+        "imag_reward_source": config.model.get("imag_reward_source", "goal"),
         "task": env_cfg.task,
         "env_size": size,
         "max_steps": budget,
@@ -351,7 +360,9 @@ def plot(all_results, path, skip_random):
     x = np.arange(len(names))
     labels = [_run_label(n) for n in names]
 
-    fig, (ax_rate, ax_dist) = plt.subplots(1, 2, figsize=(13, 5))
+    # Widened with the run count so a whole sweep (e.g. the 18 LEXA runs) keeps
+    # its tick labels legible.
+    fig, (ax_rate, ax_dist) = plt.subplots(1, 2, figsize=(max(13, 0.6 * len(names) + 6), 5))
 
     width = 0.4 if not skip_random else 0.6
     policy_x = x - (width / 2 if not skip_random else 0)
@@ -395,7 +406,7 @@ def plot(all_results, path, skip_random):
     ax_dist.set_title("Does success decay with distance?")
 
     ax_rate.set_xticks(x)
-    ax_rate.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
+    ax_rate.set_xticklabels(labels, rotation=20 if len(names) <= 6 else 60, ha="right", fontsize=8)
     for ax in (ax_rate, ax_dist):
         ax.legend(fontsize=8)
     fig.suptitle(f"Goal-conditioned success rate — fixed {summaries[0]['pairs']}-pair suite")

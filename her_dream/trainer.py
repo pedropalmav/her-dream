@@ -40,6 +40,11 @@ class OnlineTrainer:
         # The policy is irrelevant for both world-model pretraining and
         # text-encoder distillation, so data is collected with random actions.
         self._random_actions = self._wm_only or self._train_text_only
+        # LEXA splits data collection: the explorer drives every Nth episode and
+        # the achiever the rest, so the buffer holds both novel states and
+        # goal-directed ones. 0 disables the split (achiever only).
+        self._lexa = bool(getattr(config, "lexa", False))
+        self._explore_every_ep = int(getattr(config, "explore_every_ep", 2))
 
         self.her = isinstance(self.replay_buffer, HERBuffer)
 
@@ -102,6 +107,15 @@ class OnlineTrainer:
         if len(goal_shape) == 1:
             return goal[:, 0, :]
         return goal
+
+    def _explore_mask(self, episode_ids):
+        """Per-env mask selecting the exploration policy for this episode.
+
+        None outside LEXA, so every other mode keeps its single policy.
+        """
+        if not self._lexa or self._explore_every_ep <= 0:
+            return None
+        return (episode_ids % self._explore_every_ep) == 0
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -271,7 +285,11 @@ class OnlineTrainer:
             # In wm_only / train_text_only mode the actor is bypassed and uniform one-hot actions are used.
             # (B, A)
             act, agent_state, act_metrics = agent.act(
-                trans.clone(), agent_state, eval=False, random=self._random_actions
+                trans.clone(),
+                agent_state,
+                eval=False,
+                random=self._random_actions,
+                explore=self._explore_mask(episode_ids),
             )
             if self.obs_step_prob_log:
                 self.logger.write_step(

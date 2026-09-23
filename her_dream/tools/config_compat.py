@@ -18,6 +18,7 @@ _OPTIONAL_HEAD_DEFAULTS = {
     "use_cont_head": False,
     "imag_reward_source": "goal",
     "plan2explore": False,
+    "lexa": False,
 }
 
 # Harmless dummy goal-conditioning defaults for pre-goal-conditioning (WM-only)

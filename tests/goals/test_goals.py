@@ -44,6 +44,13 @@ class TestMakeGoalSpec:
         cfg = SimpleNamespace(goal_type="full", state_repr="stoch", goal_repr="sample", scope="full")
         assert goals.make_goal_spec(cfg).uses_threshold is False
 
+    def test_success_reward_defaults_zero_when_key_absent(self):
+        cfg = SimpleNamespace(goal_type="full", state_repr="stoch", goal_repr="sample", scope="full")
+        assert goals.make_goal_spec(cfg).success_reward == 0.0
+
+    def test_success_reward_read_from_config(self):
+        assert _spec(success_reward=0.9).success_reward == 0.9
+
     def test_uses_threshold_true(self):
         assert _spec(uses_threshold=True).uses_threshold is True
 
@@ -163,3 +170,4 @@ class TestConfigDriftGuard:
             assert d["state_repr"] == cfg.state_repr
             assert d["goal_repr"] == cfg.goal_repr
             assert d["scope"] == cfg.scope
+            assert d["success_reward"] == cfg.success_reward

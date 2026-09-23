@@ -89,5 +89,8 @@ trainer:
   state_repr: ${state_repr}
   goal_repr: ${goal_repr}
   scope: ${scope}
+  success_reward: ${success_reward}
+  # Train success rate is a rolling mean over the last `success_window` episodes.
+  success_window: 100
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}

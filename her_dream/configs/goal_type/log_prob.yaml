@@ -4,5 +4,6 @@ state_repr: dist # stoch | dist | logit | prob   (reward fn's state arg)
 goal_repr: sample # sample | argmax | logit | prob (the goal tensor)
 scope: full # first_row | full              (actor/critic goal input)
 uses_threshold: true # appends a threshold one-hot to the actor/critic input
+success_reward: 0.0 # reward >= this counts as latent success (logged, not trained on)
 prob_threshold: 0.5 # probability in [0,1]; compared in log-space
 prob_threshold_step: 0.05 # bin width for threshold one-hot (21 bins total)

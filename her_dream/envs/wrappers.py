@@ -300,6 +300,7 @@ class MiniGridWrapper(gym.Wrapper):
             "is_first": gym.spaces.Box(0, 1, (), bool),
             "is_last": gym.spaces.Box(0, 1, (), bool),
             "is_terminal": gym.spaces.Box(0, 1, (), bool),
+            "log_success": gym.spaces.Box(0, 1, (1,), dtype=np.float32),
         })
 
     def reset(self):
@@ -313,13 +314,17 @@ class MiniGridWrapper(gym.Wrapper):
             is_first=False,
             is_last=terminated or truncated,
             is_terminal=terminated,
+            success=reward == 0,
         )
         return obs, reward, terminated or truncated, info
 
-    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False, success=False):
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal
+        # Ground-truth success (agent on the green square): the goal-grid envs' own
+        # reward is 0 there, but the trainer overwrites "reward" with the latent one.
+        obs["log_success"] = float(success)
         return obs
 
 
@@ -350,6 +355,7 @@ class MissionGridWrapper(gym.Wrapper):
             "is_first": gym.spaces.Box(0, 1, (), bool),
             "is_last": gym.spaces.Box(0, 1, (), bool),
             "is_terminal": gym.spaces.Box(0, 1, (), bool),
+            "log_success": gym.spaces.Box(0, 1, (1,), dtype=np.float32),
         })
 
     def reset(self):
@@ -363,6 +369,7 @@ class MissionGridWrapper(gym.Wrapper):
             is_first=False,
             is_last=terminated or truncated,
             is_terminal=terminated,
+            success=reward == 0,
         )
         return obs, reward, terminated or truncated, info
 
@@ -372,10 +379,13 @@ class MissionGridWrapper(gym.Wrapper):
     def encoded_current_mission(self):
         return encode_mission(self.env.unwrapped._build_mission())
 
-    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False):
+    def _parse_observation(self, obs, is_first=False, is_last=False, is_terminal=False, success=False):
         if "mission" in obs:
             obs["mission"] = self.encoded_current_mission()
         obs["is_first"] = is_first
         obs["is_last"] = is_last
         obs["is_terminal"] = is_terminal
+        # Ground-truth success (agent on the green square): the goal-grid envs' own
+        # reward is 0 there, but the trainer overwrites "reward" with the latent one.
+        obs["log_success"] = float(success)
         return obs

@@ -1,3 +1,5 @@
+from collections import defaultdict, deque
+
 import numpy as np
 import torch
 
@@ -40,6 +42,7 @@ class OnlineTrainer:
         # The policy is irrelevant for both world-model pretraining and
         # text-encoder distillation, so data is collected with random actions.
         self._random_actions = self._wm_only or self._train_text_only
+        self._success_window = int(getattr(config, "success_window", 100))
 
         self.her = isinstance(self.replay_buffer, HERBuffer)
 
@@ -124,6 +127,7 @@ class OnlineTrainer:
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
         log_metrics = {}
+        success = {}
         # cache is only used for video logging / open-loop prediction.
         cache = []
         agent_state = agent.get_initial_state(envs.env_num)
@@ -166,6 +170,7 @@ class OnlineTrainer:
                 trans["logit"] = agent_state["logit"]
             self._apply_reward(trans, agent.rssm)
             returns += trans["reward"][:, 0] * ~once_done
+            self._accumulate_success(trans, success, mask=~once_done)
 
             for key, value in trans.items():
                 if key.startswith("log_"):
@@ -181,6 +186,9 @@ class OnlineTrainer:
             if key == "log_success":
                 value = torch.clip(value, max=1.0)  # make sure 1.0 for success episode
             self.logger.scalar(f"episode/eval_{key[4:]}", value.mean())
+        # Env success is already logged above through its log_success key.
+        if "latent_success" in success:
+            self.logger.scalar("episode/eval_latent_success", success["latent_success"].float().mean())
         if cache is not None and "image" in cache:
             self.logger.video("eval_video", tools.to_np(cache["image"][:1]))
         if self.video_pred_log and cache is not None:
@@ -219,6 +227,11 @@ class OnlineTrainer:
             goal_shape = envs.observation_space["goal"].shape
             goals = torch.zeros((envs.env_num, *goal_shape), dtype=torch.float32, device=agent.device)
 
+        # Per-episode success flags, (B,) bool, and the rolling window of finished
+        # episodes' outcomes behind the success-rate curves.
+        success = {}
+        success_history = defaultdict(lambda: deque(maxlen=self._success_window))
+
         train_metrics = {}
         agent_state = agent.get_initial_state(envs.env_num)
         # (B, A)
@@ -238,6 +251,12 @@ class OnlineTrainer:
                             video_cache = []
                         self.logger.scalar("episode/score", returns[i])
                         self.logger.scalar("episode/length", lengths[i])
+                        for key, flags in success.items():
+                            hit = float(flags[i])
+                            success_history[key].append(hit)
+                            self.logger.scalar(f"episode/{key}", hit)
+                            self.logger.scalar(f"episode/{key}_rate", np.mean(success_history[key]))
+                            flags[i] = False
                         self.logger.write(step + i)  # to show all values on tensorboard
                         returns[i] = lengths[i] = 0
 
@@ -299,6 +318,7 @@ class OnlineTrainer:
 
             self.replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
+            self._accumulate_success(trans, success)
 
             episode_ids[done] += envs.env_num
 
@@ -322,6 +342,25 @@ class OnlineTrainer:
                         for name, param in agent._named_params.items():
                             self.logger.histogram(name, tools.to_np(param))
                     self.logger.write(step, fps=True)
+
+    def _accumulate_success(self, trans, success, mask=None):
+        """OR this step's success into the per-episode (B,) flags in `success`.
+
+        An episode succeeds if the condition holds at any step (the goal-grid envs
+        don't terminate on the goal). Two kinds are tracked:
+        - "success": ground truth from the env's `log_success` key.
+        - "latent_success": the goal-conditioned reward reached the goal type's
+          `success_reward` (only when the trainer computes that reward).
+        """
+        hits = {}
+        if "log_success" in trans:
+            hits["success"] = trans["log_success"][:, 0] > 0
+        if self.reward_function:
+            hits["latent_success"] = trans["reward"][:, 0] >= self._goal_spec.success_reward
+        for key, hit in hits.items():
+            if mask is not None:
+                hit = hit & mask
+            success[key] = success[key] | hit if key in success else hit.clone()
 
     def _apply_reward(self, trans, rssm=None):
         if self.reward_function:

@@ -423,9 +423,10 @@ class TestOneHotDirection:
 class _FakeMiniGridEnv(gym.Env):
     """Minimal MiniGrid-compatible env for testing MiniGridWrapper."""
 
-    def __init__(self, terminated=False, truncated=False):
+    def __init__(self, terminated=False, truncated=False, reward=-1.0):
         self._terminated = terminated
         self._truncated = truncated
+        self._reward = reward
         self.observation_space = gym.spaces.Dict({
             "image": gym.spaces.Box(0, 255, (8, 8, 3), dtype=np.uint8),
             "direction": gym.spaces.Discrete(4),
@@ -439,7 +440,7 @@ class _FakeMiniGridEnv(gym.Env):
 
     def step(self, action):
         obs = {"image": np.zeros((8, 8, 3), dtype=np.uint8), "direction": 1, "mission": "go"}
-        return obs, 0.0, self._terminated, self._truncated, {}
+        return obs, self._reward, self._terminated, self._truncated, {}
 
 
 class TestMiniGridWrapper:
@@ -473,6 +474,20 @@ class TestMiniGridWrapper:
         assert obs["is_last"] is True
         assert obs["is_terminal"] is False
         assert done is True
+
+    @pytest.mark.parametrize("wrapper", [MiniGridWrapper, MissionGridWrapper])
+    def test_log_success_in_observation_space(self, wrapper):
+        wrapped = wrapper(_FakeMissionEnv())
+        assert wrapped.observation_space["log_success"].shape == (1,)
+
+    @pytest.mark.parametrize("wrapper", [MiniGridWrapper, MissionGridWrapper])
+    @pytest.mark.parametrize("reward, expected", [(0.0, 1.0), (-1.0, 0.0)])
+    def test_log_success_set_when_on_goal(self, wrapper, reward, expected):
+        # The goal-grid envs return reward 0 exactly on the green square.
+        wrapped = wrapper(_FakeMissionEnv(reward=reward))
+        assert wrapped.reset()["log_success"] == 0.0
+        obs, _, _, _ = wrapped.step(0)
+        assert obs["log_success"] == expected
 
 
 # ---------------------------------------------------------------------------

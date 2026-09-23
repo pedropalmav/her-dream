@@ -38,6 +38,7 @@ class GoalSpec:
     goal_repr: str  # "sample" | "argmax" | "logit" — the goal tensor
     scope: str  # "first_row" | "full"          — actor/critic goal input
     uses_threshold: bool = False  # log_prob only — appends a threshold one-hot
+    success_reward: float = 0.0  # a step counts as latent success when reward >= this
 
 
 def make_goal_spec(config) -> GoalSpec:
@@ -53,6 +54,7 @@ def make_goal_spec(config) -> GoalSpec:
         goal_repr=config.goal_repr,
         scope=config.scope,
         uses_threshold=bool(getattr(config, "uses_threshold", False)),
+        success_reward=float(getattr(config, "success_reward", 0.0)),
     )
     if spec.state_repr not in _STATE_REPRS:
         raise ValueError(f"Invalid state_repr {spec.state_repr!r} for goal_type {spec.goal_type!r}")
@@ -120,6 +122,7 @@ def default_descriptors(goal_type: str) -> dict:
         "goal_repr": cfg.goal_repr,
         "scope": cfg.scope,
         "uses_threshold": bool(cfg.get("uses_threshold", False)),
+        "success_reward": float(cfg.get("success_reward", 0.0)),
     }
 
 

@@ -4,3 +4,4 @@ state_repr: stoch # stoch | dist | logit | prob   (reward fn's state arg)
 goal_repr: sample # sample | argmax | logit | prob (the goal tensor)
 scope: first_row # first_row | full              (actor/critic goal input)
 uses_threshold: false
+success_reward: 0.0 # reward >= this counts as latent success (logged, not trained on)

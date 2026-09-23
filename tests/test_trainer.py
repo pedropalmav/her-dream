@@ -1087,3 +1087,101 @@ class TestBegin:
             (make_trans(1), torch.ones(1, dtype=torch.bool)),
         ]
         t.begin(agent)  # Must complete without error
+
+
+# ---------------------------------------------------------------------------
+# Success-rate logging
+# ---------------------------------------------------------------------------
+
+
+def _success_trans(env_success, reward, num_envs=1):
+    """Trans carrying the env's log_success flag and a (latent) reward per env."""
+    return make_trans(
+        num_envs,
+        extra={
+            "log_success": torch.tensor(env_success, dtype=torch.float32).view(num_envs, 1),
+            "reward": torch.tensor(reward, dtype=torch.float32).view(num_envs, 1),
+        },
+    )
+
+
+class TestAccumulateSuccess:
+    def test_env_success_is_sticky_within_episode(self):
+        t = make_trainer()
+        success = {}
+        t._accumulate_success(_success_trans([1.0, 0.0], [-1.0, -1.0], num_envs=2), success)
+        t._accumulate_success(_success_trans([0.0, 0.0], [-1.0, -1.0], num_envs=2), success)
+        assert success["success"].tolist() == [True, False]
+
+    def test_no_latent_success_without_reward_function(self):
+        t = make_trainer()
+        success = {}
+        t._accumulate_success(_success_trans([0.0], [0.0]), success)
+        assert "latent_success" not in success
+
+    def test_latent_success_uses_goal_type_success_reward(self):
+        t = make_trainer(make_config(goal_type="max_cosine"), reward=MagicMock())
+        success = {}
+        t._accumulate_success(_success_trans([0.0, 0.0], [0.5, 0.995], num_envs=2), success)
+        assert success["latent_success"].tolist() == [False, True]
+
+    def test_mask_excludes_finished_envs(self):
+        t = make_trainer(reward=MagicMock())
+        success = {}
+        mask = torch.tensor([True, False])
+        t._accumulate_success(_success_trans([1.0, 1.0], [0.0, 0.0], num_envs=2), success, mask=mask)
+        assert success["success"].tolist() == [True, False]
+        assert success["latent_success"].tolist() == [True, False]
+
+
+class TestSuccessRateLogging:
+    def _run_two_episodes(self, ep1, ep2, window=100):
+        """Run begin() over two 2-step episodes; each ep is (env_success, reward) per step."""
+        logger = MagicMock()
+        t = _make_begin_trainer({"steps": 3, "batch_length": 1000, "success_window": window})
+        t.logger = logger
+        # Track latent success but keep the trans rewards as given (no overwrite).
+        t.reward_function = MagicMock()
+        t._apply_reward = lambda trans, rssm=None: None
+        F, T = torch.zeros(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool)
+        t.train_envs.step.side_effect = [
+            (_success_trans(*ep1[0]), F),
+            (_success_trans(*ep1[1]), T),
+            (_success_trans(*ep2[0]), F),
+            (_success_trans(*ep2[1]), T),
+            (_success_trans(0.0, -1.0), F),
+            (_success_trans(0.0, -1.0), T),
+        ]
+        t.begin(make_mock_agent())
+        logged = {}
+        for c in logger.scalar.call_args_list:
+            logged.setdefault(c[0][0], []).append(float(c[0][1]))
+        return logged
+
+    def test_rolling_rate_over_episodes(self):
+        # ep1 reaches the square mid-episode (sticky), ep2 never does.
+        logged = self._run_two_episodes([(1.0, -1.0), (0.0, -1.0)], [(0.0, -1.0), (0.0, -1.0)])
+        assert logged["episode/success"] == [1.0, 0.0]
+        assert logged["episode/success_rate"] == [1.0, 0.5]
+
+    def test_latent_rate_tracked_separately(self):
+        logged = self._run_two_episodes([(0.0, -1.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, -1.0)])
+        assert logged["episode/latent_success_rate"] == [1.0, 1.0]
+        assert logged["episode/success_rate"] == [0.0, 0.0]
+
+    def test_window_limits_history(self):
+        logged = self._run_two_episodes([(1.0, -1.0), (0.0, -1.0)], [(0.0, -1.0), (0.0, -1.0)], window=1)
+        assert logged["episode/success_rate"] == [1.0, 0.0]
+
+    def test_eval_logs_latent_success(self):
+        logger = MagicMock()
+        t = make_trainer(logger=logger, reward=MagicMock())
+        t._apply_reward = lambda trans, rssm=None: None
+        t.eval_envs.step.return_value = (
+            _success_trans([1.0, 0.0], [0.0, -1.0], num_envs=2),
+            torch.ones(2, dtype=torch.bool),
+        )
+        t.eval(make_mock_agent(), train_step=0)
+        scalar_calls = {c[0][0]: float(c[0][1]) for c in logger.scalar.call_args_list}
+        assert scalar_calls["episode/eval_latent_success"] == 0.5
+        assert scalar_calls["episode/eval_success"] == 0.5

@@ -86,6 +86,38 @@ class TestLavaRuns:
         cfg = pinned_layout_cfg(env_cfg(task="lava-grid_"), goal_pos=(8, 1), lava_pos=[])
         assert cfg.lava_pos == []
 
+    def test_pinned_spawn_overrides_agent_start_random(self):
+        """A run trained with agent_start_random=True must still spawn where pinned."""
+        cfg = pinned_layout_cfg(env_cfg(agent_start_random=True), agent_start_pos=(2, 3))
+        assert cfg.agent_start_random is False
+
+    def test_agent_start_random_kept_when_spawn_not_pinned(self):
+        cfg = pinned_layout_cfg(env_cfg(agent_start_random=True), goal_pos=(8, 1))
+        assert cfg.agent_start_random is True
+
+    def test_pinned_spawn_is_honoured_by_a_random_start_lava_env(self):
+        raw = OmegaConf.to_container(env_cfg(task="lava-grid_"), resolve=True)
+        raw.update(
+            action_repeat=1,
+            time_limit=40,
+            render_mode="rgb_array",
+            mission_text=False,
+            agent_start_random=True,
+            stochastic_classes=4,
+            stochastic_rows=2,
+            goal_type="full",
+        )
+        cfg = pinned_layout_cfg(
+            OmegaConf.create(goals.with_default_descriptors(raw)),
+            goal_pos=(8, 1),
+            agent_start_pos=(2, 3),
+            lava_pos=[(5, 5)],
+        )
+        env = make_env(cfg, 0)
+        for _ in range(5):
+            env.reset()
+            assert tuple(int(v) for v in env.unwrapped.agent_pos) == (2, 3)
+
     def test_pinned_layout_builds_a_real_env(self):
         raw = OmegaConf.to_container(env_cfg(task="lava-grid_"), resolve=True)
         raw.update(

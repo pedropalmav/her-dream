@@ -47,6 +47,9 @@ def pinned_layout_cfg(env_cfg, *, goal_pos=None, agent_start_pos=None, agent_sta
         cfg.goal_pos_x, cfg.goal_pos_y = int(goal_pos[0]), int(goal_pos[1])
     if agent_start_pos is not None:
         cfg.agent_start_pos_x, cfg.agent_start_pos_y = int(agent_start_pos[0]), int(agent_start_pos[1])
+        # A run trained with agent_start_random=True would otherwise ignore the pinned
+        # spawn (envs/__init__.py resamples it), and the agent starts somewhere else.
+        cfg.agent_start_random = False
     if agent_start_dir is not None:
         cfg.agent_start_dir = int(agent_start_dir)
     return cfg

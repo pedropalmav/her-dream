@@ -284,6 +284,28 @@ class TestTerminatingEnvValidation:
         train.main.__wrapped__(cfg)
         assert "reward_offset" not in capsys.readouterr().out
 
+    def test_lava_without_cont_head_warns_but_runs(self, noop, cfg, capsys):
+        """Without the continue head no imagined episode ends, so the actor never
+        sees lava as terminal."""
+        cfg.env.task = "lava-grid_"
+        cfg.reward_offset = 1.0
+        cfg.model.use_cont_head = False
+        train.main.__wrapped__(cfg)
+        assert "use_cont_head" in capsys.readouterr().out
+
+    def test_lava_with_cont_head_does_not_warn(self, noop, cfg, capsys):
+        cfg.env.task = "lava-grid_"
+        cfg.reward_offset = 1.0
+        cfg.model.use_cont_head = True
+        train.main.__wrapped__(cfg)
+        assert "use_cont_head" not in capsys.readouterr().out
+
+    def test_non_terminating_suite_does_not_warn_about_cont_head(self, noop, cfg, capsys):
+        cfg.env.task = "random-goal_"
+        cfg.model.use_cont_head = False
+        train.main.__wrapped__(cfg)
+        assert "use_cont_head" not in capsys.readouterr().out
+
     def test_missing_task_key_is_tolerated(self, noop, cfg):
         """Archived configs read back by evaluate.py / experiments/ predate this check."""
         del cfg.env.task

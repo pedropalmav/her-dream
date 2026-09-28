@@ -132,6 +132,17 @@ def _validate_terminating_env(config):
             "dying. Set reward_offset=1.0 unless measuring exactly that."
         )
 
+    # Without the continue head `Dreamer._imagination_cont` is all ones: no imagined
+    # episode ever ends, so the actor (trained only in imagination) never learns that
+    # lava is terminal. Only the replay critic sees `is_terminal`.
+    if not getattr(config.model, "use_cont_head", False):
+        print(
+            f"[train] WARNING: the {suite} suite can terminate (stepping into lava) but "
+            "model.use_cont_head=False, so every imagined step is assumed to continue and the "
+            "actor never sees termination. Set model.use_cont_head=True — on the WM run too, "
+            "since a frozen WM without a trained head cannot provide one."
+        )
+
 
 # Everything the `ActorCritic` sub-module owns: actor, critic, their frozen
 # inference clones, the slow critic target and the return EMA.

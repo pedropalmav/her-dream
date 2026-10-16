@@ -11,8 +11,7 @@ from minigrid.core.constants import DIR_TO_VEC
 from omegaconf import OmegaConf
 
 import her_dream.goals as goals
-from experiments.common import has_lava, pinned_layout_cfg, suite_of
-from experiments.goal_observation_eval import _sample_lava, bfs_plan
+from experiments.common import bfs_plan, has_lava, pinned_layout_cfg, sample_lava, suite_of
 from her_dream.envs import make_env
 
 FORWARD = 2
@@ -177,14 +176,14 @@ class TestOracleRoutesAroundLava:
 
 class TestSampleLava:
     def test_count(self):
-        assert len(_sample_lava(10, 4, np.random.default_rng(0))) == 4
+        assert len(sample_lava(10, 4, np.random.default_rng(0))) == 4
 
     def test_cells_are_distinct(self):
-        cells = _sample_lava(10, 8, np.random.default_rng(1))
+        cells = sample_lava(10, 8, np.random.default_rng(1))
         assert len(set(cells)) == len(cells)
 
     def test_avoid_is_respected(self):
         avoid = [(1, 1), (8, 1), (4, 4)]
         for seed in range(20):
-            cells = _sample_lava(10, 5, np.random.default_rng(seed), avoid=avoid)
+            cells = sample_lava(10, 5, np.random.default_rng(seed), avoid=avoid)
             assert set(cells).isdisjoint(set(avoid))

@@ -16,6 +16,11 @@ run's task), because each env poses a different question:
     goal-conditioning ("go to the state this z stands for") rather than the
     built-in reach-the-square task the env rewards. Every pair is at least 4
     actions from the spawn, so none is solvable by standing still.
+  * `lava_grid` — the `random_goal` tasks, pair for pair, with the run's `n_lava`
+    lava cells pinned in each (off the spawn, the goal and the square, and never
+    walling the goal off). The env is the run's own lava env, not a lava-free
+    stand-in, since its WM only ever saw grids with lava. Lava terminates the
+    episode, so each driver also reports how often it died.
   * `fixed_goal` — the layout never moves, so the tasks are **enumerated**: from
     the one spawn the agent trained at, every interior cell in every facing (the
     `sweep` block: 252 poses on a 10x10 room), giving a complete map of the
@@ -97,6 +102,8 @@ from experiments.common import (  # noqa: E402
     dump_json,
     encode_goal_image,
     groups_matched,
+    has_lava,
+    lava_pos,
     load_agent,
     make_suite,
     oracle_z_check,
@@ -144,6 +151,8 @@ def drive(agent, spec, env, policy, goal, target_pos, target_dir, device, max_st
     """
     base = unwrap_env(env)
     S = goal.shape[1]
+    lava = set(lava_pos(base))
+    died_at = None
     steps_to_cell, steps_to_pose = None, None
     min_dist, groups_seen, rewards = None, [], []
     conf = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
@@ -166,10 +175,14 @@ def drive(agent, spec, env, policy, goal, target_pos, target_dir, device, max_st
 
         if pose_match:
             break  # the success event: nothing after it counts
+        if step.done and pos in lava:
+            died_at = step.t  # stepped into lava: the env terminated the episode
 
     return {
         "success": steps_to_pose is not None,
         "reached_cell": steps_to_cell is not None,
+        "died": died_at is not None,
+        "died_at": died_at,
         "steps_to_pose": steps_to_pose,
         "steps_to_cell": steps_to_cell,
         "min_dist": min_dist,
@@ -186,10 +199,20 @@ def run_pair(agent, spec, env_cfg, pair, device, max_steps, rng, base_seed, skip
     (spawn_pos, spawn_dir) = tuple(pair["spawn"][0]), pair["spawn"][1]
     (target_pos, target_dir) = tuple(pair["goal"][0]), pair["goal"][1]
 
+    lava = [tuple(cell) for cell in pair.get("lava", [])]
     episode_cfg = pinned_layout_cfg(
-        env_cfg, goal_pos=pair["square"], agent_start_pos=spawn_pos, agent_start_dir=spawn_dir
+        env_cfg,
+        goal_pos=pair["square"],
+        agent_start_pos=spawn_pos,
+        agent_start_dir=spawn_dir,
+        lava_pos=lava if has_lava(env_cfg) else None,
     )
     env = make_env(episode_cfg, 0)
+    # The goal image copies the live episode's lava (GoalImageObservation reads
+    # `lava_positions`), which LavaGrid only fills on reset: encoded before one,
+    # the goal would depict a lava-free grid. The layout is pinned, so this reset
+    # builds the same room every later one does.
+    env.reset()
     # The green square sits at the pair's cell in BOTH the goal image and the live
     # episode, so the goal is consistent with the episode by construction; only the
     # target cell is independent of the square.
@@ -205,6 +228,7 @@ def run_pair(agent, spec, env_cfg, pair, device, max_steps, rng, base_seed, skip
         "plan_len": pair["plan_len"],
         "on_square": pair["on_square"],
         "block": pair["block"],
+        "lava": pair.get("lava", []),
         "policy": drive(
             agent, spec, env, actor_policy(agent, goal), goal, target_pos, target_dir, device, max_steps, seed
         ),
@@ -215,7 +239,7 @@ def run_pair(agent, spec, env_cfg, pair, device, max_steps, rng, base_seed, skip
         )
     if not skip_oracle:
         # The full-pose plan, unlike the cell-only distance the suite filters on.
-        plan = bfs_plan(size, spawn_pos, spawn_dir, target_pos, target_dir)
+        plan = bfs_plan(size, spawn_pos, spawn_dir, target_pos, target_dir, lava=lava)
         record["oracle"] = oracle_z_check(agent, spec, env, goal, target_pos, target_dir, plan, device, seed=seed)
     return record
 
@@ -230,6 +254,7 @@ def _rates(records, key):
     return {
         "success_rate": float(np.mean([r["success"] for r in runs])),
         "reach_cell_rate": float(np.mean([r["reached_cell"] for r in runs])),
+        "death_rate": float(np.mean([r["died"] for r in runs])),
         "mean_steps_to_pose": float(np.mean(steps)) if steps else None,
         "median_steps_to_pose": float(np.median(steps)) if steps else None,
         "mean_min_dist": float(np.mean([r["min_dist"] for r in runs])),
@@ -293,7 +318,7 @@ def summarize(records, S, has_random, has_oracle):
 
 def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip_random, skip_oracle):
     """Run the whole suite against one already-loaded checkpoint, or None if it cannot be driven."""
-    if "goal" not in str(env_cfg.task):
+    if not str(env_cfg.task).startswith(("random-goal", "fixed-goal", "lava-grid")):
         print(f"  ! {env_cfg.task} is not a goal-grid task; the layout override will not apply")
     size = int(env_cfg.env_size)
     spec = goals.make_goal_spec(config.model)
@@ -336,8 +361,12 @@ def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip
     blocks = summary["policy_by_block"]
     if len(blocks) > 1:
         line += " [" + ", ".join(f"{b} {100 * blocks[b]['success_rate']:.1f}%" for b in BLOCKS if b in blocks) + "]"
+    if has_lava(env_cfg):
+        line += f" (died {100 * summary['policy']['death_rate']:.1f}%)"
     if not skip_random:
         line += f" vs random {100 * summary['random']['success_rate']:.1f}%"
+        if has_lava(env_cfg):
+            line += f" (died {100 * summary['random']['death_rate']:.1f}%)"
     if not skip_oracle:
         oracle = summary["oracle"]
         line += f" | oracle full {100 * oracle['full_match_rate']:.0f}% ({oracle['mean_groups']:.1f}/{S} groups)"
@@ -465,6 +494,8 @@ def plot_map(all_results, suite, path):
 
 def suite_for(env_cfg) -> str:
     """The suite a run's task calls for."""
+    if has_lava(env_cfg):
+        return "lava_grid"
     return "fixed_goal" if str(env_cfg.task).startswith("fixed-goal") else "random_goal"
 
 
@@ -482,6 +513,7 @@ def run_layout(env_cfg) -> dict:
         "size": int(env_cfg.env_size),
         "spawn": ((int(env_cfg.agent_start_pos_x), int(env_cfg.agent_start_pos_y)), int(env_cfg.agent_start_dir)),
         "square": square,
+        "n_lava": int(env_cfg.get("n_lava", 0)) if has_lava(env_cfg) else 0,
     }
 
 
@@ -495,6 +527,10 @@ def layout_mismatch(layout, suite) -> str | None:
     """
     if layout["size"] != suite["size"]:
         return f"env_size={layout['size']} differs from the suite's {suite['size']}"
+    # A lava run can only be driven with its own lava pinned, and a lava-free run
+    # cannot be handed any, so the two never share a suite.
+    if layout["n_lava"] != suite.get("n_lava", 0):
+        return f"n_lava={layout['n_lava']} differs from the suite's {suite.get('n_lava', 0)}"
     if "sweep" not in suite:
         return None
     if layout["square"] is None:
@@ -514,7 +550,7 @@ def main():
     parser.add_argument("--logdir", required=True, nargs="+", help="One or more run dirs to evaluate")
     parser.add_argument(
         "--suite",
-        choices=["auto", "random_goal", "fixed_goal"],
+        choices=["auto", "random_goal", "lava_grid", "fixed_goal"],
         default="auto",
         help="Which benchmark suite to run (default: from the first run's task)",
     )
@@ -541,7 +577,13 @@ def main():
             # first run and reuse it for every checkpoint — that shared identity
             # is exactly what makes the numbers comparable.
             name = args.suite if args.suite != "auto" else suite_for(env_cfg)
-            pairs, suite = make_suite(name, layout["size"], spawn=layout["spawn"], square=layout["square"])
+            pairs, suite = make_suite(
+                name, layout["size"], spawn=layout["spawn"], square=layout["square"], n_lava=layout["n_lava"]
+            )
+            # The first run is checked like every later one: `--suite random_goal`
+            # on a lava run would otherwise drive it on lava-free pairs.
+            if (mismatch := layout_mismatch(layout, suite)) is not None:
+                raise SystemExit(f"  ! the first run cannot be scored on the {name} suite: {mismatch}")
             if args.pairs:
                 pairs = pairs[: args.pairs]
             suite["evaluated"] = len(pairs)

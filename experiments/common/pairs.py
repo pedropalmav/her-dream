@@ -13,6 +13,12 @@ Two suites, one per env, because the question each env poses is different:
     goal-z stands for", not the built-in reach-the-square task the env rewards.
     A pair is kept only when the goal is at least `min_plan_len` actions away, so
     an agent cannot score by standing still or dithering next to its spawn.
+  * **`lava_grid`** (`generate_lava_pairs`) — the `random_goal` suite, task for
+    task, plus `n_lava` lava cells pinned per pair. The spawn/goal/square stream is
+    the very same one, so a lava run and a lava-free run are asked the same
+    navigation questions and differ only in the hazards. Lava is drawn from its own
+    seed, avoids the spawn, the goal and the square, and is redrawn until the goal
+    is still reachable around it; `plan_len` is then the detour around the lava.
   * **`fixed_goal`** (`generate_fixed_goal_pairs`) — the layout never moves, so
     the tasks can be *enumerated*: from the one spawn the agent trained at, every
     interior cell in every facing (the **sweep** block, 252 poses on a 10x10
@@ -20,22 +26,23 @@ Two suites, one per env, because the question each env poses is different:
     of it. The remaining pairs are drawn at random as above, to also measure
     spawns the agent never trained from.
 
-`PAIRS_SEED` / `FIXED_SEED` are frozen on purpose: changing one silently
+`PAIRS_SEED` / `FIXED_SEED` / `LAVA_SEED` are frozen on purpose: changing one silently
 invalidates every success rate already recorded against that suite.
 """
 
 import numpy as np
 
-from .grid import bfs_plan, sample_cell
+from .grid import bfs_plan, sample_cell, sample_lava
 
 PAIRS_SEED = 20260811
 FIXED_SEED = 20260812
+LAVA_SEED = 20261015
 N_PAIRS = 1000
 MIN_PLAN_LEN = 4
 
 
-def _record(index, spawn_pos, spawn_dir, goal_pos, goal_dir, square, plan_len, block):
-    """One benchmark pair, in the schema both suites share."""
+def _record(index, spawn_pos, spawn_dir, goal_pos, goal_dir, square, plan_len, block, lava=()):
+    """One benchmark pair, in the schema every suite shares (`lava` is empty off the lava suite)."""
     return {
         "index": index,
         "spawn": [list(spawn_pos), int(spawn_dir)],
@@ -44,6 +51,7 @@ def _record(index, spawn_pos, spawn_dir, goal_pos, goal_dir, square, plan_len, b
         "plan_len": int(plan_len),
         "on_square": tuple(goal_pos) == tuple(square),
         "block": block,
+        "lava": [[int(x), int(y)] for x, y in lava],
     }
 
 
@@ -81,6 +89,41 @@ def generate_pairs(size: int, n: int = N_PAIRS, seed: int = PAIRS_SEED, min_plan
             continue
 
         pairs.append(_record(len(pairs), spawn_pos, spawn_dir, goal_pos, goal_dir, square, len(plan), "random"))
+    return pairs
+
+
+def generate_lava_pairs(
+    size: int,
+    n_lava: int,
+    n: int = N_PAIRS,
+    seed: int = PAIRS_SEED,
+    lava_seed: int = LAVA_SEED,
+    min_plan_len: int = MIN_PLAN_LEN,
+) -> list:
+    """The `lava_grid` suite: `generate_pairs`' tasks, each with `n_lava` lava cells pinned.
+
+    The tasks come from `generate_pairs` with the same `seed`, untouched, so pair
+    `i` here is pair `i` of the `random_goal` suite plus lava. The lava has its own
+    random stream (`lava_seed`), so drawing it never shifts which tasks are chosen.
+
+    A lava cell may not sit on the spawn (the env refuses it), the square (same) or
+    the goal (reaching it would kill the agent). It is redrawn until a lava-free
+    route to the goal cell remains, and `plan_len` becomes that route's length:
+    lava can only lengthen it, so the `min_plan_len` filter still holds.
+    """
+    rng = np.random.default_rng(lava_seed)
+    pairs = []
+    for pair in generate_pairs(size, n=n, seed=seed, min_plan_len=min_plan_len):
+        (spawn_pos, spawn_dir), (goal_pos, goal_dir) = pair["spawn"], pair["goal"]
+        avoid = [tuple(spawn_pos), tuple(goal_pos), tuple(pair["square"])]
+        while True:
+            lava = sample_lava(size, n_lava, rng, avoid=avoid)
+            plan = bfs_plan(size, spawn_pos, spawn_dir, goal_pos, target_dir=None, lava=lava)
+            if plan is not None:
+                break
+        pairs.append(
+            _record(pair["index"], spawn_pos, spawn_dir, goal_pos, goal_dir, pair["square"], len(plan), "random", lava)
+        )
     return pairs
 
 
@@ -155,17 +198,23 @@ def suite_meta(size: int, n: int = N_PAIRS, seed: int = PAIRS_SEED, min_plan_len
     return {"size": int(size), "n": int(n), "seed": int(seed), "min_plan_len": int(min_plan_len)}
 
 
-def make_suite(name: str, size: int, *, spawn=None, square=None, n: int = N_PAIRS) -> tuple:
+def make_suite(name: str, size: int, *, spawn=None, square=None, n_lava: int = 0, n: int = N_PAIRS) -> tuple:
     """Build the named suite, returning `(pairs, meta)`.
 
     `meta` describes the suite completely enough that a result file says which
     questions produced it — including, for `fixed_goal`, the layout the sweep was
     enumerated against, so a caller can refuse to score two runs whose rooms
     differ. `spawn` (`((x, y), dir)`) and `square` (`(x, y)`) are read off the
-    evaluated run's env config and are required for `fixed_goal` only.
+    evaluated run's env config and are required for `fixed_goal` only; `n_lava`
+    likewise, for `lava_grid`.
     """
     if name == "random_goal":
         return generate_pairs(size, n=n), {**suite_meta(size, n=n), "name": name}
+    if name == "lava_grid":
+        if n_lava < 1:
+            raise ValueError("the lava_grid suite needs the run's n_lava (>= 1)")
+        meta = {**suite_meta(size, n=n), "name": name, "n_lava": int(n_lava), "lava_seed": LAVA_SEED}
+        return generate_lava_pairs(size, n_lava, n=n), meta
     if name == "fixed_goal":
         if spawn is None or square is None:
             raise ValueError("the fixed_goal suite needs the run's spawn pose and green-square position")
@@ -178,4 +227,4 @@ def make_suite(name: str, size: int, *, spawn=None, square=None, n: int = N_PAIR
             "sweep": sum(p["block"] == "sweep" for p in pairs),
         }
         return pairs, meta
-    raise ValueError(f"unknown suite {name!r} (expected 'random_goal' or 'fixed_goal')")
+    raise ValueError(f"unknown suite {name!r} (expected 'random_goal', 'lava_grid' or 'fixed_goal')")

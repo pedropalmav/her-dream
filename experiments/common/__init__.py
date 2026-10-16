@@ -8,7 +8,7 @@ Import the pieces you need, e.g.::
 
 from .cli import add_common_args
 from .envs import agent_pose, goal_pos, has_lava, lava_pos, pinned_layout_cfg, suite_of, unwrap_env
-from .grid import FORWARD, TURN_LEFT, TURN_RIGHT, bfs_plan, sample_cell, successors, walkable
+from .grid import FORWARD, TURN_LEFT, TURN_RIGHT, bfs_plan, sample_cell, sample_lava, successors, walkable
 from .io import dump_json, experiment_outdir, save_fig
 from .loading import env_factory, load_agent
 from .metrics import (
@@ -24,10 +24,12 @@ from .obs import encode_goal_image, onehot_action, preprocess_obs, stack_obs
 from .oracle import oracle_z_check
 from .pairs import (
     FIXED_SEED,
+    LAVA_SEED,
     MIN_PLAN_LEN,
     N_PAIRS,
     PAIRS_SEED,
     generate_fixed_goal_pairs,
+    generate_lava_pairs,
     generate_pairs,
     make_suite,
     suite_meta,
@@ -49,6 +51,7 @@ __all__ = [
     "TURN_RIGHT",
     "bfs_plan",
     "sample_cell",
+    "sample_lava",
     "successors",
     "walkable",
     "dump_json",
@@ -69,10 +72,12 @@ __all__ = [
     "stack_obs",
     "oracle_z_check",
     "FIXED_SEED",
+    "LAVA_SEED",
     "MIN_PLAN_LEN",
     "N_PAIRS",
     "PAIRS_SEED",
     "generate_fixed_goal_pairs",
+    "generate_lava_pairs",
     "generate_pairs",
     "make_suite",
     "suite_meta",

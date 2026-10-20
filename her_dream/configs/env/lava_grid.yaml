@@ -1,0 +1,46 @@
+# cookie-env's LavaGrid: the random_goal grid plus lava cells that end the episode
+# on contact. It is the only env here that can terminate on something the agent
+# does, so it needs the top-level `reward_offset=1.0` — with the historical
+# {-1, 0} rewards, dying stops the accumulation of -1s and is worth more than
+# surviving. See "reward_offset" in CLAUDE.md; train.py warns if it is left at 0.
+#
+#   python3 train.py env=lava_grid reward_offset=1.0
+task: "lava-grid_"
+steps: 4.1e5
+env_num: 1
+action_repeat: 1
+eval_episode_num: 10
+train_ratio: 512
+time_limit: 1000
+
+seed: ${seed}
+device: ${device}
+
+size: [64, 64]
+encoder:
+  mlp_keys: "direction"
+  cnn_keys: "image"
+decoder:
+  mlp_keys: "direction"
+  cnn_keys: "image"
+
+env_size: 10
+agent_start_dir: 0
+agent_start_pos_x: 1
+agent_start_pos_y: 1
+# null on either axis means the green square is resampled every episode; set both
+# to pin it, exactly as in the random_goal / fixed_goal presets.
+goal_pos_x: null
+goal_pos_y: null
+# Lava cells, resampled on every reset. They are placed after the goal and the
+# agent, so they can never spawn on either.
+n_lava: 1
+# Pins the lava to an explicit list of [x, y] cells instead of resampling it; null
+# (the default) resamples `n_lava` of them. Training leaves this null — it exists so
+# the analysis scripts under experiments/ can dictate a whole layout.
+lava_pos: null
+# If True, the agent spawns at a uniformly random interior cell (and random
+# direction) every episode, ignoring agent_start_pos_x/y/dir. Used to widen the
+# WM training distribution so both the agent and the green square cover the grid.
+agent_start_random: False
+render_mode: "rgb_array"

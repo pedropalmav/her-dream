@@ -354,6 +354,17 @@ wheels = [
 ]
 
 [[package]]
+name = "cookie-env"
+version = "0.7.0"
+source = { git = "https://github.com/pedropalmav/cookie-env.git?rev=900ccd9499103a5cbeb61168901de0489fa88662#900ccd9499103a5cbeb61168901de0489fa88662" }
+dependencies = [
+    { name = "gymnasium" },
+    { name = "minigrid" },
+    { name = "numpy" },
+    { name = "pygame" },
+]
+
+[[package]]
 name = "coverage"
 version = "7.14.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1109,6 +1120,7 @@ source = { editable = "." }
 dependencies = [
     { name = "ale-py" },
     { name = "av" },
+    { name = "cookie-env" },
     { name = "crafter" },
     { name = "dash" },
     { name = "dm-control" },
@@ -1150,6 +1162,7 @@ dev = [
 requires-dist = [
     { name = "ale-py", specifier = "==0.11.2" },
     { name = "av", specifier = ">=17.0.0" },
+    { name = "cookie-env", git = "https://github.com/pedropalmav/cookie-env.git?rev=900ccd9499103a5cbeb61168901de0489fa88662" },
     { name = "crafter", specifier = "==1.8.0" },
     { name = "dash", specifier = ">=4.1.0" },
     { name = "dm-control", specifier = "==1.0.28" },

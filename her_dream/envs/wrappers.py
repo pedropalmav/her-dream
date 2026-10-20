@@ -242,6 +242,11 @@ class GoalImageObservation(gym.Wrapper):
     `goal_position` attribute. `env_factory` is a zero-arg callable returning
     the auxiliary goal env used for rendering (it must honour
     `goal_pos` / `agent_start_pos`, e.g. fixed_goal.make_fixed_goal_env).
+
+    An env that also exposes `lava_positions` (cookie-env's `LavaGrid`) has that
+    layout copied onto the auxiliary env too, so the rendered goal carries this
+    episode's lava rather than a fresh sample of it. The factory must then accept
+    `lava_pos` as well.
     """
 
     def __init__(self, env, env_factory):
@@ -262,7 +267,20 @@ class GoalImageObservation(gym.Wrapper):
         known and the agent's arrival can be checked against it.
         """
         goal_pos = self.env.get_wrapper_attr("goal_position")
-        return self._generator.observation(goal_pos, agent_pos=agent_pos, agent_dir=agent_dir)
+        return self._generator.observation(
+            goal_pos, agent_pos=agent_pos, agent_dir=agent_dir, lava_pos=self._live_lava()
+        )
+
+    def _live_lava(self):
+        """This episode's lava cells, or None on an env that has no lava.
+
+        Probed rather than configured: the same wrapper serves the goal-grid envs
+        and cookie-env's LavaGrid, and only the latter answers to the attribute.
+        """
+        try:
+            return self.env.get_wrapper_attr("lava_positions")
+        except AttributeError:
+            return None
 
 
 class NoMission(gym.ObservationWrapper):

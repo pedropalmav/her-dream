@@ -46,7 +46,7 @@ import her_dream.tools as tools
 from her_dream.buffers import make_buffer
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_envs
-from her_dream.rewards import make_reward
+from her_dream.rewards import make_reward, reward_offset
 from her_dream.trainer import OnlineTrainer
 
 warnings.filterwarnings("ignore")
@@ -99,6 +99,49 @@ def validate_config(config):
 
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
+
+    _validate_terminating_env(config)
+
+
+# Suites whose episodes can end on something the agent does, rather than only on
+# the time limit. Kept as a tuple so adding one is a single edit.
+_TERMINATING_SUITES = ("lava-grid",)
+
+# Goal types whose reward is already non-negative, so ending an episode is never worth
+# more than surviving it and `reward_offset` has nothing to fix (see CLAUDE.md,
+# "reward_offset"). Warning about the offset on these would be noise.
+_NON_NEGATIVE_GOAL_TYPES = ("prob", "max_cosine")
+
+
+def _validate_terminating_env(config):
+    """Warn when an env that can terminate runs under the historical rewards.
+
+    A warning, not an error, on purpose: running lava under {-1, 0} is the
+    measurement that motivated the offset in the first place, so it has to stay
+    reachable.
+    """
+    suite = str(getattr(config.env, "task", "")).split("_", 1)[0]
+    if suite not in _TERMINATING_SUITES:
+        return
+
+    if reward_offset(config) == 0.0 and str(config.goal_type) not in _NON_NEGATIVE_GOAL_TYPES:
+        print(
+            f"[train] WARNING: the {suite} suite can terminate (stepping into lava) but "
+            "reward_offset=0.0, so the reward stays in {-1, 0}. Ending an episode then stops the "
+            "accumulation of -1s and is worth more than surviving it — the agent is rewarded for "
+            "dying. Set reward_offset=1.0 unless measuring exactly that."
+        )
+
+    # Without the continue head `Dreamer._imagination_cont` is all ones: no imagined
+    # episode ever ends, so the actor (trained only in imagination) never learns that
+    # lava is terminal. Only the replay critic sees `is_terminal`.
+    if not getattr(config.model, "use_cont_head", False):
+        print(
+            f"[train] WARNING: the {suite} suite can terminate (stepping into lava) but "
+            "model.use_cont_head=False, so every imagined step is assumed to continue and the "
+            "actor never sees termination. Set model.use_cont_head=True — on the WM run too, "
+            "since a frozen WM without a trained head cannot provide one."
+        )
 
 
 # Everything the `ActorCritic` sub-module owns: actor, critic, their frozen

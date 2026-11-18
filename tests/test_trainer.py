@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 import torch
 
 import her_dream.goals as goals
@@ -1207,13 +1208,12 @@ class TestPegBufferCandidates:
         return buf
 
     def test_rejects_unknown_search(self):
-        import pytest
-
         with pytest.raises(ValueError, match="peg.search"):
             make_trainer(peg_config(search="mega"))
 
-    def test_random_search_passes_no_candidates(self):
-        t = make_trainer(peg_config(search="random"))
+    @pytest.mark.parametrize("search", ["random", "mppi", "cem"])
+    def test_agent_side_searches_pass_no_candidates(self, search):
+        t = make_trainer(peg_config(search=search))
         agent = MagicMock()
         agent.peg_goal.return_value = (torch.ones(B, S, K), {})
         t._sample_goals(agent, make_mock_envs(), torch.ones(B, dtype=torch.bool), torch.zeros(B, S, K), make_trans())

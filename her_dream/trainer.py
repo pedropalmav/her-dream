@@ -4,7 +4,7 @@ import torch
 import her_dream.tools as tools
 from her_dream.buffers.her_buffer import HERBuffer
 from her_dream.goals import goal_from_latent, make_goal_spec, reward_state
-from her_dream.peg import explore_every_ep, go_steps
+from her_dream.peg import SEARCHES, explore_every_ep, go_steps
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
@@ -52,11 +52,11 @@ class OnlineTrainer:
         if self._goal_sample == "peg":
             peg_cfg = config.peg
             self._peg_go_steps = go_steps(peg_cfg.go_ratio, peg_cfg.time_limit, peg_cfg.action_repeat)
-            # Where the goal candidates come from: "random" z (drawn by the agent)
-            # or "buffer", stoch the agent actually visited (drawn here).
+            # How the goal candidates are found. Only "buffer" is drawn here (stoch
+            # the agent actually visited); the agent handles random and MPPI/CEM.
             self._peg_search = str(peg_cfg.search)
-            if self._peg_search not in ("random", "buffer"):
-                raise ValueError(f"Unknown peg.search {self._peg_search!r}; expected 'random' or 'buffer'.")
+            if self._peg_search not in SEARCHES:
+                raise ValueError(f"Unknown peg.search {self._peg_search!r}; expected one of {SEARCHES}.")
             self._peg_candidates = int(peg_cfg.num_candidates)
 
         self.her = isinstance(self.replay_buffer, HERBuffer)

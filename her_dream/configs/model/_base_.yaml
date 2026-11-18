@@ -39,11 +39,24 @@ explore_every_ep: null
 # for `horizon` steps (`repeats` times), and the one whose end state the
 # explorer's critic values most becomes the goal. The achiever then drives the
 # first `go_ratio` of the episode and the explorer the rest (Go-Explore).
-# `search` picks the candidates: "random" z (uniform one-hot per group) or
-# "buffer", stoch/z drawn from the replay buffer — states the agent actually
-# visited (random until the buffer has data).
+# `search` picks how the candidates are found:
+#   "random" — one batch of random z (uniform one-hot per group);
+#   "buffer" — one batch of stoch/z drawn from the replay buffer, states the
+#     agent actually visited (random until the buffer has data);
+#   "mppi" / "cem" — PEG's optimizer: a Gaussian over the z logits, started at
+#     the current state's posterior logits with std `std_scale`, refit
+#     `optimization_steps` times; every sampled logit becomes a goal through a
+#     OneHotDist draw, and the final goal is a draw from the final Gaussian.
+# Optimizer defaults follow PEG's planner block (shooting_mppi, 5 steps, gamma
+# 10, CEM elite ratio 0.2, std_scale 1). Note mppi_gamma acts on raw explorer
+# values: with closely spaced scores, gamma 10 weights the candidates almost
+# uniformly.
 peg:
-  search: buffer # random|buffer
+  search: mppi # random|buffer|mppi|cem
+  optimization_steps: 5
+  mppi_gamma: 10.0
+  cem_elite_ratio: 0.2
+  std_scale: 1.0
   go_ratio: 0.5
   horizon: null # null -> the go-phase length, round(go_ratio * time_limit / action_repeat)
   num_candidates: 512

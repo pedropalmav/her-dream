@@ -4,11 +4,12 @@ PEG picks the training goal whose imagined pursuit leaves the achiever where the
 explorer expects the most to discover, then runs a Go-Explore episode: the
 achiever chases the goal for `go_steps`, the explorer takes over for the rest.
 
-The original searches observation space with MPPI/CEM. Here candidates are drawn
-at random in the RSSM's discrete latent space instead (`random_candidates`), a
-single batch with no iterative refit. The rollout and scoring live on `Dreamer`
-(`Dreamer.peg_goal` / `Dreamer._peg_score`); this module holds the pieces that do
-not need the networks.
+The original searches observation space with MPPI/CEM. Here the search runs in
+the RSSM's latent space: a single batch of random z (`random_candidates`) or of
+replay-buffer z (drawn by the trainer), or PEG's MPPI/CEM over a Gaussian on the z *logits*, each sampled logit turned
+into a goal by a `OneHotDist` draw (`refit` is the distribution update). The
+rollout and scoring live on `Dreamer` (`Dreamer.peg_goal` / `Dreamer._peg_score`);
+this module holds the pieces that do not need the networks.
 """
 
 import torch
@@ -68,3 +69,44 @@ def random_candidates(spec, n, stoch, discrete, device):
         idx = torch.randint(0, discrete, (n, rows), device=device)
         goal = F.one_hot(idx, discrete).to(torch.float32)
     return goal[:, 0] if spec.scope == "first_row" else goal
+
+
+SEARCHES = ("random", "buffer", "mppi", "cem")
+# The searches that iterate an MPPI/CEM refit (`refit`); the others score one batch.
+OPTIMIZED_SEARCHES = ("mppi", "cem")
+
+
+def refit(method, samples, scores, mppi_gamma, elite_ratio):
+    """One MPPI or CEM update of the per-env Gaussian over goal logits, as in PEG.
+
+    Both refit the mean and std from scratch each iteration (no momentum, no
+    std floor beyond CEM's 1e-6), exactly like PEG's `SubgoalPlanner`:
+
+    - "mppi": weights `softmax(mppi_gamma * score)` over the candidates; the
+      mean and std are the weighted mean and weighted (population) std.
+    - "cem": the top `int(C * elite_ratio)` candidates (at least one); the mean
+      and std are their mean and `sqrt(var + 1e-6)`.
+
+    Args:
+        samples: (N, C, *D) sampled logits.
+        scores: (N, C) candidate scores, higher is better.
+
+    Returns:
+        (mean, std), each (N, *D).
+    """
+    N, C = scores.shape
+    flat = samples.reshape(N, C, -1)
+    if method == "mppi":
+        weights = torch.softmax(mppi_gamma * scores, dim=-1).unsqueeze(-1)
+        mean = (weights * flat).sum(dim=1)
+        std = (weights * (flat - mean.unsqueeze(1)).square()).sum(dim=1).sqrt()
+    elif method == "cem":
+        n_elite = max(1, int(C * elite_ratio))
+        idx = scores.topk(n_elite, dim=-1).indices
+        elites = flat.gather(1, idx.unsqueeze(-1).expand(-1, -1, flat.shape[-1]))
+        mean = elites.mean(dim=1)
+        std = (elites.var(dim=1, unbiased=False) + 1e-6).sqrt()
+    else:
+        raise ValueError(f"Unknown PEG refit method {method!r}; expected 'mppi' or 'cem'.")
+    shape = (N, *samples.shape[2:])
+    return mean.reshape(shape), std.reshape(shape)

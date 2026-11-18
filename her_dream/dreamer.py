@@ -82,6 +82,15 @@ class Dreamer(nn.Module):
             self.peg_candidates = int(peg_cfg.num_candidates)
             self.peg_repeats = int(peg_cfg.repeats)
             self.peg_horizon = peg.planning_horizon(peg_cfg)
+            self.peg_search = str(peg_cfg.search)
+            if self.peg_search not in peg.SEARCHES:
+                raise ValueError(f"Unknown peg.search {self.peg_search!r}; expected one of {peg.SEARCHES}.")
+            self.peg_optimization_steps = int(peg_cfg.optimization_steps)
+            if self.peg_search in peg.OPTIMIZED_SEARCHES and self.peg_optimization_steps < 1:
+                raise ValueError("peg.optimization_steps must be >= 1 for peg.search=mppi|cem.")
+            self.peg_mppi_gamma = float(peg_cfg.mppi_gamma)
+            self.peg_cem_elite_ratio = float(peg_cfg.cem_elite_ratio)
+            self.peg_std_scale = float(peg_cfg.std_scale)
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -448,15 +457,20 @@ class Dreamer(nn.Module):
                 that need a fresh goal. Must be a copy: preprocess modifies it in
                 place.
             candidates: optional (N, C, *goal_shape) goals to choose from, e.g.
-                drawn by the trainer. None draws `peg.num_candidates` random z
-                goals per env (`peg.random_candidates`).
+                the replay-buffer z the trainer draws for peg.search="buffer".
+                None uses `peg.search`: "mppi"/"cem" run PEG's optimizer over
+                goal logits (`_peg_optimize`); otherwise `peg.num_candidates`
+                random z goals are drawn per env (`peg.random_candidates`) —
+                also the fallback for "buffer" while the buffer is empty.
 
         Returns:
             (goal, metrics): the (N, *goal_shape) chosen goals on self.device, and
             scalar statistics of the candidate scores.
         """
-        stoch, deter, _ = self._peg_start(obs)
+        stoch, deter, logit = self._peg_start(obs)
         N = stoch.shape[0]
+        if candidates is None and self.peg_search in peg.OPTIMIZED_SEARCHES:
+            return self._peg_optimize(stoch, deter, logit)
         if candidates is None:
             C = self.peg_candidates
             # Drawn per env, not shared.
@@ -466,6 +480,48 @@ class Dreamer(nn.Module):
             candidates = candidates.reshape(N, C, *candidates.shape[1:])
         scores = self._peg_scores(stoch, deter, candidates)
         return self._peg_select(candidates, scores)
+
+    def _peg_optimize(self, stoch, deter, logit):
+        """PEG's MPPI/CEM goal search, over a Gaussian on z logits.
+
+        Per env, the Gaussian starts at the current state — the first
+        observation's posterior logits, as PEG starts from the current
+        observation — with std `peg.std_scale`. Each of `peg.optimization_steps`
+        iterations samples `peg.num_candidates` logit vectors, turns each into a
+        goal with a `OneHotDist` draw (`_goal_from_logits`), scores the goals
+        like any other candidates, and refits the Gaussian on the logits
+        (`peg.refit`). As in PEG, the goal is then a sample of the final
+        distribution, not the best candidate seen.
+
+        Returns:
+            (goal, metrics) as `peg_goal`; the score statistics are those of the
+            last iteration's candidates, plus the final mean search std.
+        """
+        N, C = stoch.shape[0], self.peg_candidates
+        # (N, R, K) with R = 1 for scope="first_row", else S.
+        mean = logit[:, :1] if self._goal_spec.scope == "first_row" else logit
+        mean = to_f32(mean)
+        std = torch.full_like(mean, self.peg_std_scale)
+        for _ in range(self.peg_optimization_steps):
+            # (N, C, R, K)
+            samples = mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(N, C, *mean.shape[1:], device=self.device)
+            candidates = self._goal_from_logits(samples)
+            scores = self._peg_scores(stoch, deter, candidates)
+            mean, std = peg.refit(self.peg_search, samples, scores, self.peg_mppi_gamma, self.peg_cem_elite_ratio)
+        _, metrics = self._peg_select(candidates, scores)
+        final = mean + std * torch.randn_like(mean)
+        goal = self._goal_from_logits(final.unsqueeze(1))[:, 0]
+        metrics["search_std"] = std.mean()
+        return goal, metrics
+
+    def _goal_from_logits(self, logits):
+        """(..., R, K) logits -> goals: a `OneHotDist` sample (same unimix as the RSSM), per `goal_repr`.
+
+        R is S, or 1 for scope="first_row", whose single row is squeezed out.
+        """
+        stoch = self._frozen_rssm.get_dist(logits).rsample()
+        goal = goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logits)
+        return goal[..., 0, :] if self._goal_spec.scope == "first_row" else goal
 
     def _peg_start(self, obs):
         """Posterior of each episode's first observation: (N, S, K), (N, D), (N, S, K) logit."""

@@ -9,10 +9,11 @@ from tests.dreamer.conftest import RK, RS, make_default_obs, make_real_dreamer
 N = 2  # envs needing a goal
 
 
-def lexa_dreamer(candidates=7, repeats=1, horizon=3, **overrides):
+def lexa_dreamer(candidates=7, repeats=1, horizon=3, search="random", **overrides):
     agent, goal_shape = make_real_dreamer(
         lexa=True,
         model__imag_reward_source="temporal",
+        model__peg__search=search,
         model__peg__num_candidates=candidates,
         model__peg__repeats=repeats,
         model__peg__horizon=horizon,
@@ -158,3 +159,106 @@ class TestGivenCandidates:
         assert "cand" not in drawn  # no random draw when candidates are given
         torch.testing.assert_close(goal[0], cand[0, 2])
         torch.testing.assert_close(goal[1], cand[1, 0])
+
+
+class TestOptimizedSearch:
+    """peg.search=mppi|cem: PEG's optimizer over a Gaussian on the goal logits."""
+
+    @pytest.mark.parametrize("search", ["mppi", "cem"])
+    def test_returns_valid_one_hot_goals_and_search_metrics(self, search):
+        agent, goal_shape = lexa_dreamer(search=search, model__peg__optimization_steps=2)
+        goal, metrics = agent.peg_goal(first_obs(goal_shape))
+        assert goal.shape == (N, RS, RK)
+        assert torch.all(goal.sum(-1) == 1) and torch.all((goal == 0) | (goal == 1))
+        assert {"score_best", "score_mean", "score_std", "score_gap", "search_std"} <= set(metrics)
+
+    def test_first_row_goal_shape(self):
+        agent, goal_shape = lexa_dreamer(search="mppi", goal_type="first_row", model__peg__optimization_steps=2)
+        goal, _ = agent.peg_goal(first_obs(goal_shape))
+        assert goal.shape == (N, RK)
+
+    @pytest.mark.parametrize("steps", [1, 3])
+    def test_scores_num_candidates_per_iteration(self, monkeypatch, steps):
+        C = 6
+        agent, goal_shape = lexa_dreamer(candidates=C, search="cem", model__peg__optimization_steps=steps)
+        calls = []
+        real = agent._peg_scores
+
+        def spy(stoch, deter, candidates):
+            calls.append(candidates.shape[:2])
+            return real(stoch, deter, candidates)
+
+        monkeypatch.setattr(agent, "_peg_scores", spy)
+        agent.peg_goal(first_obs(goal_shape))
+        assert calls == [(N, C)] * steps
+
+    def test_search_starts_at_the_posterior_logits(self, monkeypatch):
+        # With a vanishing std every sample is the start mean, so the first
+        # iteration's logits are exactly the first observation's posterior.
+        agent, goal_shape = lexa_dreamer(search="mppi", model__peg__optimization_steps=1, model__peg__std_scale=0.0)
+        start = {}
+        real_start = agent._peg_start
+
+        def spy_start(obs):
+            out = real_start(obs)
+            start["logit"] = out[2]
+            return out
+
+        seen = []
+        real_goal = agent._goal_from_logits
+
+        def spy_goal(logits):
+            seen.append(logits)
+            return real_goal(logits)
+
+        monkeypatch.setattr(agent, "_peg_start", spy_start)
+        monkeypatch.setattr(agent, "_goal_from_logits", spy_goal)
+        agent.peg_goal(first_obs(goal_shape))
+        torch.testing.assert_close(seen[0], start["logit"].unsqueeze(1).expand_as(seen[0]))
+
+    def test_goal_is_a_one_hot_draw_of_the_final_gaussian(self, monkeypatch):
+        agent, goal_shape = lexa_dreamer(search="cem", model__peg__optimization_steps=1)
+        seen = []
+        real = agent._goal_from_logits
+
+        def spy(logits):
+            seen.append(logits)
+            return real(logits)
+
+        monkeypatch.setattr(agent, "_goal_from_logits", spy)
+        agent.peg_goal(first_obs(goal_shape))
+        # One call per iteration on (N, C, S, K), then the final draw on (N, 1, S, K).
+        assert seen[-1].shape == (N, 1, RS, RK)
+
+    def test_given_candidates_bypass_the_search(self, monkeypatch):
+        agent, goal_shape = lexa_dreamer(search="mppi")
+        monkeypatch.setattr(agent, "_peg_optimize", lambda *a: pytest.fail("search ran"))
+        cand = torch.nn.functional.one_hot(torch.randint(0, RK, (N, 3, RS)), RK).float()
+        goal, _ = agent.peg_goal(first_obs(goal_shape), candidates=cand)
+        assert goal.shape == (N, RS, RK)
+
+    def test_leaves_parameters_untouched(self):
+        agent, goal_shape = lexa_dreamer(search="mppi", model__peg__optimization_steps=2)
+        before = {k: v.clone() for k, v in agent.state_dict().items()}
+        agent.peg_goal(first_obs(goal_shape))
+        for k, v in agent.state_dict().items():
+            torch.testing.assert_close(v, before[k])
+
+
+class TestSearchConfig:
+    def test_rejects_unknown_search(self):
+        with pytest.raises(ValueError, match="peg.search"):
+            make_real_dreamer(lexa=True, model__peg__search="mega")
+
+    def test_optimizers_need_at_least_one_step(self):
+        with pytest.raises(ValueError, match="optimization_steps"):
+            make_real_dreamer(lexa=True, model__peg__optimization_steps=0)
+
+
+def test_buffer_search_without_candidates_falls_back_to_random(monkeypatch):
+    # The trainer passes None while the replay buffer is still empty.
+    agent, goal_shape = lexa_dreamer(search="buffer")
+    monkeypatch.setattr(agent, "_peg_optimize", lambda *a: pytest.fail("search ran"))
+    drawn = capture_candidates(monkeypatch)
+    goal, _ = agent.peg_goal(first_obs(goal_shape))
+    assert "cand" in drawn and goal.shape == (N, RS, RK)

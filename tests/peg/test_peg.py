@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import her_dream.goals as goals
-from her_dream.peg import explore_every_ep, go_steps, planning_horizon, random_candidates
+from her_dream.peg import explore_every_ep, go_steps, planning_horizon, random_candidates, refit
 
 S, K = 6, 5
 
@@ -73,3 +73,50 @@ class TestExploreEveryEp:
     @pytest.mark.parametrize("goal_sample", ["peg", "buffer"])
     def test_explicit_value_wins(self, goal_sample):
         assert explore_every_ep(3, goal_sample) == 3
+
+
+class TestRefit:
+    N, C = 2, 5
+
+    def samples(self):
+        return torch.randn(self.N, self.C, 3, 4)
+
+    def test_mppi_with_large_gamma_collapses_onto_the_best(self):
+        x = self.samples()
+        scores = torch.tensor([[0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 2.0]])
+        mean, std = refit("mppi", x, scores, mppi_gamma=1e4, elite_ratio=0.2)
+        torch.testing.assert_close(mean[0], x[0, 1])
+        torch.testing.assert_close(mean[1], x[1, 4])
+        assert std.abs().max() < 1e-3
+
+    def test_mppi_with_zero_gamma_is_the_plain_moments(self):
+        x = self.samples()
+        mean, std = refit("mppi", x, torch.randn(self.N, self.C), mppi_gamma=0.0, elite_ratio=0.2)
+        torch.testing.assert_close(mean, x.mean(dim=1))
+        torch.testing.assert_close(std, x.std(dim=1, unbiased=False))
+
+    def test_mppi_matches_the_weighted_formula(self):
+        x = self.samples()
+        scores = torch.randn(self.N, self.C)
+        w = torch.softmax(10.0 * scores, dim=-1)[..., None, None]
+        mean, std = refit("mppi", x, scores, mppi_gamma=10.0, elite_ratio=0.2)
+        torch.testing.assert_close(mean, (w * x).sum(1))
+        torch.testing.assert_close(std, (w * (x - mean[:, None]) ** 2).sum(1).sqrt())
+
+    def test_cem_refits_on_the_elites(self):
+        x = self.samples()
+        scores = torch.tensor([[5.0, 4.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 9.0, 8.0]])
+        mean, std = refit("cem", x, scores, mppi_gamma=10.0, elite_ratio=0.4)  # 2 elites
+        torch.testing.assert_close(mean[0], x[0, :2].mean(0))
+        torch.testing.assert_close(mean[1], x[1, 3:].mean(0))
+        torch.testing.assert_close(std[0], (x[0, :2].var(0, unbiased=False) + 1e-6).sqrt())
+
+    def test_cem_keeps_at_least_one_elite(self):
+        x = self.samples()
+        scores = torch.tensor([[0.0, 0.0, 3.0, 0.0, 0.0]] * self.N)
+        mean, _ = refit("cem", x, scores, mppi_gamma=10.0, elite_ratio=0.01)
+        torch.testing.assert_close(mean[0], x[0, 2])
+
+    def test_rejects_unknown_method(self):
+        with pytest.raises(ValueError, match="refit"):
+            refit("random", self.samples(), torch.zeros(self.N, self.C), 10.0, 0.2)

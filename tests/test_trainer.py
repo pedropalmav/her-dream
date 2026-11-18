@@ -1118,3 +1118,73 @@ class TestLexaExploreMask:
         # Envs run independent episodes, so the mask is indexed by episode id.
         trainer = self.trainer_with(lexa=True, explore_every_ep=3)
         assert trainer._explore_mask(torch.tensor([0, 1, 3, 6])).tolist() == [True, False, True, True]
+
+
+def peg_config(go_ratio=0.5, time_limit=10, **overrides):
+    peg = SimpleNamespace(
+        go_ratio=go_ratio, horizon=None, num_candidates=4, repeats=1, time_limit=time_limit, action_repeat=1
+    )
+    return make_config(goal_sample="peg", lexa=True, peg=peg, **overrides)
+
+
+class TestPegGoExplore:
+    """goal_sample="peg" hands each episode to the explorer after the go-phase."""
+
+    def test_go_steps_follow_the_ratio(self):
+        assert make_trainer(peg_config(go_ratio=0.3, time_limit=100))._peg_go_steps == 30
+
+    def test_go_steps_unset_for_other_sources(self):
+        assert make_trainer(make_config(lexa=True))._peg_go_steps is None
+
+    def test_achiever_drives_the_go_phase_and_the_explorer_the_rest(self):
+        # explore_every_ep=0: no pure-explorer episodes, only the phase switch.
+        trainer = make_trainer(peg_config(explore_every_ep=0))
+        lengths = torch.tensor([0, 4, 5, 9])
+        mask = trainer._explore_mask(torch.ones(4, dtype=torch.int32), lengths)
+        assert mask.tolist() == [False, False, True, True]
+
+    def test_combines_with_explorer_episodes(self):
+        trainer = make_trainer(peg_config(explore_every_ep=2))
+        episode_ids = torch.tensor([0, 1, 1])
+        lengths = torch.tensor([0, 0, 7])
+        # Env 0 runs an explorer episode; env 1 is in its go-phase; env 2 explores.
+        assert trainer._explore_mask(episode_ids, lengths).tolist() == [True, False, True]
+
+    def test_defaults_to_no_explorer_only_episodes(self):
+        # PEG proper: explore_every_ep unset -> 0, so only the phase switch applies.
+        trainer = make_trainer(peg_config())
+        assert trainer._explore_every_ep == 0
+        assert trainer._explore_mask(torch.tensor([0, 2]), torch.tensor([0, 0])).tolist() == [False, False]
+
+    def test_without_lengths_only_the_episode_split_applies(self):
+        trainer = make_trainer(peg_config(explore_every_ep=2))
+        assert trainer._explore_mask(torch.arange(2)).tolist() == [True, False]
+
+
+class TestPegSampleGoals:
+    def test_sets_goals_from_peg_goal_and_logs_scores(self):
+        logger = MagicMock()
+        t = make_trainer(peg_config(), logger=logger)
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(1, S, K), {"score_best": torch.tensor(2.0)})
+        goals = torch.zeros(B, S, K)
+        mask = torch.tensor([False, True])
+        t._sample_goals(agent, make_mock_envs(), mask, goals, make_trans())
+        agent.peg_goal.assert_called_once()
+        assert (goals[0] == 0).all() and (goals[1] == 1).all()
+        logger.scalar.assert_any_call("peg/score_best", torch.tensor(2.0))
+
+    def test_log_prefix_separates_eval(self):
+        logger = MagicMock()
+        t = make_trainer(peg_config(), logger=logger)
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(B, S, K), {"score_best": 1.0})
+        t._sample_goals(
+            agent,
+            make_mock_envs(),
+            torch.ones(B, dtype=torch.bool),
+            torch.zeros(B, S, K),
+            make_trans(),
+            log_prefix="eval_peg",
+        )
+        logger.scalar.assert_any_call("eval_peg/score_best", 1.0)

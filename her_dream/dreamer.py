@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import LambdaLR
 import her_dream.distributions as dists
 import her_dream.goals as goals
 import her_dream.networks as networks
+import her_dream.peg as peg
 import her_dream.rssm as rssm
 import her_dream.tools as tools
 from her_dream.actor_critic import ActorCritic
@@ -74,7 +75,13 @@ class Dreamer(nn.Module):
             raise ValueError("plan2explore and lexa are mutually exclusive; lexa already trains the explorer.")
         if self.explores and (self.wm_only or self.freeze_wm or self.train_text_only):
             raise ValueError("plan2explore/lexa are exclusive with wm_only, freeze_wm and train_text_only.")
-        self.explore_every_ep = int(getattr(config, "explore_every_ep", 2))
+        # PEG goal selection (goal_sample="peg", see `peg_goal`). Read leniently so
+        # configs saved before the block existed still build an agent.
+        peg_cfg = getattr(config, "peg", None)
+        if peg_cfg is not None:
+            self.peg_candidates = int(peg_cfg.num_candidates)
+            self.peg_repeats = int(peg_cfg.repeats)
+            self.peg_horizon = peg.planning_horizon(peg_cfg)
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -425,6 +432,76 @@ class Dreamer(nn.Module):
         # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit, so the
         # goal matches whatever the reward function compares against.
         return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
+
+    @torch.no_grad()
+    def peg_goal(self, obs):
+        """Pick each episode's goal by its imagined exploration potential (PEG).
+
+        Used by goal_sample="peg". From the posterior of each episode's first
+        observation, `peg.num_candidates` random z goals are drawn
+        (`peg.random_candidates`); the frozen achiever pursues each one for
+        `peg_horizon` imagined steps, `peg.repeats` times; the candidate whose
+        end states score highest under `_peg_score` (averaged over repeats)
+        becomes the goal. No iterative refit, unlike PEG's MPPI/CEM.
+
+        Args:
+            obs: dict of (N, 1, *) first transitions (is_first=True) of the envs
+                that need a fresh goal. Must be a copy: preprocess modifies it in
+                place.
+
+        Returns:
+            (goal, metrics): the (N, *goal_shape) chosen goals on self.device, and
+            scalar statistics of the candidate scores.
+        """
+        if not self.lexa:
+            raise ValueError("peg_goal requires lexa=True: it rolls out the achiever and scores with the explorer.")
+        torch.compiler.cudagraph_mark_step_begin()
+        p_obs = self.preprocess(obs)
+        # (N, E)
+        embed = self._frozen_encoder(p_obs)
+        N = obs["is_first"].shape[0]
+        C, M = self.peg_candidates, self.peg_repeats
+        stoch, deter = self._frozen_rssm.initial(N)
+        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        # (N, S, K), (N, D)
+        stoch, deter, _ = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+
+        # (N*C, *goal_shape) — candidates are drawn per env, not shared.
+        candidates = peg.random_candidates(self._goal_spec, N * C, self.rssm._stoch, self.rssm._discrete, self.device)
+        # Rollout batch ordered (env, candidate, repeat).
+        # (N*C*M, S, K), (N*C*M, D), (N*C*M, *goal_shape)
+        stoch = stoch.repeat_interleave(C * M, dim=0)
+        deter = deter.repeat_interleave(C * M, dim=0)
+        goal = candidates.repeat_interleave(M, dim=0)
+        # Only the final state is scored, so the trajectory is not kept.
+        for _ in range(self.peg_horizon):
+            feat = self._frozen_rssm.get_feat(stoch, deter)
+            action = self.ac.frozen_policy(feat, goal).rsample()
+            stoch, deter, _ = self._frozen_rssm.img_step(stoch, deter, action)
+        # (N*C*M, F)
+        final_feat = self._frozen_rssm.get_feat(stoch, deter)
+
+        # (N, C)
+        scores = to_f32(self._peg_score(final_feat)).reshape(N, C, M).mean(dim=-1)
+        best = scores.argmax(dim=-1)
+        chosen = candidates.reshape(N, C, *candidates.shape[1:])[torch.arange(N, device=self.device), best]
+        best_score = scores.max(dim=-1).values
+        metrics = {
+            "score_best": best_score.mean(),
+            "score_mean": scores.mean(),
+            "score_std": scores.std(dim=-1).mean() if C > 1 else torch.zeros((), device=self.device),
+            "score_gap": (best_score - scores.mean(dim=-1)).mean(),
+        }
+        return chosen, metrics
+
+    def _peg_score(self, feat):
+        """Exploration potential of the states the achiever reached, (B, F) -> (B,).
+
+        PEG's criterion: the explorer critic's value there, i.e. the intrinsic
+        return the explorer expects if it takes over from that state. This is the
+        seam for trying other selection criteria.
+        """
+        return self.explorer._frozen_value(self.explorer.policy_input(feat, None)).mode.squeeze(-1)
 
     @torch.no_grad()
     def encode_observation(self, obs):

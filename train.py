@@ -111,6 +111,12 @@ def validate_config(config):
     if getattr(config, "reset_actor_critic", False) and config.load_from is None:
         raise ValueError("reset_actor_critic=True only makes sense together with load_from=<path-to-prev-logdir>.")
 
+    if config.env.goal_sample == "peg" and not getattr(config, "lexa", False):
+        raise ValueError(
+            "env.goal_sample=peg requires lexa=True: goals are scored by the explorer's critic "
+            "and pursued by the achiever, which only LEXA trains together."
+        )
+
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
 

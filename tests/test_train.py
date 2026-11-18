@@ -589,6 +589,17 @@ class TestLexaConfig:
         train.validate_config(cfg)
         assert "WARNING" not in capsys.readouterr().out
 
+    def test_peg_goals_require_lexa(self, tmp_path):
+        cfg = make_config(tmp_path, env=SimpleNamespace(goal_sample="peg"))
+        with pytest.raises(ValueError, match="goal_sample=peg requires lexa=True"):
+            train.validate_config(cfg)
+
+    def test_peg_goals_accepted_under_lexa(self, tmp_path):
+        cfg = make_config(tmp_path, env=SimpleNamespace(goal_sample="peg"))
+        cfg.lexa = True
+        cfg.model.imag_reward_source = "temporal"
+        train.validate_config(cfg)
+
     def test_drops_the_distance_predictor_when_absent(self):
         # A LEXA checkpoint loaded by an agent using the analytic goal reward.
         agent = SimpleNamespace()

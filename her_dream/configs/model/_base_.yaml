@@ -39,7 +39,11 @@ explore_every_ep: null
 # for `horizon` steps (`repeats` times), and the one whose end state the
 # explorer's critic values most becomes the goal. The achiever then drives the
 # first `go_ratio` of the episode and the explorer the rest (Go-Explore).
+# `search` picks the candidates: "random" z (uniform one-hot per group) or
+# "buffer", stoch/z drawn from the replay buffer — states the agent actually
+# visited (random until the buffer has data).
 peg:
+  search: buffer # random|buffer
   go_ratio: 0.5
   horizon: null # null -> the go-phase length, round(go_ratio * time_limit / action_repeat)
   num_candidates: 512

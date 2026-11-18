@@ -434,25 +434,41 @@ class Dreamer(nn.Module):
         return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
 
     @torch.no_grad()
-    def peg_goal(self, obs):
+    def peg_goal(self, obs, candidates=None):
         """Pick each episode's goal by its imagined exploration potential (PEG).
 
         Used by goal_sample="peg". From the posterior of each episode's first
-        observation, `peg.num_candidates` random z goals are drawn
-        (`peg.random_candidates`); the frozen achiever pursues each one for
+        observation, the frozen achiever pursues each candidate goal for
         `peg_horizon` imagined steps, `peg.repeats` times; the candidate whose
         end states score highest under `_peg_score` (averaged over repeats)
-        becomes the goal. No iterative refit, unlike PEG's MPPI/CEM.
+        becomes the goal.
 
         Args:
             obs: dict of (N, 1, *) first transitions (is_first=True) of the envs
                 that need a fresh goal. Must be a copy: preprocess modifies it in
                 place.
+            candidates: optional (N, C, *goal_shape) goals to choose from, e.g.
+                drawn by the trainer. None draws `peg.num_candidates` random z
+                goals per env (`peg.random_candidates`).
 
         Returns:
             (goal, metrics): the (N, *goal_shape) chosen goals on self.device, and
             scalar statistics of the candidate scores.
         """
+        stoch, deter, _ = self._peg_start(obs)
+        N = stoch.shape[0]
+        if candidates is None:
+            C = self.peg_candidates
+            # Drawn per env, not shared.
+            candidates = peg.random_candidates(
+                self._goal_spec, N * C, self.rssm._stoch, self.rssm._discrete, self.device
+            )
+            candidates = candidates.reshape(N, C, *candidates.shape[1:])
+        scores = self._peg_scores(stoch, deter, candidates)
+        return self._peg_select(candidates, scores)
+
+    def _peg_start(self, obs):
+        """Posterior of each episode's first observation: (N, S, K), (N, D), (N, S, K) logit."""
         if not self.lexa:
             raise ValueError("peg_goal requires lexa=True: it rolls out the achiever and scores with the explorer.")
         torch.compiler.cudagraph_mark_step_begin()
@@ -460,19 +476,24 @@ class Dreamer(nn.Module):
         # (N, E)
         embed = self._frozen_encoder(p_obs)
         N = obs["is_first"].shape[0]
-        C, M = self.peg_candidates, self.peg_repeats
         stoch, deter = self._frozen_rssm.initial(N)
         prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
-        # (N, S, K), (N, D)
-        stoch, deter, _ = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+        return self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
 
-        # (N*C, *goal_shape) — candidates are drawn per env, not shared.
-        candidates = peg.random_candidates(self._goal_spec, N * C, self.rssm._stoch, self.rssm._discrete, self.device)
+    def _peg_scores(self, stoch, deter, candidates):
+        """Score (N, C, *goal_shape) candidates from (N, ...) start states -> (N, C).
+
+        The achiever pursues every candidate `peg.repeats` times for
+        `peg_horizon` imagined steps; `_peg_score` of the end states, averaged
+        over repeats, is the candidate's score.
+        """
+        N, C = candidates.shape[:2]
+        M = self.peg_repeats
         # Rollout batch ordered (env, candidate, repeat).
         # (N*C*M, S, K), (N*C*M, D), (N*C*M, *goal_shape)
         stoch = stoch.repeat_interleave(C * M, dim=0)
         deter = deter.repeat_interleave(C * M, dim=0)
-        goal = candidates.repeat_interleave(M, dim=0)
+        goal = candidates.reshape(N * C, *candidates.shape[2:]).repeat_interleave(M, dim=0)
         # Only the final state is scored, so the trajectory is not kept.
         for _ in range(self.peg_horizon):
             feat = self._frozen_rssm.get_feat(stoch, deter)
@@ -480,16 +501,18 @@ class Dreamer(nn.Module):
             stoch, deter, _ = self._frozen_rssm.img_step(stoch, deter, action)
         # (N*C*M, F)
         final_feat = self._frozen_rssm.get_feat(stoch, deter)
+        return to_f32(self._peg_score(final_feat)).reshape(N, C, M).mean(dim=-1)
 
-        # (N, C)
-        scores = to_f32(self._peg_score(final_feat)).reshape(N, C, M).mean(dim=-1)
+    def _peg_select(self, candidates, scores):
+        """The best of (N, C, *goal_shape) candidates per env under (N, C) scores, plus score stats."""
+        N, C = scores.shape
         best = scores.argmax(dim=-1)
-        chosen = candidates.reshape(N, C, *candidates.shape[1:])[torch.arange(N, device=self.device), best]
+        chosen = candidates[torch.arange(N, device=candidates.device), best]
         best_score = scores.max(dim=-1).values
         metrics = {
             "score_best": best_score.mean(),
             "score_mean": scores.mean(),
-            "score_std": scores.std(dim=-1).mean() if C > 1 else torch.zeros((), device=self.device),
+            "score_std": scores.std(dim=-1).mean() if C > 1 else torch.zeros((), device=scores.device),
             "score_gap": (best_score - scores.mean(dim=-1)).mean(),
         }
         return chosen, metrics

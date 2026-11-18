@@ -144,3 +144,17 @@ def test_requires_lexa():
     agent, goal_shape = make_real_dreamer()
     with pytest.raises(ValueError, match="lexa=True"):
         agent.peg_goal(first_obs(goal_shape))
+
+
+class TestGivenCandidates:
+    def test_chooses_among_the_given_candidates(self, monkeypatch):
+        C = 3
+        agent, goal_shape = lexa_dreamer(candidates=99)
+        cand = torch.nn.functional.one_hot(torch.randint(0, RK, (N, C, RS)), RK).float()
+        drawn = capture_candidates(monkeypatch)
+        planted = torch.tensor([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+        agent._peg_score = lambda feat: planted.reshape(-1)
+        goal, _ = agent.peg_goal(first_obs(goal_shape), candidates=cand)
+        assert "cand" not in drawn  # no random draw when candidates are given
+        torch.testing.assert_close(goal[0], cand[0, 2])
+        torch.testing.assert_close(goal[1], cand[1, 0])

@@ -59,6 +59,14 @@ the learned temporal distance the achiever was actually trained on.
 
     uv run python3 experiments/success_rate.py --logdir logdir/full_train/random_goal/lexa/* --device cuda
 
+PEG runs (`env.goal_sample=peg`, on top of LEXA) are scored the same way — the
+achiever on the benchmark's goal z, with PEG's goal selection and the Go-Explore
+hand-off playing no part. Their search variant is recorded as `peg_search`. They
+were trained with `env.time_limit=100`, so their default budget is 100 steps, not
+1000; pass `--max-steps` explicitly when comparing them against other runs.
+
+    uv run python3 experiments/success_rate.py --logdir logdir/full_train/random_goal/peg/* --device cuda
+
 Results go to `experiments/out/success_rate_<suite>.{json,png}`, plus a per-cell
 success map (`..._map.png`) whenever the suite has a sweep block. Runs whose room
 layout differs from the suite's are skipped rather than silently mixed in.
@@ -323,6 +331,9 @@ def evaluate(agent, config, env_cfg, pairs, suite, device, max_steps, seed, skip
         "goal_sample": config.env.get("goal_sample"),
         "lexa": bool(config.get("lexa", False)),
         "imag_reward_source": config.model.get("imag_reward_source", "goal"),
+        # The PEG candidate search (mppi | cem | buffer | random) — the only thing
+        # telling PEG variants apart, since they share goal_sample="peg".
+        "peg_search": (config.model.get("peg") or {}).get("search") if config.env.get("goal_sample") == "peg" else None,
         "task": env_cfg.task,
         "env_size": size,
         "max_steps": budget,

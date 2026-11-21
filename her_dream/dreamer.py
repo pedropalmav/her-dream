@@ -12,12 +12,14 @@ from torch.optim.lr_scheduler import LambdaLR
 import her_dream.distributions as dists
 import her_dream.goals as goals
 import her_dream.networks as networks
+import her_dream.peg as peg
 import her_dream.rssm as rssm
 import her_dream.tools as tools
 from her_dream.actor_critic import ActorCritic
 from her_dream.networks import Projector
 from her_dream.optim import LaProp, clip_grad_agc_
 from her_dream.plan2explore import Disagreement
+from her_dream.temporal_distance import TemporalDistance
 from her_dream.tools import to_f32
 
 
@@ -37,8 +39,10 @@ class Dreamer(nn.Module):
         self.use_reward_head = bool(getattr(config, "use_reward_head", False))
         self.use_cont_head = bool(getattr(config, "use_cont_head", False))
         self.imag_reward_source = str(getattr(config, "imag_reward_source", "goal"))
-        if self.imag_reward_source not in ("goal", "head"):
-            raise ValueError(f"Unknown imag_reward_source {self.imag_reward_source!r}; expected 'goal' or 'head'.")
+        if self.imag_reward_source not in ("goal", "head", "temporal"):
+            raise ValueError(
+                f"Unknown imag_reward_source {self.imag_reward_source!r}; expected 'goal', 'head' or 'temporal'."
+            )
         if self.imag_reward_source == "head" and not self.use_reward_head:
             raise ValueError("imag_reward_source='head' requires use_reward_head=True.")
         self.goal_type = str(config.goal_type)
@@ -61,8 +65,32 @@ class Dreamer(nn.Module):
         # actor-critic collects the data. The task actor-critic is left untouched
         # and trained afterwards on the frozen world model (load_from + freeze_wm).
         self.plan2explore = bool(getattr(config, "plan2explore", False))
-        if self.plan2explore and (self.wm_only or self.freeze_wm or self.train_text_only):
-            raise ValueError("plan2explore is exclusive with wm_only, freeze_wm and train_text_only.")
+        # LEXA: the same explorer and ensemble, but the goal achiever is trained
+        # alongside it in imagination instead of afterwards, and the explorer only
+        # collects part of the data.
+        self.lexa = bool(getattr(config, "lexa", False))
+        # Both modes own the explorer; LEXA additionally trains the achiever.
+        self.explores = self.plan2explore or self.lexa
+        if self.plan2explore and self.lexa:
+            raise ValueError("plan2explore and lexa are mutually exclusive; lexa already trains the explorer.")
+        if self.explores and (self.wm_only or self.freeze_wm or self.train_text_only):
+            raise ValueError("plan2explore/lexa are exclusive with wm_only, freeze_wm and train_text_only.")
+        # PEG goal selection (goal_sample="peg", see `peg_goal`). Read leniently so
+        # configs saved before the block existed still build an agent.
+        peg_cfg = getattr(config, "peg", None)
+        if peg_cfg is not None:
+            self.peg_candidates = int(peg_cfg.num_candidates)
+            self.peg_repeats = int(peg_cfg.repeats)
+            self.peg_horizon = peg.planning_horizon(peg_cfg)
+            self.peg_search = str(peg_cfg.search)
+            if self.peg_search not in peg.SEARCHES:
+                raise ValueError(f"Unknown peg.search {self.peg_search!r}; expected one of {peg.SEARCHES}.")
+            self.peg_optimization_steps = int(peg_cfg.optimization_steps)
+            if self.peg_search in peg.OPTIMIZED_SEARCHES and self.peg_optimization_steps < 1:
+                raise ValueError("peg.optimization_steps must be >= 1 for peg.search=mppi|cem.")
+            self.peg_mppi_gamma = float(peg_cfg.mppi_gamma)
+            self.peg_cem_elite_ratio = float(peg_cfg.cem_elite_ratio)
+            self.peg_std_scale = float(peg_cfg.std_scale)
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -106,13 +134,15 @@ class Dreamer(nn.Module):
         # Built after `self.ac` on purpose: construction order fixes the RNG
         # stream and the shared optimizer's parameter order, so an agent without
         # Plan2Explore is bit-identical to one from before this existed.
-        if self.plan2explore:
+        if self.explores:
             self.explorer = ActorCritic(config, self.rssm.feat_size, act_space, 0, name="explore")
             self.disag = Disagreement(config, self.rssm.feat_size, self.act_dim, self.rssm)
+        if self.imag_reward_source == "temporal":
+            self.temporal_distance = TemporalDistance(config, self.rssm.flat_stoch)
 
         self._loss_scales = dict(config.loss_scales)
         self._loss_scales.update(self.ac.loss_scales(self._loss_scales))
-        if self.plan2explore:
+        if self.explores:
             self._loss_scales.update(self.explorer.loss_scales(self._loss_scales))
         self._log_grads = bool(config.log_grads)
 
@@ -125,12 +155,15 @@ class Dreamer(nn.Module):
                 modules["reward"] = self.reward
             if self.use_cont_head:
                 modules["cont"] = self.cont
-        if self.plan2explore:
-            # Pretraining trains the world model, the ensemble and the explorer;
-            # the task actor-critic stays at its init and is trained later.
+        if self.explores:
+            # Both modes train the world model, the ensemble and the explorer.
+            # plan2explore stops there and leaves the achiever for a later run;
+            # LEXA trains it here too, in imagination.
             modules["disag"] = self.disag
             modules.update(self.explorer.optim_modules())
-        elif not self.wm_only and not self.train_text_only:
+        if self.imag_reward_source == "temporal" and not self.freeze_wm and not self.train_text_only:
+            modules["temporal_distance"] = self.temporal_distance
+        if not self.wm_only and not self.plan2explore and not self.train_text_only:
             modules.update(self.ac.optim_modules())
 
         # TODO: Create a method for this block
@@ -244,7 +277,7 @@ class Dreamer(nn.Module):
         self._frozen_encoder = tools.freeze_clone(self.encoder)
         self._frozen_rssm = tools.freeze_clone(self.rssm)
         self.ac.clone_and_freeze()
-        if self.plan2explore:
+        if self.explores:
             self.explorer.clone_and_freeze()
         if self.use_reward_head:
             self._frozen_reward = tools.freeze_clone(self.reward)
@@ -278,9 +311,10 @@ class Dreamer(nn.Module):
         if self.use_cont_head:
             for param in self.cont.parameters():
                 param.requires_grad_(False)
-        if hasattr(self, "disag"):
-            for param in self.disag.parameters():
-                param.requires_grad_(False)
+        for name in ("disag", "temporal_distance"):
+            if hasattr(self, name):
+                for param in getattr(self, name).parameters():
+                    param.requires_grad_(False)
         if self.rep_loss == "dreamer" and hasattr(self, "decoder"):
             for param in self.decoder.parameters():
                 param.requires_grad_(False)
@@ -310,12 +344,17 @@ class Dreamer(nn.Module):
             param.requires_grad_(True)
 
     @torch.no_grad()
-    def act(self, obs, state, eval=False, random=False):
+    def act(self, obs, state, eval=False, random=False, explore=None):
         """Policy inference step.
 
         When `random=True`, the actor is bypassed and a uniform one-hot action
         is sampled. The WM forward pass (encoder + obs_step) still runs so the
         agent_state (stoch/deter) is updated consistently for the buffer.
+
+        `explore` is a (B,) bool mask selecting the exploration policy per env,
+        which is how LEXA splits data collection between the explorer and the
+        achiever. It is ignored unless an explorer exists; `None` means "all
+        explorer" under Plan2Explore pretraining and "all achiever" otherwise.
         """
         # obs: dict of (B, *), state: (stoch: (B, S, K), deter: (B, D), prev_action: (B, A))
         torch.compiler.cudagraph_mark_step_begin()
@@ -334,15 +373,7 @@ class Dreamer(nn.Module):
         feat = self._frozen_rssm.get_feat(stoch, deter)
 
         B = stoch.shape[0]
-        if random:
-            action = self._random_action(B)
-        else:
-            # Pretraining collects data with the goal-agnostic explorer.
-            actor_critic, goal = (self.explorer, None) if self.plan2explore else (self.ac, obs["goal"])
-            # (B, A)
-            action_dist = actor_critic.frozen_policy(feat, goal)
-            # (B, A)
-            action = action_dist.mode if eval else action_dist.rsample()
+        action = self._random_action(B) if random else self._policy_action(feat, obs.get("goal"), eval, explore)
         state_dict = {"stoch": stoch, "deter": deter, "prev_action": action}
         if goals.stashes_logit(self._goal_spec):
             state_dict["logit"] = logit
@@ -354,6 +385,24 @@ class Dreamer(nn.Module):
             ),
             {"obs_step_sample_log_prob": obs_step_sample_log_prob},
         )
+
+    def _policy_action(self, feat, goal, eval, explore):
+        """Sample an action from the achiever, the explorer, or a mix of both."""
+
+        def sample(actor_critic, goal):
+            dist = actor_critic.frozen_policy(feat, goal)
+            return dist.mode if eval else dist.rsample()
+
+        if self.plan2explore:
+            # Pretraining collects everything with the goal-agnostic explorer.
+            return sample(self.explorer, None)
+        if not self.lexa or explore is None or not explore.any():
+            return sample(self.ac, goal)
+        if explore.all():
+            return sample(self.explorer, None)
+        # Mixed batch: envs run independent episodes, so both policies run and
+        # the mask picks per env.
+        return torch.where(explore.reshape(-1, 1), sample(self.explorer, None), sample(self.ac, goal))
 
     @torch.no_grad()
     def imagine_goal(self, obs):
@@ -392,6 +441,146 @@ class Dreamer(nn.Module):
         # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit, so the
         # goal matches whatever the reward function compares against.
         return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
+
+    @torch.no_grad()
+    def peg_goal(self, obs, candidates=None):
+        """Pick each episode's goal by its imagined exploration potential (PEG).
+
+        Used by goal_sample="peg". From the posterior of each episode's first
+        observation, the frozen achiever pursues each candidate goal for
+        `peg_horizon` imagined steps, `peg.repeats` times; the candidate whose
+        end states score highest under `_peg_score` (averaged over repeats)
+        becomes the goal.
+
+        Args:
+            obs: dict of (N, 1, *) first transitions (is_first=True) of the envs
+                that need a fresh goal. Must be a copy: preprocess modifies it in
+                place.
+            candidates: optional (N, C, *goal_shape) goals to choose from, e.g.
+                the replay-buffer z the trainer draws for peg.search="buffer".
+                None uses `peg.search`: "mppi"/"cem" run PEG's optimizer over
+                goal logits (`_peg_optimize`); otherwise `peg.num_candidates`
+                random z goals are drawn per env (`peg.random_candidates`) —
+                also the fallback for "buffer" while the buffer is empty.
+
+        Returns:
+            (goal, metrics): the (N, *goal_shape) chosen goals on self.device, and
+            scalar statistics of the candidate scores.
+        """
+        stoch, deter, logit = self._peg_start(obs)
+        N = stoch.shape[0]
+        if candidates is None and self.peg_search in peg.OPTIMIZED_SEARCHES:
+            return self._peg_optimize(stoch, deter, logit)
+        if candidates is None:
+            C = self.peg_candidates
+            # Drawn per env, not shared.
+            candidates = peg.random_candidates(
+                self._goal_spec, N * C, self.rssm._stoch, self.rssm._discrete, self.device
+            )
+            candidates = candidates.reshape(N, C, *candidates.shape[1:])
+        scores = self._peg_scores(stoch, deter, candidates)
+        return self._peg_select(candidates, scores)
+
+    def _peg_optimize(self, stoch, deter, logit):
+        """PEG's MPPI/CEM goal search, over a Gaussian on z logits.
+
+        Per env, the Gaussian starts at the current state — the first
+        observation's posterior logits, as PEG starts from the current
+        observation — with std `peg.std_scale`. Each of `peg.optimization_steps`
+        iterations samples `peg.num_candidates` logit vectors, turns each into a
+        goal with a `OneHotDist` draw (`_goal_from_logits`), scores the goals
+        like any other candidates, and refits the Gaussian on the logits
+        (`peg.refit`). As in PEG, the goal is then a sample of the final
+        distribution, not the best candidate seen.
+
+        Returns:
+            (goal, metrics) as `peg_goal`; the score statistics are those of the
+            last iteration's candidates, plus the final mean search std.
+        """
+        N, C = stoch.shape[0], self.peg_candidates
+        # (N, R, K) with R = 1 for scope="first_row", else S.
+        mean = logit[:, :1] if self._goal_spec.scope == "first_row" else logit
+        mean = to_f32(mean)
+        std = torch.full_like(mean, self.peg_std_scale)
+        for _ in range(self.peg_optimization_steps):
+            # (N, C, R, K)
+            samples = mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(N, C, *mean.shape[1:], device=self.device)
+            candidates = self._goal_from_logits(samples)
+            scores = self._peg_scores(stoch, deter, candidates)
+            mean, std = peg.refit(self.peg_search, samples, scores, self.peg_mppi_gamma, self.peg_cem_elite_ratio)
+        _, metrics = self._peg_select(candidates, scores)
+        final = mean + std * torch.randn_like(mean)
+        goal = self._goal_from_logits(final.unsqueeze(1))[:, 0]
+        metrics["search_std"] = std.mean()
+        return goal, metrics
+
+    def _goal_from_logits(self, logits):
+        """(..., R, K) logits -> goals: a `OneHotDist` sample (same unimix as the RSSM), per `goal_repr`.
+
+        R is S, or 1 for scope="first_row", whose single row is squeezed out.
+        """
+        stoch = self._frozen_rssm.get_dist(logits).rsample()
+        goal = goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logits)
+        return goal[..., 0, :] if self._goal_spec.scope == "first_row" else goal
+
+    def _peg_start(self, obs):
+        """Posterior of each episode's first observation: (N, S, K), (N, D), (N, S, K) logit."""
+        if not self.lexa:
+            raise ValueError("peg_goal requires lexa=True: it rolls out the achiever and scores with the explorer.")
+        torch.compiler.cudagraph_mark_step_begin()
+        p_obs = self.preprocess(obs)
+        # (N, E)
+        embed = self._frozen_encoder(p_obs)
+        N = obs["is_first"].shape[0]
+        stoch, deter = self._frozen_rssm.initial(N)
+        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        return self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+
+    def _peg_scores(self, stoch, deter, candidates):
+        """Score (N, C, *goal_shape) candidates from (N, ...) start states -> (N, C).
+
+        The achiever pursues every candidate `peg.repeats` times for
+        `peg_horizon` imagined steps; `_peg_score` of the end states, averaged
+        over repeats, is the candidate's score.
+        """
+        N, C = candidates.shape[:2]
+        M = self.peg_repeats
+        # Rollout batch ordered (env, candidate, repeat).
+        # (N*C*M, S, K), (N*C*M, D), (N*C*M, *goal_shape)
+        stoch = stoch.repeat_interleave(C * M, dim=0)
+        deter = deter.repeat_interleave(C * M, dim=0)
+        goal = candidates.reshape(N * C, *candidates.shape[2:]).repeat_interleave(M, dim=0)
+        # Only the final state is scored, so the trajectory is not kept.
+        for _ in range(self.peg_horizon):
+            feat = self._frozen_rssm.get_feat(stoch, deter)
+            action = self.ac.frozen_policy(feat, goal).rsample()
+            stoch, deter, _ = self._frozen_rssm.img_step(stoch, deter, action)
+        # (N*C*M, F)
+        final_feat = self._frozen_rssm.get_feat(stoch, deter)
+        return to_f32(self._peg_score(final_feat)).reshape(N, C, M).mean(dim=-1)
+
+    def _peg_select(self, candidates, scores):
+        """The best of (N, C, *goal_shape) candidates per env under (N, C) scores, plus score stats."""
+        N, C = scores.shape
+        best = scores.argmax(dim=-1)
+        chosen = candidates[torch.arange(N, device=candidates.device), best]
+        best_score = scores.max(dim=-1).values
+        metrics = {
+            "score_best": best_score.mean(),
+            "score_mean": scores.mean(),
+            "score_std": scores.std(dim=-1).mean() if C > 1 else torch.zeros((), device=scores.device),
+            "score_gap": (best_score - scores.mean(dim=-1)).mean(),
+        }
+        return chosen, metrics
+
+    def _peg_score(self, feat):
+        """Exploration potential of the states the achiever reached, (B, F) -> (B,).
+
+        PEG's criterion: the explorer critic's value there, i.e. the intrinsic
+        return the explorer expects if it takes over from that state. This is the
+        seam for trying other selection criteria.
+        """
+        return self.explorer._frozen_value(self.explorer.policy_input(feat, None)).mode.squeeze(-1)
 
     @torch.no_grad()
     def encode_observation(self, obs):
@@ -486,10 +675,13 @@ class Dreamer(nn.Module):
         data, index, initial = replay_buffer.sample()
         torch.compiler.cudagraph_mark_step_begin()
         p_data = self.preprocess(data)
-        # Only the actor-critic being trained: Plan2Explore pretraining leaves the
-        # task one untouched, and mixing an untrained critic into its own target
-        # would just accumulate rounding drift.
-        (self.explorer if self.plan2explore else self.ac).update_slow_target()
+        # Only the actor-critics being trained: Plan2Explore pretraining leaves
+        # the achiever untouched, and mixing an untrained critic into its own
+        # target would just accumulate rounding drift. LEXA trains both.
+        if self.explores:
+            self.explorer.update_slow_target()
+        if not self.plan2explore:
+            self.ac.update_slow_target()
         if self.rep_loss == "dreamerpro":
             self.ema_update()
         metrics = {}
@@ -605,7 +797,7 @@ class Dreamer(nn.Module):
             # === Plan2Explore ensemble (optional) ===
             # Same placement rationale as the heads: trained whenever the world
             # model is, skipped under freeze_wm / train_text_only.
-            if self.plan2explore:
+            if self.explores:
                 target = self.disag.target_from(post_stoch, post_deter, feat)
                 losses["disag"], disag_metrics = self.disag.loss(feat, data["action"], target)
                 metrics.update(disag_metrics)
@@ -671,10 +863,12 @@ class Dreamer(nn.Module):
         # === Imagination rollout for actor-critic ===
         # Skipped entirely in wm_only mode: actor and value are frozen, so
         # policy/value/repval losses would only waste compute.
-        if self.plan2explore:
+        if self.explores:
             explore_losses, explore_metrics = self._explore_losses(post_stoch, post_deter)
             losses.update(explore_losses)
             metrics.update(explore_metrics)
+        if self.plan2explore:
+            # Pretraining stops here: the achiever is trained in a later run.
             total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
             self._scaler.scale(total_loss).backward()
             metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
@@ -711,6 +905,22 @@ class Dreamer(nn.Module):
         imag_losses, imag_metrics, ret = self.ac.imagination_loss(imag_feat, imag_action, imag_reward, imag_cont, goal)
         losses.update(imag_losses)
         metrics.update(imag_metrics)
+
+        # The temporal-distance predictor learns on the same imagined rollout it
+        # scores, so it is fitted to the distribution the reward is read on.
+        if self.imag_reward_source == "temporal":
+            losses["temporal"], temporal_metrics = self.temporal_distance.loss(imag_stoch)
+            metrics.update(temporal_metrics)
+
+        if self.lexa:
+            # LEXA trains the achiever purely in imagination. The replay-value
+            # loss is fed data["reward"], the analytic goal reward, which is not
+            # the objective the achiever is being trained on here.
+            total_loss = sum([v * self._loss_scales[k] for k, v in losses.items()])
+            self._scaler.scale(total_loss).backward()
+            metrics.update({f"loss/{name}": loss for name, loss in losses.items()})
+            metrics.update({"opt/loss": total_loss})
+            return (post_stoch, post_deter), metrics
 
         # === Replay-based value learning (keep gradients through world model) ===
         last, term, reward = (
@@ -768,10 +978,14 @@ class Dreamer(nn.Module):
 
         This is the seam the exploration objectives plug into: "goal" is the
         analytic goal reward from `rewards.make_reward`, "head" is the learned
-        reward predictor. Returns (B*T, T_imag, 1).
+        reward predictor, "temporal" is LEXA's learned steps-to-goal.
+        Returns (B*T, T_imag, 1).
         """
         if self.imag_reward_source == "head":
             return self._frozen_reward(imag_feat).mode
+        if self.imag_reward_source == "temporal":
+            # LEXA's goal-reaching reward: minus the predicted steps to the goal.
+            return -self.temporal_distance.distance(imag_stoch, goal)
         reward_input = goals.reward_state(self._goal_spec, stoch=imag_stoch, logit=imag_logit, rssm=self.rssm)
         return self.reward_function(reward_input, goal)
 

@@ -59,6 +59,9 @@ _CONFIG_DIR = str(pathlib.Path(her_dream.__file__).parent / "configs")
 
 def validate_config(config):
     """Validate the mode-selecting flags before any heavy setup."""
+    if getattr(config, "plan2explore", False) and getattr(config, "lexa", False):
+        raise ValueError("plan2explore and lexa are mutually exclusive; lexa already trains the explorer.")
+
     if getattr(config, "plan2explore", False):
         # Pretraining phase: it builds the world model from scratch with the
         # explorer. The achiever is trained afterwards, in a separate run.
@@ -70,6 +73,17 @@ def validate_config(config):
             )
         if config.wm_only or config.freeze_wm or config.train_text_only:
             raise ValueError("plan2explore=True is exclusive with wm_only, freeze_wm and train_text_only.")
+
+    if getattr(config, "lexa", False):
+        # LEXA trains the explorer and the achiever together, from scratch.
+        if config.wm_only or config.freeze_wm or config.train_text_only:
+            raise ValueError("lexa=True is exclusive with wm_only, freeze_wm and train_text_only.")
+        if config.model.imag_reward_source != "temporal":
+            print(
+                "[train] WARNING: lexa=True with model.imag_reward_source="
+                f"{config.model.imag_reward_source!r}. LEXA's achiever is normally driven by the "
+                "learned temporal distance — set model.imag_reward_source=temporal for that."
+            )
 
     if config.train_text_only:
         if config.load_from is None:
@@ -96,6 +110,12 @@ def validate_config(config):
 
     if getattr(config, "reset_actor_critic", False) and config.load_from is None:
         raise ValueError("reset_actor_critic=True only makes sense together with load_from=<path-to-prev-logdir>.")
+
+    if config.env.goal_sample == "peg" and not getattr(config, "lexa", False):
+        raise ValueError(
+            "env.goal_sample=peg requires lexa=True: goals are scored by the explorer's critic "
+            "and pursued by the achiever, which only LEXA trains together."
+        )
 
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
@@ -124,6 +144,7 @@ _OPTIONAL_MODULE_PREFIXES = (
     "_frozen_cont.",
     "explorer.",
     "disag.",
+    "temporal_distance.",
 )
 
 

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 import torch
 
 import her_dream.goals as goals
@@ -1087,3 +1088,175 @@ class TestBegin:
             (make_trans(1), torch.ones(1, dtype=torch.bool)),
         ]
         t.begin(agent)  # Must complete without error
+
+
+class TestLexaExploreMask:
+    """LEXA alternates data collection between the explorer and the achiever."""
+
+    @staticmethod
+    def trainer_with(**overrides):
+        return make_trainer(make_config(**overrides))
+
+    def test_no_mask_outside_lexa(self):
+        trainer = self.trainer_with()
+        assert trainer._explore_mask(torch.arange(4)) is None
+
+    def test_selects_every_nth_episode(self):
+        trainer = self.trainer_with(lexa=True, explore_every_ep=2)
+        mask = trainer._explore_mask(torch.arange(6))
+        assert mask.tolist() == [True, False, True, False, True, False]
+
+    def test_a_cadence_of_one_always_explores(self):
+        trainer = self.trainer_with(lexa=True, explore_every_ep=1)
+        assert trainer._explore_mask(torch.arange(4)).all()
+
+    def test_a_cadence_of_zero_disables_the_split(self):
+        # 0 means the achiever collects everything.
+        trainer = self.trainer_with(lexa=True, explore_every_ep=0)
+        assert trainer._explore_mask(torch.arange(4)) is None
+
+    def test_is_per_env_not_per_step(self):
+        # Envs run independent episodes, so the mask is indexed by episode id.
+        trainer = self.trainer_with(lexa=True, explore_every_ep=3)
+        assert trainer._explore_mask(torch.tensor([0, 1, 3, 6])).tolist() == [True, False, True, True]
+
+
+def peg_config(go_ratio=0.5, time_limit=10, search="random", num_candidates=4, **overrides):
+    peg = SimpleNamespace(
+        go_ratio=go_ratio,
+        horizon=None,
+        num_candidates=num_candidates,
+        repeats=1,
+        time_limit=time_limit,
+        action_repeat=1,
+        search=search,
+    )
+    return make_config(goal_sample="peg", lexa=True, peg=peg, **overrides)
+
+
+class TestPegGoExplore:
+    """goal_sample="peg" hands each episode to the explorer after the go-phase."""
+
+    def test_go_steps_follow_the_ratio(self):
+        assert make_trainer(peg_config(go_ratio=0.3, time_limit=100))._peg_go_steps == 30
+
+    def test_go_steps_unset_for_other_sources(self):
+        assert make_trainer(make_config(lexa=True))._peg_go_steps is None
+
+    def test_achiever_drives_the_go_phase_and_the_explorer_the_rest(self):
+        # explore_every_ep=0: no pure-explorer episodes, only the phase switch.
+        trainer = make_trainer(peg_config(explore_every_ep=0))
+        lengths = torch.tensor([0, 4, 5, 9])
+        mask = trainer._explore_mask(torch.ones(4, dtype=torch.int32), lengths)
+        assert mask.tolist() == [False, False, True, True]
+
+    def test_combines_with_explorer_episodes(self):
+        trainer = make_trainer(peg_config(explore_every_ep=2))
+        episode_ids = torch.tensor([0, 1, 1])
+        lengths = torch.tensor([0, 0, 7])
+        # Env 0 runs an explorer episode; env 1 is in its go-phase; env 2 explores.
+        assert trainer._explore_mask(episode_ids, lengths).tolist() == [True, False, True]
+
+    def test_defaults_to_no_explorer_only_episodes(self):
+        # PEG proper: explore_every_ep unset -> 0, so only the phase switch applies.
+        trainer = make_trainer(peg_config())
+        assert trainer._explore_every_ep == 0
+        assert trainer._explore_mask(torch.tensor([0, 2]), torch.tensor([0, 0])).tolist() == [False, False]
+
+    def test_without_lengths_only_the_episode_split_applies(self):
+        trainer = make_trainer(peg_config(explore_every_ep=2))
+        assert trainer._explore_mask(torch.arange(2)).tolist() == [True, False]
+
+
+class TestPegSampleGoals:
+    def test_sets_goals_from_peg_goal_and_logs_scores(self):
+        logger = MagicMock()
+        t = make_trainer(peg_config(), logger=logger)
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(1, S, K), {"score_best": torch.tensor(2.0)})
+        goals = torch.zeros(B, S, K)
+        mask = torch.tensor([False, True])
+        t._sample_goals(agent, make_mock_envs(), mask, goals, make_trans())
+        agent.peg_goal.assert_called_once()
+        assert (goals[0] == 0).all() and (goals[1] == 1).all()
+        logger.scalar.assert_any_call("peg/score_best", torch.tensor(2.0))
+
+    def test_log_prefix_separates_eval(self):
+        logger = MagicMock()
+        t = make_trainer(peg_config(), logger=logger)
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(B, S, K), {"score_best": 1.0})
+        t._sample_goals(
+            agent,
+            make_mock_envs(),
+            torch.ones(B, dtype=torch.bool),
+            torch.zeros(B, S, K),
+            make_trans(),
+            log_prefix="eval_peg",
+        )
+        logger.scalar.assert_any_call("eval_peg/score_best", 1.0)
+
+
+class TestPegBufferCandidates:
+    """peg.search="buffer": candidates are visited stoch from the replay buffer."""
+
+    @staticmethod
+    def buffer_with(stoch):
+        buf = make_mock_buffer()
+        buf.count.return_value = 10
+        buf.sample.return_value = ({"stoch": stoch}, None, None)
+        return buf
+
+    def test_rejects_unknown_search(self):
+        with pytest.raises(ValueError, match="peg.search"):
+            make_trainer(peg_config(search="mega"))
+
+    @pytest.mark.parametrize("search", ["random", "mppi", "cem"])
+    def test_agent_side_searches_pass_no_candidates(self, search):
+        t = make_trainer(peg_config(search=search))
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(B, S, K), {})
+        t._sample_goals(agent, make_mock_envs(), torch.ones(B, dtype=torch.bool), torch.zeros(B, S, K), make_trans())
+        assert agent.peg_goal.call_args.kwargs["candidates"] is None
+
+    def test_empty_buffer_falls_back_to_random(self):
+        t = make_trainer(peg_config(search="buffer"))  # mock buffer count() == 0
+        assert t._buffer_candidates(2) is None
+
+    def test_candidates_are_buffer_states_shaped_per_env(self):
+        stoch = torch.nn.functional.one_hot(torch.randint(0, K, (2, 5, S)), K).float()
+        t = make_trainer(peg_config(search="buffer", num_candidates=3), buffer=self.buffer_with(stoch))
+        cand = t._buffer_candidates(2)
+        assert cand.shape == (2, 3, S, K)
+        pool = stoch.reshape(-1, S, K)
+        for c in cand.reshape(-1, S, K):
+            assert any(torch.equal(c, p) for p in pool)
+
+    def test_draws_more_batches_until_enough_states(self):
+        buf = self.buffer_with(torch.zeros(1, 2, S, K))  # 2 states per batch
+        t = make_trainer(peg_config(search="buffer", num_candidates=3), buffer=buf)
+        cand = t._buffer_candidates(2)  # needs 6 -> 3 batches
+        assert cand.shape == (2, 3, S, K)
+        assert buf.sample.call_count == 3
+
+    def test_samples_without_replacement(self):
+        # 6 distinct states, 6 needed -> every state used exactly once.
+        stoch = torch.nn.functional.one_hot(torch.arange(6) % K, K).float()[None, :, None, :].expand(1, 6, S, K)
+        t = make_trainer(peg_config(search="buffer", num_candidates=3), buffer=self.buffer_with(stoch.clone()))
+        cand = t._buffer_candidates(2).reshape(6, S, K)
+        assert sorted(cand[:, 0].argmax(-1).tolist()) == list(range(6))
+
+    def test_first_row_candidates_are_one_group(self):
+        stoch = torch.nn.functional.one_hot(torch.randint(0, K, (2, 5, S)), K).float()
+        cfg = peg_config(search="buffer", num_candidates=3, goal_type="first_row")
+        t = make_trainer(cfg, buffer=self.buffer_with(stoch))
+        assert t._buffer_candidates(2).shape == (2, 3, K)
+
+    def test_sample_goals_hands_buffer_candidates_to_the_agent(self):
+        stoch = torch.nn.functional.one_hot(torch.randint(0, K, (2, 5, S)), K).float()
+        t = make_trainer(peg_config(search="buffer", num_candidates=3), buffer=self.buffer_with(stoch))
+        agent = MagicMock()
+        agent.peg_goal.return_value = (torch.ones(1, S, K), {})
+        mask = torch.tensor([True, False])
+        t._sample_goals(agent, make_mock_envs(), mask, torch.zeros(B, S, K), make_trans())
+        assert agent.peg_goal.call_args.kwargs["candidates"].shape == (1, 3, S, K)

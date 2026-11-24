@@ -14,6 +14,17 @@ SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "imagination_refresh", 
 REFRESHED_GOAL_SOURCES = ("imagination_refresh",)
 
 
+def check_goal_refresh_every(value):
+    """Validate `env.goal_refresh_every` (the refresh period K) and return it.
+
+    Must be a whole number >= 1; rejected instead of coerced, so 7.5 does not
+    silently run as 7 and null does not surface as an anonymous int() error.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"env.goal_refresh_every must be an integer >= 1, got {value!r}.")
+    return value
+
+
 class OnlineTrainer:
     def __init__(self, config, replay_buffer, logger, logdir, train_envs, eval_envs, reward_function=None):
         self.replay_buffer = replay_buffer
@@ -43,9 +54,7 @@ class OnlineTrainer:
         # goal source picks one goal per episode.
         self._goal_refresh_every = None
         if self._goal_sample in REFRESHED_GOAL_SOURCES:
-            self._goal_refresh_every = int(config.goal_refresh_every)
-            if self._goal_refresh_every < 1:
-                raise ValueError(f"goal_refresh_every must be >= 1, got {self._goal_refresh_every}.")
+            self._goal_refresh_every = check_goal_refresh_every(config.goal_refresh_every)
         self._wm_only = bool(config.wm_only)
         self._train_text_only = bool(getattr(config, "train_text_only", False))
         # The policy is irrelevant for both world-model pretraining and
@@ -150,17 +159,51 @@ class OnlineTrainer:
             mask = explore_phase if mask is None else mask | explore_phase
         return mask
 
-    def _goal_update_mask(self, is_first, steps):
-        """Envs that need a new goal this step: (B,) bool.
+    def _refresh_mask(self, is_first, steps, last):
+        """Envs whose goal is refreshed mid-episode at this step: (B,) bool.
 
-        Every sampled source picks a goal at is_first. Refreshed sources
-        (`imagination_refresh`) also pick one every `goal_refresh_every` agent
-        steps into the episode, `steps` being the index of the current
-        observation within its episode (0 at is_first).
+        Refreshed sources (`imagination_refresh`) pick a new goal every
+        `goal_refresh_every` agent steps, `steps` being the index of the current
+        observation within its episode (0 at is_first). The is_first sample is
+        not a refresh, and neither is the episode's last step (`last`): a goal
+        picked there could never be pursued.
         """
         if self._goal_refresh_every is None:
-            return is_first
-        return is_first | ((steps % self._goal_refresh_every) == 0)
+            return torch.zeros_like(is_first)
+        return ((steps % self._goal_refresh_every) == 0) & ~is_first & ~last
+
+    def _update_goals(self, agent, envs, goals, trans, steps, last, state, log_prefix="peg"):
+        """Pick new goals for this step and relabel trans["goal"].
+
+        Goals sampled at is_first take effect immediately. A mid-episode refresh
+        is imagined now, from the current observation, but only takes effect
+        on the next step: this step is still scored, acted on and stored
+        against the goal the agent was chasing to get here, so reaching it at
+        the refresh step is rewarded. The returned pending refresh goes to
+        `_commit_goals` once the step's reward has been applied.
+
+        Returns:
+            (mask, new_goals) of the pending refresh, or None.
+        """
+        is_first = trans["is_first"][:, 0].bool()
+        refresh = self._refresh_mask(is_first, steps, last)
+        update = is_first | refresh
+        pending = None
+        if update.any():
+            new_goals = goals.clone()
+            self._sample_goals(agent, envs, update, new_goals, trans, log_prefix=log_prefix, state=state)
+            goals[is_first] = new_goals[is_first]
+            if refresh.any():
+                pending = (refresh, new_goals)
+        self._relabel_goal(envs, goals, trans)
+        return pending
+
+    @staticmethod
+    def _commit_goals(goals, pending):
+        """Activate a refresh returned by `_update_goals` (from the next step on)."""
+        if pending is not None:
+            mask, new_goals = pending
+            goals[mask] = new_goals[mask]
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -205,14 +248,13 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
+            pending_goals = None
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
-                is_first = trans["is_first"][:, 0].bool()
                 # Envs past their first episode keep stepping until all are done;
                 # only refresh the ones still being scored.
-                update = is_first | (self._goal_update_mask(is_first, steps) & ~once_done)
-                if update.any():
-                    self._sample_goals(agent, envs, update, goals, trans, log_prefix="eval_peg", state=agent_state)
-                self._relabel_goal(envs, goals, trans)
+                pending_goals = self._update_goals(
+                    agent, envs, goals, trans, steps, done | once_done, agent_state, log_prefix="eval_peg"
+                )
 
             # Store transition.
             # We keep the observation and the action that produced it together.
@@ -227,6 +269,8 @@ class OnlineTrainer:
             if "logit" in agent_state:
                 trans["logit"] = agent_state["logit"]
             self._apply_reward(trans, agent.rssm)
+            if pending_goals is not None:
+                self._commit_goals(goals, pending_goals)
             returns += trans["reward"][:, 0] * ~once_done
 
             for key, value in trans.items():
@@ -322,13 +366,11 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
+            pending_goals = None
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
-                is_first = trans["is_first"][:, 0].bool()
-                # lengths is the index of this observation within its episode.
-                update = self._goal_update_mask(is_first, lengths)
-                if update.any():
-                    self._sample_goals(agent, envs, update, goals, trans, state=agent_state)
-                self._relabel_goal(envs, goals, trans)
+                # lengths is the index of this observation within its episode;
+                # done marks it as the episode's last.
+                pending_goals = self._update_goals(agent, envs, goals, trans, lengths, done, agent_state)
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
@@ -361,6 +403,8 @@ class OnlineTrainer:
                 trans["logit"] = agent_state["logit"]
 
             self._apply_reward(trans, agent.rssm)
+            if pending_goals is not None:
+                self._commit_goals(goals, pending_goals)
 
             if "image" in trans:
                 video_cache.append(trans["image"][0])

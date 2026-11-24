@@ -1285,22 +1285,29 @@ class TestImaginationRefreshMask:
         assert make_trainer(refresh_config(goal_refresh_every=15))._goal_refresh_every == 15
         assert make_trainer(make_config(goal_sample="imagination"))._goal_refresh_every is None
 
-    def test_rejects_non_positive_period(self):
-        import pytest
+    @pytest.mark.parametrize("value", [0, -3, 7.5, None, "15", True])
+    def test_rejects_invalid_period(self, value):
+        with pytest.raises(ValueError, match="env.goal_refresh_every"):
+            make_trainer(refresh_config(goal_refresh_every=value))
 
-        with pytest.raises(ValueError, match="goal_refresh_every"):
-            make_trainer(refresh_config(goal_refresh_every=0))
-
-    def test_refreshes_every_k_steps_and_at_is_first(self):
+    def test_refreshes_every_k_steps_but_not_at_is_first(self):
         t = make_trainer(refresh_config(goal_refresh_every=3))
         steps = torch.tensor([0, 1, 2, 3, 4, 6, 7])
         is_first = torch.tensor([True, False, False, False, True, False, False])
-        assert t._goal_update_mask(is_first, steps).tolist() == [True, False, False, True, True, True, False]
+        last = torch.zeros(7, dtype=torch.bool)
+        assert t._refresh_mask(is_first, steps, last).tolist() == [False, False, False, True, False, True, False]
 
-    def test_plain_imagination_only_on_is_first(self):
+    def test_no_refresh_on_the_last_step(self):
+        t = make_trainer(refresh_config(goal_refresh_every=3))
+        is_first = torch.zeros(2, dtype=torch.bool)
+        last = torch.tensor([True, False])
+        assert t._refresh_mask(is_first, torch.tensor([6, 6]), last).tolist() == [False, True]
+
+    def test_plain_imagination_never_refreshes(self):
         t = make_trainer(make_config(goal_sample="imagination"))
         is_first = torch.tensor([True, False])
-        assert t._goal_update_mask(is_first, torch.tensor([3, 3])).tolist() == [True, False]
+        last = torch.zeros(2, dtype=torch.bool)
+        assert t._refresh_mask(is_first, torch.tensor([3, 3]), last).tolist() == [False, False]
 
 
 class TestImaginationRefreshSampleGoals:
@@ -1346,37 +1353,64 @@ def _counting_imagine_goal(calls):
     return imagine_goal
 
 
+def _run_refresh_begin(ep_len, k=3):
+    """Run begin() over one `ep_len`-step episode; return (imagine calls, stored goals, rewards)."""
+    t = _make_begin_trainer({
+        "steps": ep_len - 1,
+        "batch_length": 1000,
+        "goal_sample": "imagination_refresh",
+        "goal_refresh_every": k,
+    })
+    # Reward = the goal's id, so it shows which goal each step was scored against.
+    t.reward_function = lambda state, goal: goal[:, :1, 0]
+    state = tensordict_state()
+    agent = make_mock_agent()
+    agent.get_initial_state.return_value = state
+    agent.act.return_value = (torch.zeros(1, A), state, {})
+    calls = []
+    agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
+    t.train_envs.step.side_effect = _refresh_episode(ep_len)
+    t.begin(agent)
+    stored = [c.args[0] for c in t.replay_buffer.add_transition.call_args_list]
+    return calls, [s["goal"][0, 0, 0].item() for s in stored], [s["reward"][0, 0].item() for s in stored]
+
+
+def _run_refresh_eval(ep_len, k=3):
+    t = make_trainer(refresh_config(goal_refresh_every=k))
+    t.eval_envs.env_num = 1
+    state = tensordict_state()
+    agent = make_mock_agent()
+    agent.get_initial_state.return_value = state
+    agent.act.return_value = (torch.zeros(1, A), state, {})
+    calls = []
+    agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
+    t.eval_envs.step.side_effect = _refresh_episode(ep_len)
+    t.eval(agent, train_step=0)
+    return calls
+
+
 class TestImaginationRefreshLoop:
     def test_begin_refreshes_goal_every_k_steps(self):
-        t = _make_begin_trainer({
-            "steps": 6,
-            "batch_length": 1000,
-            "goal_sample": "imagination_refresh",
-            "goal_refresh_every": 3,
-        })
-        state = tensordict_state()
-        agent = make_mock_agent()
-        agent.get_initial_state.return_value = state
-        agent.act.return_value = (torch.zeros(1, A), state, {})
-        calls = []
-        agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
-        t.train_envs.step.side_effect = _refresh_episode(7)
-        t.begin(agent)
-        # Episode steps 0 (is_first), 3 and 6.
+        calls, goals, _ = _run_refresh_begin(ep_len=8)
+        # Imagined at episode steps 0 (is_first), 3 and 6...
         assert calls == [True, False, False]
-        stored = [c.args[0]["goal"][0, 0, 0].item() for c in t.replay_buffer.add_transition.call_args_list]
-        assert stored == [1, 1, 1, 2, 2, 2, 3]
+        # ...and each refresh takes effect on the step after it was imagined.
+        assert goals == [1, 1, 1, 1, 2, 2, 2, 3]
+
+    def test_refresh_step_is_scored_against_the_old_goal(self):
+        _, goals, rewards = _run_refresh_begin(ep_len=8)
+        assert rewards == goals
+        assert rewards[3] == 1 and rewards[6] == 2
+
+    def test_begin_skips_refresh_on_the_last_step(self):
+        # Step 6 is the episode's last observation: no goal is imagined there.
+        calls, goals, _ = _run_refresh_begin(ep_len=7)
+        assert calls == [True, False]
+        assert goals == [1, 1, 1, 1, 2, 2, 2]
 
     def test_eval_refreshes_goal_every_k_steps(self):
-        t = make_trainer(refresh_config(goal_refresh_every=3))
-        t.eval_envs.env_num = 1
-        state = tensordict_state()
-        agent = make_mock_agent()
-        agent.get_initial_state.return_value = state
-        agent.act.return_value = (torch.zeros(1, A), state, {})
-        calls = []
-        agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
-        t.eval_envs.step.side_effect = _refresh_episode(5)
-        t.eval(agent, train_step=0)
         # Episode steps 0 (is_first) and 3.
-        assert calls == [True, False]
+        assert _run_refresh_eval(ep_len=5) == [True, False]
+
+    def test_eval_skips_refresh_on_the_last_step(self):
+        assert _run_refresh_eval(ep_len=4) == [True]

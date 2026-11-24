@@ -415,9 +415,12 @@ class Dreamer(nn.Module):
         random actions, so the goal distribution does not depend on the actor.
 
         Also used by goal_sample="imagination_refresh", which re-imagines the goal
-        every `goal_refresh_every` agent steps mid-episode. There the posterior must
-        be the one the agent is actually in, so the running agent `state` is
-        passed and the obs is filtered onto it, exactly as `act` does.
+        every `goal_refresh_every` agent steps mid-episode. There the rollout must
+        start from the agent's history, so the running agent `state` is passed
+        and the obs is filtered onto it as `act` does. The deterministic state
+        matches the agent's; the stoch is an independent posterior draw, so it
+        can differ from the one `act` samples for the same obs (as it already
+        does for plain "imagination" at is_first).
 
         Args:
             obs: dict of (N, 1, *) current transitions of the envs that need a

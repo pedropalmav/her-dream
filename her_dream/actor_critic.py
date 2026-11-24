@@ -212,6 +212,8 @@ class ActorCritic(nn.Module):
         Returns:
             (losses, metrics).
         """
+        if goal is not None:
+            last = torch.maximum(last, self.goal_switch(goal))
         value_input = self.policy_input(feat, goal)
         value = self._frozen_value(value_input).mode
         slow_value = self._frozen_slow_value(value_input).mode
@@ -235,6 +237,23 @@ class ActorCritic(nn.Module):
         metrics.update(tools.tensorstats(value, self.key("value_replay")))
         metrics.update(tools.tensorstats(slow_value, self.key("slow_value_replay")))
         return losses, metrics
+
+    @staticmethod
+    def goal_switch(goal):
+        """(B, T, 1) float32: 1 where the next step's goal differs from this one's.
+
+        A replayed sequence can hold more than one goal (goal_sample=
+        imagination_refresh changes it mid-episode). The return of a step
+        must not run into rewards and values scored against a later goal, so
+        `replay_value_loss` treats the step before a switch like an episode's
+        last step: the step before it bootstraps from its own-goal value
+        instead of continuing the lambda return, and the step itself, whose
+        one-step target is already scored against the new goal, gets no loss.
+        All zeros for a constant goal (HER-relabelled sequences, every other
+        goal source), so the loss is unchanged there.
+        """
+        changed = (goal[:, 1:] != goal[:, :-1]).flatten(2).any(-1, keepdim=True)
+        return to_f32(torch.cat([changed, torch.zeros_like(changed[:, :1])], 1))
 
     @torch.no_grad()
     def lambda_return(self, last, term, reward, value, boot, disc, lamb):

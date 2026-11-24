@@ -1,3 +1,5 @@
+import numbers
+
 import numpy as np
 import torch
 
@@ -17,12 +19,13 @@ REFRESHED_GOAL_SOURCES = ("imagination_refresh",)
 def check_goal_refresh_every(value):
     """Validate `env.goal_refresh_every` (the refresh period K) and return it.
 
-    Must be a whole number >= 1; rejected instead of coerced, so 7.5 does not
-    silently run as 7 and null does not surface as an anonymous int() error.
+    Must be a whole number >= 1 (any integer type, e.g. numpy's, but not bool);
+    rejected instead of coerced, so 7.5 does not silently run as 7 and null
+    does not surface as an anonymous int() error.
     """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1:
         raise ValueError(f"env.goal_refresh_every must be an integer >= 1, got {value!r}.")
-    return value
+    return int(value)
 
 
 class OnlineTrainer:
@@ -162,15 +165,18 @@ class OnlineTrainer:
     def _refresh_mask(self, is_first, steps, last):
         """Envs whose goal is refreshed mid-episode at this step: (B,) bool.
 
-        Refreshed sources (`imagination_refresh`) pick a new goal every
-        `goal_refresh_every` agent steps, `steps` being the index of the current
+        Refreshed sources (`imagination_refresh`) give every goal exactly
+        `goal_refresh_every` (K) agent steps: a refresh takes effect one step
+        after it is imagined (see `_update_goals`), so it is imagined at
+        steps K-1, 2K-1, ..., `steps` being the index of the current
         observation within its episode (0 at is_first). The is_first sample is
         not a refresh, and neither is the episode's last step (`last`): a goal
-        picked there could never be pursued.
+        picked there could never be pursued. (With K=1 the first goal still
+        lasts two steps, since no refresh is imagined at is_first.)
         """
         if self._goal_refresh_every is None:
             return torch.zeros_like(is_first)
-        return ((steps % self._goal_refresh_every) == 0) & ~is_first & ~last
+        return (((steps + 1) % self._goal_refresh_every) == 0) & ~is_first & ~last
 
     def _update_goals(self, agent, envs, goals, trans, steps, last, state, log_prefix="peg"):
         """Pick new goals for this step and relabel trans["goal"].
@@ -187,14 +193,16 @@ class OnlineTrainer:
         """
         is_first = trans["is_first"][:, 0].bool()
         refresh = self._refresh_mask(is_first, steps, last)
-        update = is_first | refresh
         pending = None
-        if update.any():
+        if refresh.any():
+            # Sample is_first and refresh envs in one call, into a copy so the
+            # refreshed ones keep their current goal for this step.
             new_goals = goals.clone()
-            self._sample_goals(agent, envs, update, new_goals, trans, log_prefix=log_prefix, state=state)
+            self._sample_goals(agent, envs, is_first | refresh, new_goals, trans, log_prefix=log_prefix, state=state)
             goals[is_first] = new_goals[is_first]
-            if refresh.any():
-                pending = (refresh, new_goals)
+            pending = (refresh, new_goals)
+        elif is_first.any():
+            self._sample_goals(agent, envs, is_first, goals, trans, log_prefix=log_prefix, state=state)
         self._relabel_goal(envs, goals, trans)
         return pending
 

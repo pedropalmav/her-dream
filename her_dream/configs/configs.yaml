@@ -45,8 +45,10 @@ env:
   stochastic_rows: ${model.rssm.stoch}
   goal_sample: buffer # buffer|text|random|imagination|imagination_refresh|image|peg
   # goal_sample=imagination_refresh only: re-imagine the goal every K agent steps
-  # (K env steps at action_repeat=1), from the agent's current posterior.
-  goal_refresh_every: 15
+  # (K env steps at action_repeat=1), from the agent's current posterior. Tied to
+  # how far ahead goals are imagined, so a goal is not replaced before the agent
+  # could reach it; set explicitly to decouple.
+  goal_refresh_every: ${model.goal_imag_horizon}
   mission_text: ${mission_text}
 
 model:

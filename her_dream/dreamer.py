@@ -91,6 +91,12 @@ class Dreamer(nn.Module):
             self.peg_mppi_gamma = float(peg_cfg.mppi_gamma)
             self.peg_cem_elite_ratio = float(peg_cfg.cem_elite_ratio)
             self.peg_std_scale = float(peg_cfg.std_scale)
+        # Explorer-rollout goal selection (goal_sample=explore_imagination[_refresh],
+        # see `explore_goal`); read leniently for the same reason as `peg`.
+        explore_goal_cfg = getattr(config, "explore_goal", None)
+        self.explore_goal_rollouts = int(explore_goal_cfg.num_rollouts) if explore_goal_cfg is not None else 1
+        if self.explore_goal_rollouts < 1:
+            raise ValueError(f"explore_goal.num_rollouts must be >= 1, got {self.explore_goal_rollouts}.")
 
         # Cache action-space info for uniform random sampling (wm_only mode).
         # The env wrappers expose Box action spaces with custom `discrete` /
@@ -435,6 +441,32 @@ class Dreamer(nn.Module):
             (N, S, K) float32 one-hot goal on self.device.
         """
         torch.compiler.cudagraph_mark_step_begin()
+        N = obs["is_first"].shape[0]
+        # (N, S, K), (N, D), (N, S, K)
+        stoch, deter, logit = self._observe_start(obs, state)
+
+        for _ in range(self.goal_imag_horizon):
+            # (N, A)
+            action = self._random_action(N)
+            stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
+
+        # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit, so the
+        # goal matches whatever the reward function compares against.
+        return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
+
+    def _observe_start(self, obs, state=None):
+        """Posterior of the frozen WM at `obs`, the start of a goal-imagination rollout.
+
+        Args:
+            obs: dict of (N, 1, *) transitions. Must be a copy: preprocess
+                modifies it in place.
+            state: optional agent state (stoch, deter, prev_action) before
+                observing `obs`; None starts from the initial state. Envs whose
+                `obs` has is_first=True are reset by obs_step either way.
+
+        Returns:
+            stoch (N, S, K), deter (N, D), logit (N, S, K).
+        """
         p_obs = self.preprocess(obs)
         # (N, E)
         embed = self._frozen_encoder(p_obs)
@@ -445,17 +477,66 @@ class Dreamer(nn.Module):
             prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
         else:
             stoch, deter, prev_action = state["stoch"], state["deter"], state["prev_action"]
-        # (N, S, K), (N, D)
-        stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
+        return self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
 
+    @torch.no_grad()
+    def explore_goal(self, obs, state=None):
+        """Pick a goal among explorer rollouts by exploration potential.
+
+        Used by goal_sample="explore_imagination" (at episode start) and
+        "explore_imagination_refresh" (also every `goal_refresh_every` steps, from
+        the running agent `state`). From the posterior at `obs`, the frozen
+        explorer is rolled out `explore_goal.num_rollouts` times for
+        `goal_imag_horizon` imagined steps; the rollout whose final state scores
+        highest under `_peg_score` (the explorer critic's value) gives the goal,
+        its final latent converted per `goal_repr`. PEG-like selection, but the
+        candidates are explorer trajectories rather than achiever pursuits of
+        random goals, and there is no MPPI/CEM refit.
+
+        Args:
+            obs: dict of (N, 1, *) current transitions of the envs that need a
+                fresh goal. Must be a copy: preprocess modifies it in place.
+            state: optional agent state before observing `obs`, as in
+                `imagine_goal`. None is only right at is_first.
+
+        Returns:
+            (goal, metrics): the (N, S, K) chosen goals on self.device, and
+            scalar statistics of the rollout scores.
+        """
+        if not self.explores:
+            raise ValueError(
+                "explore_goal requires plan2explore=True or lexa=True: it rolls out and scores with the explorer."
+            )
+        torch.compiler.cudagraph_mark_step_begin()
+        N = obs["is_first"].shape[0]
+        M = self.explore_goal_rollouts
+        # (N, S, K), (N, D)
+        stoch, deter, logit = self._observe_start(obs, state)
+        # Rollout batch ordered (env, rollout), all from the same posterior.
+        # (N*M, S, K), (N*M, D)
+        stoch = stoch.repeat_interleave(M, dim=0)
+        deter = deter.repeat_interleave(M, dim=0)
+        logit = logit.repeat_interleave(M, dim=0)
+        # Only the final state is scored and kept, so the trajectory is not stored.
         for _ in range(self.goal_imag_horizon):
-            # (N, A)
-            action = self._random_action(N)
+            feat = self._frozen_rssm.get_feat(stoch, deter)
+            action = self.explorer.frozen_policy(feat, None).rsample()
             stoch, deter, logit = self._frozen_rssm.img_step(stoch, deter, action)
 
-        # goal_repr selects sample (stoch) / mode (argmax one-hot) / raw logit, so the
-        # goal matches whatever the reward function compares against.
-        return goals.goal_from_latent(self._goal_spec, stoch=stoch, logit=logit)
+        # (N, M)
+        scores = to_f32(self._peg_score(self._frozen_rssm.get_feat(stoch, deter))).reshape(N, M)
+        best = scores.argmax(dim=-1)
+        idx = torch.arange(N, device=self.device) * M + best
+        # goal_repr selects sample / argmax one-hot / logit / prob of the chosen end state.
+        chosen = goals.goal_from_latent(self._goal_spec, stoch=stoch[idx], logit=logit[idx])
+        best_score = scores.max(dim=-1).values
+        metrics = {
+            "score_best": best_score.mean(),
+            "score_mean": scores.mean(),
+            "score_std": scores.std(dim=-1).mean() if M > 1 else torch.zeros((), device=self.device),
+            "score_gap": (best_score - scores.mean(dim=-1)).mean(),
+        }
+        return chosen, metrics
 
     @torch.no_grad()
     def peg_goal(self, obs, candidates=None):

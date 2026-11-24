@@ -600,6 +600,29 @@ class TestLexaConfig:
         cfg.model.imag_reward_source = "temporal"
         train.validate_config(cfg)
 
+    @pytest.mark.parametrize("source", ["explore_imagination", "explore_imagination_refresh"])
+    def test_explorer_goals_require_an_explorer(self, tmp_path, source):
+        cfg = make_config(tmp_path, env=SimpleNamespace(goal_sample=source, goal_refresh_every=15))
+        with pytest.raises(ValueError, match="requires plan2explore=True or lexa=True"):
+            train.validate_config(cfg)
+
+    @pytest.mark.parametrize("mode", ["plan2explore", "lexa"])
+    def test_explorer_goals_accepted_with_an_explorer(self, tmp_path, mode):
+        cfg = make_config(
+            tmp_path, env=SimpleNamespace(goal_sample="explore_imagination_refresh", goal_refresh_every=15)
+        )
+        setattr(cfg, mode, True)
+        cfg.model.imag_reward_source = "temporal"
+        train.validate_config(cfg)
+
+    def test_explorer_refresh_checks_the_period(self, tmp_path):
+        cfg = make_config(
+            tmp_path, env=SimpleNamespace(goal_sample="explore_imagination_refresh", goal_refresh_every=1)
+        )
+        cfg.plan2explore = True
+        with pytest.raises(ValueError, match="env.goal_refresh_every"):
+            train.validate_config(cfg)
+
     def test_drops_the_distance_predictor_when_absent(self):
         # A LEXA checkpoint loaded by an agent using the analytic goal reward.
         agent = SimpleNamespace()

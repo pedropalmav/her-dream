@@ -59,6 +59,18 @@ class TestDreamerReadsConfig:
         assert int(cfg.model.goal_imag_horizon) == 12
 
 
+class TestExploreGoalConfig:
+    """`model.explore_goal` (goal_sample=explore_imagination[_refresh])."""
+
+    def test_default_rollouts(self):
+        assert _compose().model.explore_goal.num_rollouts == 16
+
+    def test_composes_with_the_explorer_source(self):
+        cfg = _compose("env.goal_sample=explore_imagination_refresh", "lexa=True", "model.explore_goal.num_rollouts=4")
+        assert cfg.trainer.goal_sample == "explore_imagination_refresh"
+        assert cfg.model.explore_goal.num_rollouts == 4
+
+
 class TestGoalRefreshEvery:
     """`env.goal_refresh_every` (imagination_refresh) follows the goal horizon by default."""
 

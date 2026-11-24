@@ -4,10 +4,11 @@ import torch
 import her_dream.tools as tools
 from her_dream.buffers.her_buffer import HERBuffer
 from her_dream.goals import goal_from_latent, make_goal_spec, reward_state
+from her_dream.peg import explore_every_ep, go_steps
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
-SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "image")
+SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "image", "peg")
 
 
 class OnlineTrainer:
@@ -44,7 +45,13 @@ class OnlineTrainer:
         # the achiever the rest, so the buffer holds both novel states and
         # goal-directed ones. 0 disables the split (achiever only).
         self._lexa = bool(getattr(config, "lexa", False))
-        self._explore_every_ep = int(getattr(config, "explore_every_ep", 2))
+        self._explore_every_ep = explore_every_ep(getattr(config, "explore_every_ep", None), self._goal_sample)
+        # PEG runs Go-Explore episodes: the achiever chases the selected goal for
+        # this many agent steps, then the explorer takes over.
+        self._peg_go_steps = None
+        if self._goal_sample == "peg":
+            peg_cfg = config.peg
+            self._peg_go_steps = go_steps(peg_cfg.go_ratio, peg_cfg.time_limit, peg_cfg.action_repeat)
 
         self.her = isinstance(self.replay_buffer, HERBuffer)
 
@@ -108,14 +115,24 @@ class OnlineTrainer:
             return goal[:, 0, :]
         return goal
 
-    def _explore_mask(self, episode_ids):
-        """Per-env mask selecting the exploration policy for this episode.
+    def _explore_mask(self, episode_ids, lengths=None):
+        """Per-env mask selecting the exploration policy for the current step.
 
-        None outside LEXA, so every other mode keeps its single policy.
+        LEXA hands every `explore_every_ep`-th episode to the explorer. Under
+        goal_sample="peg" the explorer also takes over every other episode once
+        it has run `peg.go_ratio` of its steps (`lengths` = actions already taken
+        this episode). None outside LEXA, so every other mode keeps its single
+        policy.
         """
-        if not self._lexa or self._explore_every_ep <= 0:
+        if not self._lexa:
             return None
-        return (episode_ids % self._explore_every_ep) == 0
+        mask = None
+        if self._explore_every_ep > 0:
+            mask = (episode_ids % self._explore_every_ep) == 0
+        if self._peg_go_steps is not None and lengths is not None:
+            explore_phase = lengths >= self._peg_go_steps
+            mask = explore_phase if mask is None else mask | explore_phase
+        return mask
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -163,7 +180,7 @@ class OnlineTrainer:
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 is_first = trans["is_first"][:, 0].bool()
                 if is_first.any():
-                    self._sample_goals(agent, envs, is_first, goals, trans)
+                    self._sample_goals(agent, envs, is_first, goals, trans, log_prefix="eval_peg")
                 self._relabel_goal(envs, goals, trans)
 
             # Store transition.
@@ -289,7 +306,7 @@ class OnlineTrainer:
                 agent_state,
                 eval=False,
                 random=self._random_actions,
-                explore=self._explore_mask(episode_ids),
+                explore=self._explore_mask(episode_ids, lengths),
             )
             if self.obs_step_prob_log:
                 self.logger.write_step(
@@ -353,7 +370,7 @@ class OnlineTrainer:
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
-    def _sample_goals(self, agent, envs, mask, goals, trans):
+    def _sample_goals(self, agent, envs, mask, goals, trans, log_prefix="peg"):
         """Populate goals[i] for envs where mask[i] is True (typically is_first).
 
         Source is selected by self._goal_sample:
@@ -370,6 +387,11 @@ class OnlineTrainer:
                              (green square at the episode's goal position,
                              agent at a random cell) and encode it into z with
                              the frozen world model. See `_image_goal`.
+            - "peg":         draw random z candidates, imagine the achiever
+                             pursuing each from the episode's first observation,
+                             and keep the one whose end state the explorer values
+                             most (`Dreamer.peg_goal`). Score statistics are
+                             logged under `log_prefix`.
         """
         if self._goal_sample == "buffer":
             if self.replay_buffer.count() == 0:
@@ -396,6 +418,13 @@ class OnlineTrainer:
             if len(goal_shape) == 1:
                 new_goals = new_goals[:, 0, :]
             goals[indices] = new_goals
+        elif self._goal_sample == "peg":
+            indices = mask.nonzero(as_tuple=True)[0]
+            # trans[indices] copies, as for "imagination".
+            new_goals, metrics = agent.peg_goal(trans[indices])
+            goals[indices] = new_goals
+            for name, value in metrics.items():
+                self.logger.scalar(f"{log_prefix}/{name}", value)
         elif self._goal_sample == "image":
             indices = mask.nonzero(as_tuple=True)[0].tolist()
             new_goals = self._image_goal(agent, envs, indices)

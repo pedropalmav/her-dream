@@ -30,8 +30,22 @@ plan2explore: False
 # alongside it in imagination (reward from `imag_reward_source`, normally
 # `temporal`) instead of in a later run. The explorer drives every
 # `explore_every_ep`-th episode of data collection; 0 means achiever only.
+# null picks the mode's default: 2 for LEXA, 0 under env.goal_sample=peg, where
+# PEG's Go-Explore episodes already hand the second half to the explorer.
 lexa: False
-explore_every_ep: 2
+explore_every_ep: null
+# PEG goal selection (env.goal_sample=peg, requires lexa=True): at episode start,
+# `num_candidates` random z goals are each pursued by the achiever in imagination
+# for `horizon` steps (`repeats` times), and the one whose end state the
+# explorer's critic values most becomes the goal. The achiever then drives the
+# first `go_ratio` of the episode and the explorer the rest (Go-Explore).
+peg:
+  go_ratio: 0.5
+  horizon: null # null -> the go-phase length, round(go_ratio * time_limit / action_repeat)
+  num_candidates: 512
+  repeats: 1
+  time_limit: ${env.time_limit}
+  action_repeat: ${env.action_repeat}
 
 lr: 4e-5
 agc: 0.3

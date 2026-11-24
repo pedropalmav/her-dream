@@ -43,7 +43,7 @@ env:
   scope: ${scope}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
-  goal_sample: buffer # buffer|text|random|imagination|image
+  goal_sample: buffer # buffer|text|random|imagination|image|peg
   mission_text: ${mission_text}
 
 model:
@@ -101,3 +101,4 @@ trainer:
   train_text_only: ${train_text_only}
   lexa: ${lexa}
   explore_every_ep: ${model.explore_every_ep}
+  peg: ${model.peg}

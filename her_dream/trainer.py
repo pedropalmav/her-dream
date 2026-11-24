@@ -8,7 +8,10 @@ from her_dream.peg import SEARCHES, explore_every_ep, go_steps
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
-SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "image", "peg")
+SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "imagination_refresh", "image", "peg")
+# Goal sources that also re-sample the goal mid-episode, every
+# `goal_refresh_every` agent steps (on top of the is_first sample).
+REFRESHED_GOAL_SOURCES = ("imagination_refresh",)
 
 
 class OnlineTrainer:
@@ -36,6 +39,13 @@ class OnlineTrainer:
         self._goal_sample = config.goal_sample
         self._goal_type = config.goal_type
         self._goal_spec = make_goal_spec(config)
+        # Period K (agent steps) of the mid-episode goal refresh; None when the
+        # goal source picks one goal per episode.
+        self._goal_refresh_every = None
+        if self._goal_sample in REFRESHED_GOAL_SOURCES:
+            self._goal_refresh_every = int(config.goal_refresh_every)
+            if self._goal_refresh_every < 1:
+                raise ValueError(f"goal_refresh_every must be >= 1, got {self._goal_refresh_every}.")
         self._wm_only = bool(config.wm_only)
         self._train_text_only = bool(getattr(config, "train_text_only", False))
         # The policy is irrelevant for both world-model pretraining and
@@ -140,6 +150,18 @@ class OnlineTrainer:
             mask = explore_phase if mask is None else mask | explore_phase
         return mask
 
+    def _goal_update_mask(self, is_first, steps):
+        """Envs that need a new goal this step: (B,) bool.
+
+        Every sampled source picks a goal at is_first. Refreshed sources
+        (`imagination_refresh`) also pick one every `goal_refresh_every` agent
+        steps into the episode, `steps` being the index of the current
+        observation within its episode (0 at is_first).
+        """
+        if self._goal_refresh_every is None:
+            return is_first
+        return is_first | ((steps % self._goal_refresh_every) == 0)
+
     def eval(self, agent, train_step):
         """Run evaluation episodes.
 
@@ -185,8 +207,11 @@ class OnlineTrainer:
             # by the reward and stored in the buffer.
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 is_first = trans["is_first"][:, 0].bool()
-                if is_first.any():
-                    self._sample_goals(agent, envs, is_first, goals, trans, log_prefix="eval_peg")
+                # Envs past their first episode keep stepping until all are done;
+                # only refresh the ones still being scored.
+                update = is_first | (self._goal_update_mask(is_first, steps) & ~once_done)
+                if update.any():
+                    self._sample_goals(agent, envs, update, goals, trans, log_prefix="eval_peg", state=agent_state)
                 self._relabel_goal(envs, goals, trans)
 
             # Store transition.
@@ -299,8 +324,10 @@ class OnlineTrainer:
             # by the reward and stored in the buffer.
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 is_first = trans["is_first"][:, 0].bool()
-                if is_first.any():
-                    self._sample_goals(agent, envs, is_first, goals, trans)
+                # lengths is the index of this observation within its episode.
+                update = self._goal_update_mask(is_first, lengths)
+                if update.any():
+                    self._sample_goals(agent, envs, update, goals, trans, state=agent_state)
                 self._relabel_goal(envs, goals, trans)
 
             # Policy inference on GPU.
@@ -376,8 +403,12 @@ class OnlineTrainer:
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
-    def _sample_goals(self, agent, envs, mask, goals, trans, log_prefix="peg"):
+    def _sample_goals(self, agent, envs, mask, goals, trans, log_prefix="peg", state=None):
         """Populate goals[i] for envs where mask[i] is True (typically is_first).
+
+        `state` is the agent state before observing `trans` (the one `agent.act`
+        is about to consume); only "imagination_refresh" reads it, to imagine
+        from where the agent is mid-episode.
 
         Source is selected by self._goal_sample:
             - "buffer":      sample a past stoch uniformly from the replay buffer.
@@ -389,6 +420,10 @@ class OnlineTrainer:
                              (in `trans`) and take the z reached at the last step,
                              so the goal is reachable from the current episode
                              by construction.
+            - "imagination_refresh": as "imagination", but also re-run every
+                             `goal_refresh_every` agent steps, imagining from
+                             the agent's current posterior (`state` + `trans`)
+                             rather than the episode's first observation.
             - "image":       render a synthetic goal observation in each env
                              (green square at the episode's goal position,
                              agent at a random cell) and encode it into z with
@@ -413,11 +448,17 @@ class OnlineTrainer:
             new_goals = self._text_goal(agent, envs, indices)
             if new_goals is not None:
                 goals[indices] = new_goals
-        elif self._goal_sample == "imagination":
+        elif self._goal_sample in ("imagination", "imagination_refresh"):
             indices = mask.nonzero(as_tuple=True)[0]
             # trans[indices] copies, so imagine_goal's in-place preprocess
             # does not touch the trans consumed later by agent.act.
-            new_goals = agent.imagine_goal(trans[indices])  # (N, S, K)
+            if self._goal_sample == "imagination_refresh":
+                # Mid-episode the start posterior depends on the history, so
+                # filter the obs onto the running state (obs_step still resets
+                # the is_first envs).
+                new_goals = agent.imagine_goal(trans[indices], state=state[indices])  # (N, S, K)
+            else:
+                new_goals = agent.imagine_goal(trans[indices])  # (N, S, K)
             goal_shape = envs.observation_space["goal"].shape
             if len(goal_shape) == 1:
                 new_goals = new_goals[:, 0, :]

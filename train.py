@@ -117,6 +117,9 @@ def validate_config(config):
             "and pursued by the achiever, which only LEXA trains together."
         )
 
+    if config.env.goal_sample == "imagination_refresh" and int(config.env.goal_refresh_every) < 1:
+        raise ValueError(f"env.goal_refresh_every must be >= 1, got {config.env.goal_refresh_every}.")
+
     if config.env.goal_sample == "text":
         assert config.mission_text, "goal_sample='text' requires mission_text=True so the agent owns a TextEncoderGRU."
 

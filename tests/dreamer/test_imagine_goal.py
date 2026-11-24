@@ -98,6 +98,46 @@ class TestNoGrad:
         assert not goal.requires_grad
 
 
+class TestStartsFromGivenState:
+    """goal_sample="imagination_refresh" imagines from the running agent state."""
+
+    @staticmethod
+    def _state(rssm):
+        stoch, deter = rssm.initial(N)
+        return {"stoch": torch.ones_like(stoch), "deter": torch.ones_like(deter), "prev_action": torch.ones(N, 4)}
+
+    def test_obs_step_receives_the_state(self, make_agent, rssm, monkeypatch):
+        seen = {}
+        real = rssm.obs_step
+
+        def wrapper(stoch, deter, prev_action, embed, reset):
+            seen.update(stoch=stoch, deter=deter, prev_action=prev_action)
+            return real(stoch, deter, prev_action, embed, reset)
+
+        monkeypatch.setattr(rssm, "obs_step", wrapper)
+        state = self._state(rssm)
+        make_agent().imagine_goal({"is_first": torch.zeros(N, dtype=torch.bool)}, state=state)
+        assert seen["stoch"] is state["stoch"] and seen["deter"] is state["deter"]
+        assert seen["prev_action"] is state["prev_action"]
+
+    def test_state_changes_the_start_posterior(self, make_agent, rssm, monkeypatch):
+        spy = _spy_on(monkeypatch, rssm, "obs_step")
+        agent = make_agent(goal_imag_horizon=0)
+        agent.imagine_goal({"is_first": torch.zeros(N, dtype=torch.bool)})
+        deter_initial = spy.last_return[1]
+        agent.imagine_goal({"is_first": torch.zeros(N, dtype=torch.bool)}, state=self._state(rssm))
+        assert not torch.allclose(spy.last_return[1], deter_initial)
+
+    def test_is_first_resets_the_state(self, make_agent, rssm, monkeypatch):
+        spy = _spy_on(monkeypatch, rssm, "obs_step")
+        agent = make_agent(goal_imag_horizon=0)
+        agent.imagine_goal({"is_first": torch.ones(N, dtype=torch.bool)})
+        deter_initial = spy.last_return[1]
+        agent.imagine_goal({"is_first": torch.ones(N, dtype=torch.bool)}, state=self._state(rssm))
+        # deter depends only on the (reset) state and action, not on the embed.
+        torch.testing.assert_close(spy.last_return[1], deter_initial)
+
+
 # ---------------------------------------------------------------------------
 # Helper: wrap a real RSSM method to record call count and last return value
 # while keeping the genuine dynamics.

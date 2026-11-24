@@ -670,11 +670,12 @@ class Dreamer(nn.Module):
         return chosen, metrics
 
     def _peg_score(self, feat):
-        """Exploration potential of the states the achiever reached, (B, F) -> (B,).
+        """Exploration potential of imagined end states, (B, F) -> (B,).
 
         PEG's criterion: the explorer critic's value there, i.e. the intrinsic
-        return the explorer expects if it takes over from that state. This is the
-        seam for trying other selection criteria.
+        return the explorer expects if it takes over from that state. Scores the
+        achiever's end states for `peg_goal` and the explorer's for
+        `explore_goal`. This is the seam for trying other selection criteria.
         """
         return self.explorer._frozen_value(self.explorer.policy_input(feat, None)).mode.squeeze(-1)
 

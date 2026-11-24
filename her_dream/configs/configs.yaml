@@ -106,5 +106,6 @@ trainer:
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}
   lexa: ${lexa}
+  plan2explore: ${plan2explore}
   explore_every_ep: ${model.explore_every_ep}
   peg: ${model.peg}

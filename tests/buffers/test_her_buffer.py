@@ -340,6 +340,24 @@ class TestApplyHER:
             result = her_buffer._apply_her(sample_td, envs, steps, np.array([0]))
         assert torch.equal(result["goal"][0], sentinel)
 
+    def test_goal_switch_cleared_only_on_relabelled_rows(self, her_buffer):
+        # imagination_refresh stores goal_switch; a relabelled row no longer
+        # carries those goals, so it has no switch to cut the return at.
+        sample_td = self._make_sample_td()
+        sample_td["goal_switch"] = torch.ones(self.B, self.T1, 1, dtype=torch.bool)
+        envs, steps = self._make_envs_steps()
+        with patch.object(her_buffer, "_sample_goal", return_value=torch.ones(self.T1, K)):
+            result = her_buffer._apply_her(sample_td, envs, steps, np.array([0]))
+        assert not result["goal_switch"][0].any()
+        assert result["goal_switch"][1].all()
+
+    def test_no_goal_switch_key_is_fine(self, her_buffer):
+        sample_td = self._make_sample_td()
+        envs, steps = self._make_envs_steps()
+        with patch.object(her_buffer, "_sample_goal", return_value=torch.ones(self.T1, K)):
+            result = her_buffer._apply_her(sample_td, envs, steps, np.array([0]))
+        assert "goal_switch" not in result
+
     def test_non_her_batch_goal_unchanged(self, her_buffer):
         sample_td = self._make_sample_td()
         envs, steps = self._make_envs_steps()

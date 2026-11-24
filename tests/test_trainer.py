@@ -1359,7 +1359,7 @@ def _counting_imagine_goal(calls):
 
 
 def _run_refresh_begin(ep_len, k=3):
-    """Run begin() over one `ep_len`-step episode; return (imagine calls, stored goals, rewards)."""
+    """Run begin() over one `ep_len`-step episode; return (imagine calls, stored goals, rewards, switches)."""
     t = _make_begin_trainer({
         "steps": ep_len - 1,
         "batch_length": 1000,
@@ -1377,7 +1377,10 @@ def _run_refresh_begin(ep_len, k=3):
     t.train_envs.step.side_effect = _refresh_episode(ep_len)
     t.begin(agent)
     stored = [c.args[0] for c in t.replay_buffer.add_transition.call_args_list]
-    return calls, [s["goal"][0, 0, 0].item() for s in stored], [s["reward"][0, 0].item() for s in stored]
+    goals = [s["goal"][0, 0, 0].item() for s in stored]
+    rewards = [s["reward"][0, 0].item() for s in stored]
+    switches = [bool(s["goal_switch"][0, 0]) for s in stored]
+    return calls, goals, rewards, switches
 
 
 def _run_refresh_eval(ep_len, k=3):
@@ -1396,20 +1399,34 @@ def _run_refresh_eval(ep_len, k=3):
 
 class TestImaginationRefreshLoop:
     def test_begin_gives_every_goal_k_steps(self):
-        calls, goals, _ = _run_refresh_begin(ep_len=8)
+        calls, goals, _, _ = _run_refresh_begin(ep_len=8)
         # Imagined at episode steps 0 (is_first), 2 and 5...
         assert calls == [True, False, False]
         # ...each refresh taking effect on the next step, so each goal lasts K=3.
         assert goals == [1, 1, 1, 2, 2, 2, 3, 3]
 
     def test_refresh_step_is_scored_against_the_old_goal(self):
-        _, goals, rewards = _run_refresh_begin(ep_len=8)
+        _, goals, rewards, _ = _run_refresh_begin(ep_len=8)
         assert rewards == goals
         assert rewards[2] == 1 and rewards[5] == 2
 
+    def test_stores_goal_switch_on_the_step_before_each_change(self):
+        # repval cuts its return there (ActorCritic.replay_value_loss).
+        _, goals, _, switches = _run_refresh_begin(ep_len=8)
+        assert switches == [False, False, True, False, False, True, False, False]
+        assert switches[:-1] == [a != b for a, b in zip(goals, goals[1:])]
+
+    def test_no_goal_switch_key_for_other_sources(self):
+        t = _make_begin_trainer({"steps": 1, "batch_length": 1000, "goal_sample": "imagination"})
+        agent = make_mock_agent()
+        agent.imagine_goal.return_value = torch.ones(1, S, K)
+        t.train_envs.step.side_effect = _refresh_episode(2)
+        t.begin(agent)
+        assert all("goal_switch" not in c.args[0] for c in t.replay_buffer.add_transition.call_args_list)
+
     def test_begin_skips_refresh_on_the_last_step(self):
         # Step 5 is the episode's last observation: no goal is imagined there.
-        calls, goals, _ = _run_refresh_begin(ep_len=6)
+        calls, goals, _, _ = _run_refresh_begin(ep_len=6)
         assert calls == [True, False]
         assert goals == [1, 1, 1, 2, 2, 2]
 

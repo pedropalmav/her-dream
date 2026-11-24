@@ -195,33 +195,27 @@ def _repval(ac, batch, **overrides):
     return ac.replay_value_loss(**args)[0]["repval"]
 
 
+def _switch_at(t, batch):
+    """goal_switch flag (B, T, 1): the goal changes after step `t`."""
+    switch = torch.zeros_like(batch.last, dtype=torch.bool)
+    switch[:, t] = True
+    return switch
+
+
 class TestGoalSwitch:
     """goal_sample=imagination_refresh can change the goal inside a replayed sequence."""
-
-    def test_marks_the_step_before_a_change(self):
-        goal = torch.zeros(1, 5, 2)
-        goal[:, 3:] = 1.0  # goal changes between steps 2 and 3
-        assert ActorCritic.goal_switch(goal)[0, :, 0].tolist() == [0, 0, 1, 0, 0]
-
-    def test_constant_goal_has_no_switch(self, replay_batch):
-        assert ActorCritic.goal_switch(replay_batch.goal).sum() == 0
-
-    def test_grouped_goal_compares_every_group(self):
-        goal = torch.zeros(1, 3, 4, 4)
-        goal[:, 2, 3, 1] = 1.0  # one entry of one group changes at step 2
-        assert ActorCritic.goal_switch(goal)[0, :, 0].tolist() == [0, 1, 0]
 
     def test_return_does_not_cross_a_goal_switch(self, ac, replay_batch):
         # Switch between the last two steps: the final step's loss is never
         # trained (weight[:, :-1]), so the loss may only see it through the
         # return of the step before, which must not run into the new goal.
         _break_symmetry(ac)
-        goal = replay_batch.goal.clone()
-        goal[:, -1] = torch.randn_like(goal[:, -1])
+        switch = _switch_at(-2, replay_batch)
         reward, boot = replay_batch.reward.clone(), torch.randn_like(replay_batch.boot)
-        base = _repval(ac, replay_batch, goal=goal, reward=reward, boot=boot)
+        base = _repval(ac, replay_batch, reward=reward, boot=boot, goal_switch=switch)
         reward[:, -1], boot[:, -1] = 5.0, 7.0
-        assert _repval(ac, replay_batch, goal=goal, reward=reward, boot=boot).item() == pytest.approx(base.item())
+        changed = _repval(ac, replay_batch, reward=reward, boot=boot, goal_switch=switch)
+        assert changed.item() == pytest.approx(base.item())
 
     def test_without_a_switch_the_return_spans_the_sequence(self, ac, replay_batch):
         _break_symmetry(ac)
@@ -230,15 +224,31 @@ class TestGoalSwitch:
         reward[:, -1] = 5.0
         assert _repval(ac, replay_batch, reward=reward).item() != pytest.approx(base.item())
 
+    def test_per_step_goals_are_not_a_switch(self, ac, replay_batch):
+        # HER's future/episode strategies give every step its own goal; with
+        # no flag the return must still span the sequence and the loss stay on.
+        _break_symmetry(ac)
+        goal = torch.randn_like(replay_batch.goal)
+        reward = replay_batch.reward.clone()
+        base = _repval(ac, replay_batch, goal=goal, reward=reward)
+        assert base.item() != 0.0
+        reward[:, -1] = 5.0
+        assert _repval(ac, replay_batch, goal=goal, reward=reward).item() != pytest.approx(base.item())
+
     def test_matches_marking_the_step_last(self, ac, replay_batch):
         _break_symmetry(ac)
-        goal = replay_batch.goal.clone()
-        goal[:, 2:] = torch.randn_like(goal[:, 2:])  # switch between steps 1 and 2
         last = replay_batch.last.clone()
         last[:, 1] = 1.0
-        assert _repval(ac, replay_batch, goal=goal).item() == pytest.approx(
-            _repval(ac, replay_batch, goal=goal, last=last).item()
+        assert _repval(ac, replay_batch, goal_switch=_switch_at(1, replay_batch)).item() == pytest.approx(
+            _repval(ac, replay_batch, last=last).item()
         )
+
+    def test_return_stats_skip_the_masked_step(self, ac, replay_batch):
+        reward = replay_batch.reward.clone()
+        reward[:, 2] = 100.0  # only the masked step 1's return sees it
+        args = {k: getattr(replay_batch, k) for k in ("feat", "goal", "last", "term", "boot")}
+        _, metrics = ac.replay_value_loss(**args, reward=reward, goal_switch=_switch_at(1, replay_batch))
+        assert metrics["ret_replay_max"] < 50.0
 
 
 class TestNaming:

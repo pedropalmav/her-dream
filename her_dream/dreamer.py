@@ -945,7 +945,9 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter)  # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        replay_losses, replay_metrics = self.ac.replay_value_loss(feat, data["goal"], last, term, reward, boot)
+        replay_losses, replay_metrics = self.ac.replay_value_loss(
+            feat, data["goal"], last, term, reward, boot, goal_switch=data.get("goal_switch", None)
+        )
         losses.update(replay_losses)
         metrics.update(replay_metrics)
 

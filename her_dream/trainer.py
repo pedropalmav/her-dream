@@ -24,7 +24,10 @@ def check_goal_refresh_every(value):
     does not surface as an anonymous int() error.
     """
     if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1:
-        raise ValueError(f"env.goal_refresh_every must be an integer >= 1, got {value!r}.")
+        raise ValueError(
+            f"env.goal_refresh_every must be an integer >= 1, got {value!r} "
+            "(it defaults to model.goal_imag_horizon; set it explicitly if that is 0)."
+        )
     return int(value)
 
 
@@ -411,6 +414,15 @@ class OnlineTrainer:
                 trans["logit"] = agent_state["logit"]
 
             self._apply_reward(trans, agent.rssm)
+            if self._goal_refresh_every is not None:
+                # Marks the step after which the goal changes, so the replay
+                # value loss does not run its return across the switch
+                # (ActorCritic.replay_value_loss). Stored under refreshed
+                # sources only, so other runs' buffers are unchanged.
+                switch = torch.zeros_like(trans["is_first"], dtype=torch.bool)
+                if pending_goals is not None:
+                    switch[pending_goals[0]] = True
+                trans["goal_switch"] = switch
             if pending_goals is not None:
                 self._commit_goals(goals, pending_goals)
 

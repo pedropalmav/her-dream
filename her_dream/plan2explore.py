@@ -24,8 +24,10 @@ class Disagreement(nn.Module):
         super().__init__()
         cfg = config.disag
         self.target = str(cfg.target)
-        if self.target not in ("stoch", "deter", "feat"):
-            raise ValueError(f"Unknown disag.target {self.target!r}; expected 'stoch', 'deter' or 'feat'.")
+        if self.target not in ("stoch", "logit", "prob", "deter", "feat"):
+            raise ValueError(
+                f"Unknown disag.target {self.target!r}; expected 'stoch', 'logit', 'prob', 'deter' or 'feat'."
+            )
         self.action_cond = bool(cfg.action_cond)
         self.offset = int(cfg.offset)
         if self.offset < 1:
@@ -36,17 +38,32 @@ class Disagreement(nn.Module):
         if self.models < 2:
             raise ValueError(f"disag.models must be >= 2 for a variance to exist, got {self.models}.")
 
-        self.target_size = {"stoch": rssm.flat_stoch, "deter": rssm._deter, "feat": feat_size}[self.target]
+        self.target_size = {
+            "stoch": rssm.flat_stoch,
+            "logit": rssm.flat_stoch,
+            "prob": rssm.flat_stoch,
+            "deter": rssm._deter,
+            "feat": feat_size,
+        }[self.target]
         self.input_size = feat_size + (act_dim if self.action_cond else 0)
 
         cfg.head.shape = [self.target_size]
         self.heads = nn.ModuleList([networks.MLPHead(cfg.head, self.input_size) for _ in range(self.models)])
 
-    def target_from(self, stoch, deter, feat):
-        """The tensor the ensemble is trained to predict, per `disag.target`."""
-        if self.target == "stoch":
+    def target_from(self, stoch, deter, feat, logit):
+        """The tensor the ensemble is trained to predict, per `disag.target`.
+
+        `stoch` is the sampled one-hot, so its target carries the posterior's own
+        sampling noise; `prob` (softmax(logit), per group) is that sample's
+        expectation and removes it. Raw `logit` is only defined up to a per-group
+        additive constant, which the MSE does not ignore — prefer `prob`.
+        """
+        if self.target == "prob":
+            logit = torch.softmax(to_f32(logit), dim=-1)
+        if self.target in ("stoch", "logit", "prob"):
+            latent = stoch if self.target == "stoch" else logit
             # (B, T, S, K) -> (B, T, S*K)
-            return stoch.reshape(*stoch.shape[:2], -1)
+            return latent.reshape(*latent.shape[:2], -1)
         if self.target == "deter":
             return deter
         return feat

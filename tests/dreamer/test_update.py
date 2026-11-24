@@ -284,6 +284,11 @@ class TestPlan2Explore:
         moved = any(not torch.equal(b, p.detach()) for b, p in zip(before, agent.explorer._slow_value.parameters()))
         assert moved
 
+    @pytest.mark.parametrize("target", ["stoch", "logit", "prob", "deter", "feat"])
+    def test_runs_with_every_ensemble_target(self, target):
+        _, metrics = self._step(model__disag__target=target)
+        assert torch.isfinite(torch.as_tensor(float(metrics["loss/disag"])))
+
     def test_runs_with_the_continue_head(self):
         _, metrics = self._step(model__use_cont_head=True)
         assert {"loss/con", "loss/explore_policy"} <= set(metrics)

@@ -243,12 +243,13 @@ class TestGoalSwitch:
             _repval(ac, replay_batch, last=last).item()
         )
 
-    def test_return_stats_skip_the_masked_step(self, ac, replay_batch):
+    def test_return_stats_cover_every_step(self, ac, replay_batch):
+        # No data-dependent masking in the metrics (a GPU sync per update).
         reward = replay_batch.reward.clone()
         reward[:, 2] = 100.0  # only the masked step 1's return sees it
         args = {k: getattr(replay_batch, k) for k in ("feat", "goal", "last", "term", "boot")}
         _, metrics = ac.replay_value_loss(**args, reward=reward, goal_switch=_switch_at(1, replay_batch))
-        assert metrics["ret_replay_max"] < 50.0
+        assert metrics["ret_replay_max"] > 50.0
 
 
 class TestNaming:

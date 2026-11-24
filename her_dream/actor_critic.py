@@ -244,9 +244,10 @@ class ActorCritic(nn.Module):
 
         losses = {self.key("repval"): repval_loss}
         metrics = {}
-        # Stats over the trained returns only (not the steps masked above).
-        trained = weight[:, :-1] > 0
-        metrics.update(tools.tensorstats(ret[trained] if trained.any() else ret, self.key("ret_replay")))
+        # Over every step, masked ones included: a masked view would need a
+        # data-dependent branch/shape here (a GPU sync and a compile graph
+        # break on every update) and would shift the metric for all runs.
+        metrics.update(tools.tensorstats(ret, self.key("ret_replay")))
         metrics.update(tools.tensorstats(value, self.key("value_replay")))
         metrics.update(tools.tensorstats(slow_value, self.key("slow_value_replay")))
         return losses, metrics

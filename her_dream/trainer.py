@@ -19,14 +19,16 @@ REFRESHED_GOAL_SOURCES = ("imagination_refresh",)
 def check_goal_refresh_every(value):
     """Validate `env.goal_refresh_every` (the refresh period K) and return it.
 
-    Must be a whole number >= 1 (any integer type, e.g. numpy's, but not bool);
+    Must be a whole number >= 2 (any integer type, e.g. numpy's, but not bool);
     rejected instead of coerced, so 7.5 does not silently run as 7 and null
-    does not surface as an anonymous int() error.
+    does not surface as an anonymous int() error. K=1 is rejected because
+    every step would be a goal switch, so the replay value loss would mask
+    nearly all of its targets (ActorCritic.replay_value_loss).
     """
-    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 2:
         raise ValueError(
-            f"env.goal_refresh_every must be an integer >= 1, got {value!r} "
-            "(it defaults to model.goal_imag_horizon; set it explicitly if that is 0)."
+            f"env.goal_refresh_every must be an integer >= 2, got {value!r} "
+            "(it defaults to model.goal_imag_horizon; set it explicitly if that is below 2)."
         )
     return int(value)
 
@@ -168,14 +170,15 @@ class OnlineTrainer:
     def _refresh_mask(self, is_first, steps, last):
         """Envs whose goal is refreshed mid-episode at this step: (B,) bool.
 
-        Refreshed sources (`imagination_refresh`) give every goal exactly
+        Refreshed sources (`imagination_refresh`) give every goal
         `goal_refresh_every` (K) agent steps: a refresh takes effect one step
         after it is imagined (see `_update_goals`), so it is imagined at
         steps K-1, 2K-1, ..., `steps` being the index of the current
         observation within its episode (0 at is_first). The is_first sample is
         not a refresh, and neither is the episode's last step (`last`): a goal
-        picked there could never be pursued. (With K=1 the first goal still
-        lasts two steps, since no refresh is imagined at is_first.)
+        picked there could never be pursued. The episode's last goal can
+        still be cut short by the episode ending (the trainer does not know
+        the time limit).
         """
         if self._goal_refresh_every is None:
             return torch.zeros_like(is_first)

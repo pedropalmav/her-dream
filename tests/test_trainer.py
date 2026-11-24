@@ -1285,7 +1285,7 @@ class TestImaginationRefreshMask:
         assert make_trainer(refresh_config(goal_refresh_every=15))._goal_refresh_every == 15
         assert make_trainer(make_config(goal_sample="imagination"))._goal_refresh_every is None
 
-    @pytest.mark.parametrize("value", [0, -3, 7.5, None, "15", True, np.int64(0)])
+    @pytest.mark.parametrize("value", [0, 1, -3, 7.5, None, "15", True, np.int64(1)])
     def test_rejects_invalid_period(self, value):
         with pytest.raises(ValueError, match="env.goal_refresh_every"):
             make_trainer(refresh_config(goal_refresh_every=value))

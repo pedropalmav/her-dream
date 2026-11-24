@@ -19,11 +19,17 @@ hydra:
 
 batch_size: 16
 batch_length: 64
+# Constant per-step baseline added to whatever the goal type's reward returns
+# (rewards.with_reward_offset). 0 keeps the historical rewards untouched; an env that
+# can terminate needs reward_offset=1.0 so the {-1, 0} match rewards become {0, 1} and
+# dying stops being worth more than surviving.
+reward_offset: 0.0
 mission_text: False
 wm_only: False
 freeze_wm: False
 train_text_only: False
 plan2explore: False
+lexa: False
 load_from: null
 # Load only the world model from `load_from` and re-initialize actor/critic.
 # Needed for checkpoints whose actor/critic were built without a goal input
@@ -37,7 +43,7 @@ env:
   scope: ${scope}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
-  goal_sample: buffer # buffer|text|random|imagination|image
+  goal_sample: buffer # buffer|text|random|imagination|image|peg
   mission_text: ${mission_text}
 
 model:
@@ -51,8 +57,10 @@ model:
   freeze_wm: ${freeze_wm}
   train_text_only: ${train_text_only}
   plan2explore: ${plan2explore}
+  lexa: ${lexa}
   prob_threshold: ${oc.select:prob_threshold,0.5}
   prob_threshold_step: ${oc.select:prob_threshold_step,0.05}
+  reward_offset: ${reward_offset}
 
 buffer:
   goal_type: ${goal_type}
@@ -91,3 +99,6 @@ trainer:
   scope: ${scope}
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}
+  lexa: ${lexa}
+  explore_every_ep: ${model.explore_every_ep}
+  peg: ${model.peg}

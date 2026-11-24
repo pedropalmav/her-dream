@@ -17,7 +17,58 @@ import torch.nn.functional as F
 ONEHOT_ATOL = 1e-3
 
 
+def with_reward_offset(reward_fn, offset: float):
+    """Wrap a reward function so it returns ``offset + reward_fn(...)``.
+
+    The offset is what a completely unmatched step is worth, so it fixes the sign of
+    the whole scheme without touching the reward functions themselves: the historical
+    ``{-1, 0}`` (``[-1, 0]`` for `row_by_row`) match rewards become ``{0, 1}``
+    (``[0, 1]``) at ``offset=1``.
+
+    **This exists for episodic envs.** With a negative per-step reward, ending an
+    episode is worth *more* than surviving it, because termination stops the
+    accumulation of -1s — an agent that can perceive termination is rewarded for
+    dying. Measured on a lava variant of the grid env (random policy, gamma=0.997),
+    running to the time limit returns -309 while dying returns -136; through the real
+    `_lambda_return` the terminating step has advantage +90.4 under ``{-1, 0}`` and
+    -212.1 under ``{0, 1}``. Nothing here can terminate yet, but `envs/crafter.py`
+    already propagates `is_terminal` and a lava env is coming.
+
+    Absent termination the two schemes are equivalent for the optimal policy: a
+    constant shift moves every value by ``offset/(1-gamma)`` and leaves advantages
+    untouched. So this only changes what is learned once something can terminate.
+
+    ``offset=0`` — the default for every goal type — returns `reward_fn` unchanged, so
+    the reward stays bit-identical, dtype included (the exact-match rewards return
+    int64, which adding a float offset would promote).
+    """
+    if not offset:
+        return reward_fn
+
+    def offset_reward(*args, **kwargs):
+        return offset + reward_fn(*args, **kwargs)
+
+    return offset_reward
+
+
+def reward_offset(config) -> float:
+    """The configured per-step baseline, 0.0 when the key is absent.
+
+    Optional by design: it is a run-level knob (an env that can terminate needs it),
+    not a per-goal-type descriptor, so no `configs/goal_type/<type>.yaml` carries one
+    and configs saved before the key existed — which `evaluate.py`, `zflow/` and the
+    `experiments/` loaders read back — still resolve to the historical 0.0.
+    """
+    offset = getattr(config, "reward_offset", None)
+    return 0.0 if offset is None else float(offset)
+
+
 def make_reward(config):
+    """The goal type's reward function, shifted by `config.reward_offset` if set."""
+    return with_reward_offset(_goal_type_reward(config), reward_offset(config))
+
+
+def _goal_type_reward(config):
     match config.goal_type:
         case "first_row":
             return first_row_reward

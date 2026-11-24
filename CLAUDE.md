@@ -13,7 +13,7 @@ A PyTorch implementation of **R2-Dreamer** (ICLR 2026) extended with goal-condit
 
 The reusable library lives in an **installable package, `her_dream/`** (distribution name `her-dream`, defined in `pyproject.toml`). Install it editable with **`uv pip install -e .`**; this replaces the old `sys.path`/CWD-based imports, so `import her_dream` (and `from her_dream.dreamer import Dreamer`, `from her_dream.envs import make_envs`, …) works from any directory.
 
-- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py plan2explore.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
+- **Package** (`her_dream/`): the core modules `dreamer.py actor_critic.py plan2explore.py temporal_distance.py rssm.py deter.py rewards.py goals.py trainer.py` and the subpackages `buffers/ distributions/ envs/ networks/ optim/ tools/`, plus the Hydra `configs/` tree (shipped as package data via `[tool.setuptools.package-data]`). Everything here is imported as `her_dream.<module>`; `her_dream/__init__.py` re-exports the common entry points (`Dreamer`, `ActorCritic`, `OnlineTrainer`, `make_envs`/`make_env`, `make_buffer`, `make_reward`, `make_goal_spec`, …).
 - **Repo-root scripts** (kept out of the package, but they `import her_dream`): `train.py`, `evaluate.py`, `eval_text_goal.py`, `export.py`, `visualization.py`, and the `experiments/`, `viz/`, `zflow/`, `scripts/`, `tests/` directories.
 - **Convention for this doc**: paths naming a library module (e.g. `dreamer.py`, `envs/wrappers.py`, `configs/goal_type/full.yaml`) are relative to `her_dream/` — i.e. `her_dream/dreamer.py`, `her_dream/configs/…`. Root-level things (`train.py`, `experiments/`, `scripts/`, `docs/`) are named as-is.
 - Because `configs/` now ships inside the package, the Hydra entry points (`train.py`, `evaluate.py`) resolve it via `pathlib.Path(her_dream.__file__).parent / "configs"` rather than a path relative to the script.
@@ -43,6 +43,14 @@ python3 train.py logdir=./logdir/posttrain/01 load_from=./logdir/wm_only/01 free
 # post-training path — the checkpoint's explorer/ensemble are dropped on load).
 python3 train.py logdir=./logdir/p2e/01 plan2explore=True
 python3 train.py logdir=./logdir/p2e/achiever load_from=./logdir/p2e/01 freeze_wm=True
+
+# LEXA: explorer and achiever trained together in one run, the achiever driven
+# by the learned temporal distance rather than an exact z match.
+python3 train.py logdir=./logdir/lexa/01 lexa=True model.imag_reward_source=temporal
+
+# PEG-style goal selection on top of LEXA: random z candidates, pick the one whose
+# imagined pursuit ends where the explorer critic values most; Go-Explore episodes.
+python3 train.py logdir=./logdir/peg/01 lexa=True model.imag_reward_source=temporal env.goal_sample=peg env.time_limit=100
 
 # Distill the text encoder against a frozen WM
 python3 train.py logdir=./logdir/distill/01 load_from=./logdir/wm_only/01 train_text_only=True mission_text=True
@@ -116,12 +124,36 @@ Adding a goal type = a reward fn in `rewards.py` + a `configs/goal_type/<type>.y
 keys; no edits to dreamer/trainer/her_buffer/wrappers. `goals.default_descriptors(goal_type)`
 reads a type's descriptors from its config file (used to backfill old checkpoints in zflow/viz).
 
+### `reward_offset` — the per-step baseline
+
+Whatever a goal type returns, `make_reward` wraps it in `rewards.with_reward_offset`, which
+adds the top-level `reward_offset` (default `0.0`, mirrored into `model`). It is a **run-level
+knob, not a goal-type descriptor**: no `configs/goal_type/<type>.yaml` carries one, and at 0
+the wrapper returns the reward function itself, so existing runs are bit-identical (dtype
+included) and configs saved before the key existed still resolve to 0.
+
+```bash
+python3 train.py reward_offset=1.0   # {-1, 0} -> {0, 1}, [-1, 0] -> [0, 1]
+```
+
+**Any env that can terminate needs it.** With a negative per-step reward, ending an episode is
+worth *more* than surviving it, because termination stops the accumulation of -1s — so an agent
+that can perceive termination is rewarded for dying. On a lava variant of the grid env (random
+policy, `gamma=0.997`) running to the time limit returns -309 while dying returns -136, and
+through the real `_lambda_return` the terminating step has advantage **+90.4** under `{-1, 0}`
+versus **-212.1** under `{0, 1}`. Nothing here can terminate yet (`envs/crafter.py` already
+propagates `is_terminal`, and a lava env is coming), and absent termination the two schemes are
+equivalent for the optimal policy — a constant shift moves every value by `offset/(1-gamma)` and
+leaves advantages untouched — so this only changes what is learned once something can terminate.
+`prob` and `max_cosine` are already non-negative and need no offset.
+
 The goal source is `env.goal_sample`:
 - `buffer` — sample a `z` (stoch) from the replay buffer (a state the agent actually visited).
 - `text` — sample from the `TextEncoderGRU` given the episode's mission (requires `mission_text=True`).
 - `random` — random one-hot rows generated by the `GoalConditioned` wrapper.
 - `imagination` — at episode start, roll out the (frozen) WM for `goal_imag_horizon` (model config, defaults to `imag_horizon`=15) steps with uniformly random actions from the first observation and take the final prior `z` as the goal, so it is reachable from the current episode by construction (`Dreamer.imagine_goal`).
 - `image` — at episode start, the `GoalImageObservation` wrapper (`envs/wrappers.py`) renders the observation of a synthetic state with an auxiliary `FixedGoal` env (`envs.goal_image.GoalImageGenerator`, given an env factory): green square at the current episode's goal position, agent at a random cell. The frozen WM encodes it into `z` with one posterior step from the initial state (`Dreamer.encode_observation`). Designed for `random_goal`, where buffer-sampled goals encode the wrong square position.
+- `peg` (requires `lexa=True`) — PEG adapted to z space (`Dreamer.peg_goal`, `peg.py`). At episode start, `model.peg.num_candidates` random goals (uniform one-hot per group) are each pursued by the frozen achiever in imagination for `peg.horizon` steps (null → the go-phase length) from the episode's first posterior, `peg.repeats` times; the candidate whose end state scores highest under `Dreamer._peg_score` (the explorer critic's value — the seam for other selection criteria) is kept. No MPPI/CEM refit. The episode is Go-Explore: the achiever drives the first `round(peg.go_ratio * time_limit / action_repeat)` steps, the explorer the rest (`trainer._explore_mask`); `model.explore_every_ep` defaults to 0 here (null → 0 under `peg`, 2 under plain LEXA), matching PEG's lack of explorer-only episodes; an explicit value adds them back. Score statistics are logged as `peg/score_{best,mean,std,gap}` (`eval_peg/` in eval, where the achiever runs the whole episode).
 
 `GoalConditioned` (`envs/wrappers.py`) adds the `goal` key to observations, keyed off the `GoalSpec`: `(K,)` one-hot `MultiBinary` for `scope=first_row`, a float `(S, K)` `Box` when `goal_repr=logit`, else `(S, K)` one-hot `MultiBinary`. Dimensions are enforced via `env.stochastic_classes = model.rssm.discrete` and `env.stochastic_rows = model.rssm.stoch` in the config.
 
@@ -131,6 +163,7 @@ A single entry point — **`train.py`** — covers three modes, selected purely 
 - **From-scratch** (default, `load_from=null`) — end-to-end training (WM + actor/critic). With `wm_only=True` it trains only the WM with random actions.
 - **Post-training** (`load_from=<logdir>`) — loads a checkpoint, optionally freezes the WM (`freeze_wm=True`), and trains actor/critic on top. Used to isolate "is the WM or the policy the problem".
 - **Plan2Explore pretraining** (`plan2explore=True`) — trains the WM, a disagreement ensemble and a goal-agnostic *explorer* actor-critic; the task actor-critic is left at its init. Exclusive with the other modes and takes no `load_from`. Phase 2 is plain post-training on the result.
+- **LEXA** (`lexa=True`, normally with `model.imag_reward_source=temporal`) — the same explorer and ensemble, but the achiever is trained *alongside* it in imagination instead of in a later run, and data collection alternates: the explorer drives every `model.explore_every_ep`-th episode (default 2; 0 under `goal_sample=peg`), the achiever the rest. The achiever gets no `repval` loss, since that one is fed the analytic goal reward rather than the objective it is being trained on.
 - **Text distillation** (`train_text_only=True load_from=<logdir> mission_text=True`) — trains only the `TextEncoderGRU` (KL against a frozen WM posterior); WM and actor/critic stay fixed.
 
 There is a single launcher script, `scripts/train.sh` (uv + headless rendering); the mode is chosen entirely by the args it forwards to `train.py` (e.g. `load_from=`, `freeze_wm=True`, `train_text_only=True mission_text=True`).
@@ -201,6 +234,26 @@ with `goal_size=0` and `name="explore"`) and `self.disag`; `act` collects data
 with the explorer, and only the WM, the ensemble and the explorer are optimized.
 Checkpoints therefore carry `explorer.*` / `disag.*`, which `train.py` drops on
 load for an agent that does not build them (`_OPTIONAL_MODULE_PREFIXES`).
+
+**`temporal_distance.py` — `TemporalDistance` class**: LEXA's goal-reaching
+reward. An MLP over `[flat(stoch), flat(goal)]` regressing the normalised number
+of steps between the two, selected with `imag_reward_source=temporal` (an axis
+independent of `lexa` — it works in an ordinary run too).
+- `loss(stoch)` — pairs drawn from the same imagined trajectory, labelled
+  `(j - i) / (T - 1)`, plus `neg_sampling_factor` extra cross-trajectory pairs
+  labelled maximally distant so the predictor cannot collapse to a constant.
+  Latents are detached, so it never shapes the representation.
+- `distance(stoch, goal)` — the reward is its negation.
+
+Why it exists: with `goal_type=full` the analytic reward needs an exact 32-group
+`z` match, which is ~never satisfied (P ≈ 4e-13 under the text encoder — see the
+investigation notes below). A learned distance gives the achiever a gradient
+everywhere instead of an all-or-nothing signal.
+
+Note the predictor sits slightly above its positive-pair labels in practice: the
+negatives carry equal loss weight while being a tenth of the samples (LEXA sums
+the two means). That is a constant-ish bias, which `ReturnEMA` absorbs;
+`temporal_distance.neg_sampling_factor` is the knob.
 
 **`rssm.py` — `RSSM` class**: Manages the latent state `(stoch, deter)`.
 - `stoch` shape: `(B, S, K)` — S groups, K categories (e.g. 32×16).

@@ -1,7 +1,7 @@
 act_entropy: 3e-4
 kl_free: 1.0
 imag_horizon: 15
-goal_imag_horizon: ${model.imag_horizon} # steps imagined for goal_sample=imagination[_refresh]; defaults to imag_horizon
+goal_imag_horizon: ${model.imag_horizon} # steps imagined for goal_sample=imagination[_refresh] and explore_imagination[_refresh] (T); defaults to imag_horizon
 horizon: 333
 lamb: 0.95
 compile: False
@@ -63,6 +63,13 @@ peg:
   repeats: 1
   time_limit: ${env.time_limit}
   action_repeat: ${env.action_repeat}
+# Explorer-rollout goal selection (env.goal_sample=explore_imagination[_refresh],
+# requires plan2explore=True or lexa=True): at episode start (and, for _refresh,
+# every env.goal_refresh_every steps), the explorer is rolled out `num_rollouts`
+# times for goal_imag_horizon steps from the current posterior, and the final z
+# of the rollout whose end state the explorer's critic values most is the goal.
+explore_goal:
+  num_rollouts: 16
 
 lr: 4e-5
 agc: 0.3

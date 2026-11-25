@@ -43,8 +43,8 @@ env:
   scope: ${scope}
   stochastic_classes: ${model.rssm.discrete}
   stochastic_rows: ${model.rssm.stoch}
-  goal_sample: buffer # buffer|text|random|imagination|imagination_refresh|image|peg
-  # goal_sample=imagination_refresh only: re-imagine the goal every K agent steps
+  goal_sample: buffer # buffer|text|random|imagination|imagination_refresh|explore_imagination|explore_imagination_refresh|image|peg
+  # goal_sample=imagination_refresh / explore_imagination_refresh only: re-imagine the goal every K agent steps
   # (K env steps at action_repeat=1), from the agent's current posterior. Tied to
   # how far ahead goals are imagined, so a goal is not replaced before the agent
   # could reach it; set explicitly to decouple.
@@ -106,5 +106,6 @@ trainer:
   wm_only: ${wm_only}
   train_text_only: ${train_text_only}
   lexa: ${lexa}
+  plan2explore: ${plan2explore}
   explore_every_ep: ${model.explore_every_ep}
   peg: ${model.peg}

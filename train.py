@@ -47,7 +47,12 @@ from her_dream.buffers import make_buffer
 from her_dream.dreamer import Dreamer
 from her_dream.envs import make_envs
 from her_dream.rewards import make_reward
-from her_dream.trainer import OnlineTrainer, check_goal_refresh_every
+from her_dream.trainer import (
+    EXPLORER_GOAL_SOURCES,
+    REFRESHED_GOAL_SOURCES,
+    OnlineTrainer,
+    check_goal_refresh_every,
+)
 
 warnings.filterwarnings("ignore")
 # torch.backends.cudnn.benchmark = True
@@ -117,7 +122,15 @@ def validate_config(config):
             "and pursued by the achiever, which only LEXA trains together."
         )
 
-    if config.env.goal_sample == "imagination_refresh":
+    if config.env.goal_sample in EXPLORER_GOAL_SOURCES and not (
+        getattr(config, "plan2explore", False) or getattr(config, "lexa", False)
+    ):
+        raise ValueError(
+            f"env.goal_sample={config.env.goal_sample} requires plan2explore=True or lexa=True: "
+            "goals are imagined with the explorer and scored by its critic."
+        )
+
+    if config.env.goal_sample in REFRESHED_GOAL_SOURCES:
         check_goal_refresh_every(config.env.goal_refresh_every)
 
     if config.env.goal_sample == "text":

@@ -10,10 +10,22 @@ from her_dream.peg import SEARCHES, explore_every_ep, go_steps
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
-SAMPLED_GOAL_SOURCES = ("buffer", "text", "imagination", "imagination_refresh", "image", "peg")
+SAMPLED_GOAL_SOURCES = (
+    "buffer",
+    "text",
+    "imagination",
+    "imagination_refresh",
+    "explore_imagination",
+    "explore_imagination_refresh",
+    "image",
+    "peg",
+)
 # Goal sources that also re-sample the goal mid-episode, every
 # `goal_refresh_every` agent steps (on top of the is_first sample).
-REFRESHED_GOAL_SOURCES = ("imagination_refresh",)
+REFRESHED_GOAL_SOURCES = ("imagination_refresh", "explore_imagination_refresh")
+# Goal sources imagined with the explorer (`Dreamer.explore_goal`); they need
+# plan2explore=True or lexa=True.
+EXPLORER_GOAL_SOURCES = ("explore_imagination", "explore_imagination_refresh")
 
 
 def check_goal_refresh_every(value):
@@ -61,6 +73,9 @@ class OnlineTrainer:
         # Period K (agent steps) of the mid-episode goal refresh; None when the
         # goal source picks one goal per episode.
         self._goal_refresh_every = None
+        # Logger namespace of the goal-selection score statistics (PEG and the
+        # explorer-rollout sources); eval logs under "eval_" + this.
+        self._goal_log_prefix = "explore_goal" if self._goal_sample in EXPLORER_GOAL_SOURCES else "peg"
         if self._goal_sample in REFRESHED_GOAL_SOURCES:
             self._goal_refresh_every = check_goal_refresh_every(config.goal_refresh_every)
         self._wm_only = bool(config.wm_only)
@@ -72,6 +87,11 @@ class OnlineTrainer:
         # the achiever the rest, so the buffer holds both novel states and
         # goal-directed ones. 0 disables the split (achiever only).
         self._lexa = bool(getattr(config, "lexa", False))
+        # Plan2Explore collects every step with the explorer (train and eval).
+        self._plan2explore = bool(getattr(config, "plan2explore", False))
+        # Goal-selection score statistics, accumulated on the device between
+        # episode ends: {prefix: {name: (weighted sum, env count)}}.
+        self._goal_stats = {}
         self._explore_every_ep = explore_every_ep(getattr(config, "explore_every_ep", None), self._goal_sample)
         # PEG runs Go-Explore episodes: the achiever chases the selected goal for
         # this many agent steps, then the explorer takes over.
@@ -170,7 +190,7 @@ class OnlineTrainer:
     def _refresh_mask(self, is_first, steps, last):
         """Envs whose goal is refreshed mid-episode at this step: (B,) bool.
 
-        Refreshed sources (`imagination_refresh`) give every goal
+        Refreshed sources (`imagination_refresh`, `explore_imagination_refresh`) give every goal
         `goal_refresh_every` (K) agent steps: a refresh takes effect one step
         after it is imagined (see `_update_goals`), so it is imagined at
         steps K-1, 2K-1, ..., `steps` being the index of the current
@@ -184,7 +204,7 @@ class OnlineTrainer:
             return torch.zeros_like(is_first)
         return (((steps + 1) % self._goal_refresh_every) == 0) & ~is_first & ~last
 
-    def _update_goals(self, agent, envs, goals, trans, steps, last, state, log_prefix="peg"):
+    def _update_goals(self, agent, envs, goals, trans, steps, last, state, log_prefix=None, explorer_driven=None):
         """Pick new goals for this step and relabel trans["goal"].
 
         Goals sampled at is_first take effect immediately. A mid-episode refresh
@@ -194,11 +214,18 @@ class OnlineTrainer:
         the refresh step is rewarded. The returned pending refresh goes to
         `_commit_goals` once the step's reward has been applied.
 
+        `explorer_driven` ((B,) bool or None) marks envs whose actions come from
+        the explorer this step. The explorer ignores the goal, so the explorer
+        sources skip their (N * num_rollouts rollouts) refresh there; the
+        is_first goal is still sampled, to label the episode's data.
+
         Returns:
             (mask, new_goals) of the pending refresh, or None.
         """
         is_first = trans["is_first"][:, 0].bool()
         refresh = self._refresh_mask(is_first, steps, last)
+        if explorer_driven is not None and self._goal_sample in EXPLORER_GOAL_SOURCES:
+            refresh = refresh & ~explorer_driven
         pending = None
         if refresh.any():
             # Sample is_first and refresh envs in one call, into a copy so the
@@ -218,6 +245,29 @@ class OnlineTrainer:
         if pending is not None:
             mask, new_goals = pending
             goals[mask] = new_goals[mask]
+
+    def _explorer_driven(self, explore, like):
+        """(B,) bool of envs the explorer acts in, or None; `like` is any (B,) tensor of the loop."""
+        if self._plan2explore:
+            return torch.ones_like(like, dtype=torch.bool)
+        return explore
+
+    def _record_goal_stats(self, prefix, metrics, n):
+        """Accumulate one goal selection's batch-mean scores, weighted by its `n` envs.
+
+        Kept as device tensors: converting to floats here would sync the GPU on
+        every refresh, and the logger only keeps the last value per write
+        anyway. `_flush_goal_stats` logs the mean once per episode.
+        """
+        stats = self._goal_stats.setdefault(prefix, {})
+        for name, value in metrics.items():
+            total, count = stats.get(name, (0.0, 0))
+            stats[name] = (total + value * n, count + n)
+
+    def _flush_goal_stats(self, prefix):
+        """Log the mean of the scores recorded under `prefix` since the last flush."""
+        for name, (total, count) in self._goal_stats.pop(prefix, {}).items():
+            self.logger.scalar(f"{prefix}/{name}", total / count)
 
     def eval(self, agent, train_step):
         """Run evaluation episodes.
@@ -267,7 +317,15 @@ class OnlineTrainer:
                 # Envs past their first episode keep stepping until all are done;
                 # only refresh the ones still being scored.
                 pending_goals = self._update_goals(
-                    agent, envs, goals, trans, steps, done | once_done, agent_state, log_prefix="eval_peg"
+                    agent,
+                    envs,
+                    goals,
+                    trans,
+                    steps,
+                    done | once_done,
+                    agent_state,
+                    log_prefix="eval_" + self._goal_log_prefix,
+                    explorer_driven=self._explorer_driven(None, done),
                 )
 
             # Store transition.
@@ -296,6 +354,7 @@ class OnlineTrainer:
         # dict of (B, T, *)
         cache = torch.stack(cache, dim=1) if len(cache) else None
         self.logger.scalar("episode/eval_score", returns.mean())
+        self._flush_goal_stats("eval_" + self._goal_log_prefix)
         self.logger.scalar("episode/eval_length", steps.to(torch.float32).mean())
         for key, value in log_metrics.items():
             if key == "log_success":
@@ -358,6 +417,7 @@ class OnlineTrainer:
                             video_cache = []
                         self.logger.scalar("episode/score", returns[i])
                         self.logger.scalar("episode/length", lengths[i])
+                        self._flush_goal_stats(self._goal_log_prefix)
                         self.logger.write(step + i)  # to show all values on tensorboard
                         returns[i] = lengths[i] = 0
 
@@ -380,11 +440,21 @@ class OnlineTrainer:
             # On is_first, refresh stored goals; then relabel trans["goal"]
             # before act so the agent conditions on the same goal used later
             # by the reward and stored in the buffer.
+            explore = self._explore_mask(episode_ids, lengths)
             pending_goals = None
             if self._goal_sample in SAMPLED_GOAL_SOURCES:
                 # lengths is the index of this observation within its episode;
                 # done marks it as the episode's last.
-                pending_goals = self._update_goals(agent, envs, goals, trans, lengths, done, agent_state)
+                pending_goals = self._update_goals(
+                    agent,
+                    envs,
+                    goals,
+                    trans,
+                    lengths,
+                    done,
+                    agent_state,
+                    explorer_driven=self._explorer_driven(explore, done),
+                )
 
             # Policy inference on GPU.
             # "agent_state" is reset by the agent based on the "is_first" flag in trans.
@@ -395,7 +465,7 @@ class OnlineTrainer:
                 agent_state,
                 eval=False,
                 random=self._random_actions,
-                explore=self._explore_mask(episode_ids, lengths),
+                explore=explore,
             )
             if self.obs_step_prob_log:
                 self.logger.write_step(
@@ -470,12 +540,15 @@ class OnlineTrainer:
         mask = (goals != 0).view(envs.env_num, -1).any(dim=1)
         trans["goal"][mask] = goals[mask].clone()
 
-    def _sample_goals(self, agent, envs, mask, goals, trans, log_prefix="peg", state=None):
+    def _sample_goals(self, agent, envs, mask, goals, trans, log_prefix=None, state=None):
         """Populate goals[i] for envs where mask[i] is True (typically is_first).
 
         `state` is the agent state before observing `trans` (the one `agent.act`
-        is about to consume); only "imagination_refresh" reads it, to imagine
-        from where the agent is mid-episode.
+        is about to consume); only the refreshed sources read it, to imagine
+        from where the agent is mid-episode. `log_prefix` namespaces the score
+        statistics of "peg" / "explore_imagination*" (None: the source's
+        training prefix, "peg" or "explore_goal"); they are accumulated and
+        logged once per episode (`_flush_goal_stats`).
 
         Source is selected by self._goal_sample:
             - "buffer":      sample a past stoch uniformly from the replay buffer.
@@ -491,6 +564,15 @@ class OnlineTrainer:
                              `goal_refresh_every` agent steps, imagining from
                              the agent's current posterior (`state` + `trans`)
                              rather than the episode's first observation.
+            - "explore_imagination": roll the explorer out `explore_goal.num_rollouts`
+                             times for `goal_imag_horizon` steps from the
+                             episode's first observation and keep the final z
+                             of the rollout the explorer critic values most
+                             (`Dreamer.explore_goal`). Scores are logged under
+                             `log_prefix`.
+            - "explore_imagination_refresh": as "explore_imagination", also re-run
+                             every `goal_refresh_every` agent steps from the
+                             agent's current posterior, like "imagination_refresh".
             - "image":       render a synthetic goal observation in each env
                              (green square at the episode's goal position,
                              agent at a random cell) and encode it into z with
@@ -503,6 +585,8 @@ class OnlineTrainer:
                              buffer (`_buffer_candidates`) instead. Score
                              statistics are logged under `log_prefix`.
         """
+        if log_prefix is None:
+            log_prefix = self._goal_log_prefix
         if self._goal_sample == "buffer":
             if self.replay_buffer.count() == 0:
                 return
@@ -530,6 +614,18 @@ class OnlineTrainer:
             if len(goal_shape) == 1:
                 new_goals = new_goals[:, 0, :]
             goals[indices] = new_goals
+        elif self._goal_sample in EXPLORER_GOAL_SOURCES:
+            indices = mask.nonzero(as_tuple=True)[0]
+            # trans[indices] copies, as for "imagination". The refreshed source
+            # imagines from the running state mid-episode, like "imagination_refresh".
+            if self._goal_sample == "explore_imagination_refresh":
+                new_goals, metrics = agent.explore_goal(trans[indices], state=state[indices])
+            else:
+                new_goals, metrics = agent.explore_goal(trans[indices])
+            if self._goal_spec.scope == "first_row":
+                new_goals = new_goals[:, 0]
+            goals[indices] = new_goals
+            self._record_goal_stats(log_prefix, metrics, len(indices))
         elif self._goal_sample == "peg":
             indices = mask.nonzero(as_tuple=True)[0]
             # trans[indices] copies, as for "imagination".
@@ -538,8 +634,7 @@ class OnlineTrainer:
                 candidates = self._buffer_candidates(len(indices))
             new_goals, metrics = agent.peg_goal(trans[indices], candidates=candidates)
             goals[indices] = new_goals
-            for name, value in metrics.items():
-                self.logger.scalar(f"{log_prefix}/{name}", value)
+            self._record_goal_stats(log_prefix, metrics, len(indices))
         elif self._goal_sample == "image":
             indices = mask.nonzero(as_tuple=True)[0].tolist()
             new_goals = self._image_goal(agent, envs, indices)

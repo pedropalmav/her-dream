@@ -57,6 +57,7 @@ class StubDreamer:
 
     # Real implementations under test.
     imagine_goal = Dreamer.imagine_goal
+    _observe_start = Dreamer._observe_start
     encode_observation = Dreamer.encode_observation
     _random_action = Dreamer._random_action
 

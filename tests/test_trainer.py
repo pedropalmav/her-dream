@@ -1179,6 +1179,8 @@ class TestPegSampleGoals:
         t._sample_goals(agent, make_mock_envs(), mask, goals, make_trans())
         agent.peg_goal.assert_called_once()
         assert (goals[0] == 0).all() and (goals[1] == 1).all()
+        logger.scalar.assert_not_called()  # deferred to the episode end
+        t._flush_goal_stats("peg")
         logger.scalar.assert_any_call("peg/score_best", torch.tensor(2.0))
 
     def test_log_prefix_separates_eval(self):
@@ -1194,6 +1196,9 @@ class TestPegSampleGoals:
             make_trans(),
             log_prefix="eval_peg",
         )
+        t._flush_goal_stats("peg")
+        logger.scalar.assert_not_called()
+        t._flush_goal_stats("eval_peg")
         logger.scalar.assert_any_call("eval_peg/score_best", 1.0)
 
 
@@ -1267,8 +1272,8 @@ class TestPegBufferCandidates:
 # ---------------------------------------------------------------------------
 
 
-def refresh_config(goal_refresh_every=3, **overrides):
-    return make_config(goal_sample="imagination_refresh", goal_refresh_every=goal_refresh_every, **overrides)
+def refresh_config(goal_refresh_every=3, goal_sample="imagination_refresh", **overrides):
+    return make_config(goal_sample=goal_sample, goal_refresh_every=goal_refresh_every, **overrides)
 
 
 def tensordict_state(n=1):
@@ -1436,3 +1441,138 @@ class TestImaginationRefreshLoop:
 
     def test_eval_skips_refresh_on_the_last_step(self):
         assert _run_refresh_eval(ep_len=3) == [True]
+
+
+# ---------------------------------------------------------------------------
+# goal_sample="explore_imagination[_refresh]": pick the goal among explorer rollouts
+# ---------------------------------------------------------------------------
+
+
+class TestExploreImaginationSampleGoals:
+    def test_sets_goals_and_logs_scores(self):
+        logger = MagicMock()
+        t = make_trainer(make_config(goal_sample="explore_imagination", lexa=True), logger=logger)
+        agent = MagicMock()
+        agent.explore_goal.return_value = (torch.ones(1, S, K), {"score_best": torch.tensor(2.0)})
+        goals = torch.zeros(B, S, K)
+        t._sample_goals(agent, make_mock_envs(), torch.tensor([False, True]), goals, make_trans(), state=object())
+        # Episode start only: the running state is not used.
+        assert agent.explore_goal.call_args.kwargs == {}
+        assert (goals[0] == 0).all() and (goals[1] == 1).all()
+        t._flush_goal_stats("explore_goal")
+        logger.scalar.assert_any_call("explore_goal/score_best", torch.tensor(2.0))
+
+    def test_first_row_keeps_the_first_group(self):
+        t = make_trainer(make_config(goal_sample="explore_imagination", goal_type="first_row", lexa=True))
+        agent = MagicMock()
+        full = torch.zeros(B, S, K)
+        full[:, 0, 3] = 1.0
+        agent.explore_goal.return_value = (full, {})
+        goals = torch.zeros(B, K)
+        mask = torch.ones(B, dtype=torch.bool)
+        t._sample_goals(agent, make_mock_envs(goal_shape=(K,)), mask, goals, make_trans(goal_shape=(K,)))
+        assert goals[:, 3].tolist() == [1.0, 1.0] and goals.sum() == B
+
+    def test_refresh_passes_the_masked_agent_state(self):
+        t = make_trainer(refresh_config(goal_sample="explore_imagination_refresh", plan2explore=True))
+        agent = MagicMock()
+        agent.explore_goal.return_value = (torch.ones(1, S, K), {})
+        state = tensordict_state(B)
+        state["stoch"][1] = 1.0
+        mask = torch.tensor([False, True])
+        t._sample_goals(agent, make_mock_envs(), mask, torch.zeros(B, S, K), make_trans(), state=state)
+        passed = agent.explore_goal.call_args.kwargs["state"]
+        assert passed["stoch"].shape == (1, S, K) and (passed["stoch"] == 1).all()
+
+    def test_refresh_period_is_read(self):
+        t = make_trainer(refresh_config(goal_refresh_every=7, goal_sample="explore_imagination_refresh"))
+        assert t._goal_refresh_every == 7
+        assert make_trainer(make_config(goal_sample="explore_imagination"))._goal_refresh_every is None
+
+
+def _run_explore_refresh_begin(ep_len, k=3, **overrides):
+    t = _make_begin_trainer({
+        "steps": ep_len - 1,
+        "batch_length": 1000,
+        "goal_sample": "explore_imagination_refresh",
+        "goal_refresh_every": k,
+        "lexa": True,
+        "explore_every_ep": 0,
+        **overrides,
+    })
+    t.reward_function = lambda state, goal: goal[:, :1, 0]
+    state = tensordict_state()
+    agent = make_mock_agent()
+    agent.get_initial_state.return_value = state
+    agent.act.return_value = (torch.zeros(1, A), state, {})
+    calls = []
+    imagine = _counting_imagine_goal(calls)
+    agent.explore_goal.side_effect = lambda obs, state=None: (imagine(obs, state), {"score_best": 0.0})
+    t.train_envs.step.side_effect = _refresh_episode(ep_len)
+    t.begin(agent)
+    stored = [c.args[0] for c in t.replay_buffer.add_transition.call_args_list]
+    goals = [s["goal"][0, 0, 0].item() for s in stored]
+    switches = [bool(s["goal_switch"][0, 0]) for s in stored]
+    return calls, goals, switches, t
+
+
+class TestGoalStats:
+    def test_flush_logs_the_env_weighted_mean_once(self):
+        logger = MagicMock()
+        t = make_trainer(make_config(goal_sample="explore_imagination", lexa=True), logger=logger)
+        t._record_goal_stats("explore_goal", {"score_best": torch.tensor(1.0)}, 1)
+        t._record_goal_stats("explore_goal", {"score_best": torch.tensor(4.0)}, 3)
+        t._flush_goal_stats("explore_goal")
+        logger.scalar.assert_called_once()
+        name, value = logger.scalar.call_args.args
+        assert name == "explore_goal/score_best" and value.item() == pytest.approx(3.25)
+        t._flush_goal_stats("explore_goal")
+        logger.scalar.assert_called_once()  # emptied by the flush
+
+    def test_flush_of_an_empty_prefix_logs_nothing(self):
+        logger = MagicMock()
+        make_trainer(logger=logger)._flush_goal_stats("peg")
+        logger.scalar.assert_not_called()
+
+
+class TestExploreImaginationRefreshLoop:
+    def test_begin_gives_every_goal_k_steps_and_flags_switches(self):
+        calls, goals, switches, _ = _run_explore_refresh_begin(ep_len=8)
+        assert calls == [True, False, False]
+        assert goals == [1, 1, 1, 2, 2, 2, 3, 3]
+        assert switches == [False, False, True, False, False, True, False, False]
+
+    def test_begin_records_under_explore_goal(self):
+        # The harness stops on the episode's last step, before the episode-end flush.
+        _, _, _, t = _run_explore_refresh_begin(ep_len=4)
+        assert set(t._goal_stats) == {"explore_goal"}
+        assert t._goal_stats["explore_goal"]["score_best"][1] == 2  # 2 selections of 1 env
+
+    def test_no_refresh_in_explorer_episodes(self):
+        # LEXA's explore_every_ep=1: the explorer drives every episode, so only
+        # the is_first goal (which labels the data) is imagined.
+        calls, goals, switches, _ = _run_explore_refresh_begin(ep_len=8, explore_every_ep=1)
+        assert calls == [True]
+        assert goals == [1] * 8 and not any(switches)
+
+    def test_no_refresh_under_plan2explore(self):
+        calls, _, _, _ = _run_explore_refresh_begin(ep_len=8, lexa=False, plan2explore=True)
+        assert calls == [True]
+
+    def test_plain_imagination_refresh_unaffected_by_explorer_episodes(self):
+        calls, _, _, _ = _run_refresh_begin(ep_len=8)
+        assert calls == [True, False, False]
+
+    def test_eval_logs_under_eval_prefix(self):
+        logger = MagicMock()
+        t = make_trainer(refresh_config(goal_sample="explore_imagination_refresh", lexa=True), logger=logger)
+        t.eval_envs.env_num = 1
+        state = tensordict_state()
+        agent = make_mock_agent()
+        agent.get_initial_state.return_value = state
+        agent.act.return_value = (torch.zeros(1, A), state, {})
+        agent.explore_goal.return_value = (torch.ones(1, S, K), {"score_best": 1.0})
+        t.eval_envs.step.side_effect = _refresh_episode(5)
+        t.eval(agent, train_step=0)
+        assert agent.explore_goal.call_count == 2
+        logger.scalar.assert_any_call("eval_explore_goal/score_best", 1.0)

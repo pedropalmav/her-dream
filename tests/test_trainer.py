@@ -1260,3 +1260,179 @@ class TestPegBufferCandidates:
         mask = torch.tensor([True, False])
         t._sample_goals(agent, make_mock_envs(), mask, torch.zeros(B, S, K), make_trans())
         assert agent.peg_goal.call_args.kwargs["candidates"].shape == (1, 3, S, K)
+
+
+# ---------------------------------------------------------------------------
+# goal_sample="imagination_refresh": re-imagine the goal every K agent steps
+# ---------------------------------------------------------------------------
+
+
+def refresh_config(goal_refresh_every=3, **overrides):
+    return make_config(goal_sample="imagination_refresh", goal_refresh_every=goal_refresh_every, **overrides)
+
+
+def tensordict_state(n=1):
+    from tensordict import TensorDict
+
+    return TensorDict(
+        {"prev_action": torch.zeros(n, A), "stoch": torch.zeros(n, S, K), "deter": torch.zeros(n, 64)},
+        batch_size=[n],
+    )
+
+
+class TestImaginationRefreshMask:
+    def test_period_read_only_for_refreshed_sources(self):
+        assert make_trainer(refresh_config(goal_refresh_every=15))._goal_refresh_every == 15
+        assert make_trainer(make_config(goal_sample="imagination"))._goal_refresh_every is None
+
+    @pytest.mark.parametrize("value", [0, 1, -3, 7.5, None, "15", True, np.int64(1)])
+    def test_rejects_invalid_period(self, value):
+        with pytest.raises(ValueError, match="env.goal_refresh_every"):
+            make_trainer(refresh_config(goal_refresh_every=value))
+
+    def test_accepts_numpy_integers(self):
+        t = make_trainer(refresh_config(goal_refresh_every=np.int64(15)))
+        assert t._goal_refresh_every == 15 and type(t._goal_refresh_every) is int
+
+    def test_imagines_one_step_before_each_k_boundary(self):
+        # Refreshes take effect a step later, at 3, 6, ...: every goal lasts K steps.
+        t = make_trainer(refresh_config(goal_refresh_every=3))
+        steps = torch.tensor([0, 1, 2, 3, 4, 5, 2])
+        is_first = torch.tensor([True, False, False, False, False, False, True])
+        last = torch.zeros(7, dtype=torch.bool)
+        assert t._refresh_mask(is_first, steps, last).tolist() == [False, False, True, False, False, True, False]
+
+    def test_no_refresh_on_the_last_step(self):
+        t = make_trainer(refresh_config(goal_refresh_every=3))
+        is_first = torch.zeros(2, dtype=torch.bool)
+        last = torch.tensor([True, False])
+        assert t._refresh_mask(is_first, torch.tensor([5, 5]), last).tolist() == [False, True]
+
+    def test_plain_imagination_never_refreshes(self):
+        t = make_trainer(make_config(goal_sample="imagination"))
+        is_first = torch.tensor([True, False])
+        last = torch.zeros(2, dtype=torch.bool)
+        assert t._refresh_mask(is_first, torch.tensor([3, 3]), last).tolist() == [False, False]
+
+
+class TestImaginationRefreshSampleGoals:
+    def test_passes_the_masked_agent_state(self):
+        t = make_trainer(refresh_config())
+        agent = MagicMock()
+        agent.imagine_goal.return_value = torch.ones(1, S, K)
+        state = tensordict_state(B)
+        state["stoch"][1] = 1.0
+        goals = torch.zeros(B, S, K)
+        mask = torch.tensor([False, True])
+        t._sample_goals(agent, make_mock_envs(), mask, goals, make_trans(), state=state)
+        passed = agent.imagine_goal.call_args.kwargs["state"]
+        assert passed["stoch"].shape == (1, S, K) and (passed["stoch"] == 1).all()
+        assert (goals[0] == 0).all() and (goals[1] == 1).all()
+
+    def test_plain_imagination_ignores_state(self):
+        t = make_trainer(make_config(goal_sample="imagination"))
+        agent = MagicMock()
+        agent.imagine_goal.return_value = torch.ones(B, S, K)
+        mask = torch.ones(B, dtype=torch.bool)
+        t._sample_goals(agent, make_mock_envs(), mask, torch.zeros(B, S, K), make_trans(), state=object())
+        assert "state" not in agent.imagine_goal.call_args.kwargs
+
+
+def _refresh_episode(ep_len):
+    """envs.step results for one env running a single `ep_len`-step episode."""
+    effects = []
+    for i in range(ep_len):
+        trans = make_trans(1)
+        trans["is_first"][0, 0] = i == 0
+        effects.append((trans, torch.tensor([i == ep_len - 1])))
+    return effects
+
+
+def _counting_imagine_goal(calls):
+    """imagine_goal stub: records is_first per call, returns goal == call number."""
+
+    def imagine_goal(obs, state=None):
+        calls.append(bool(obs["is_first"][0, 0]))
+        return torch.full((1, S, K), float(len(calls)))
+
+    return imagine_goal
+
+
+def _run_refresh_begin(ep_len, k=3):
+    """Run begin() over one `ep_len`-step episode; return (imagine calls, stored goals, rewards, switches)."""
+    t = _make_begin_trainer({
+        "steps": ep_len - 1,
+        "batch_length": 1000,
+        "goal_sample": "imagination_refresh",
+        "goal_refresh_every": k,
+    })
+    # Reward = the goal's id, so it shows which goal each step was scored against.
+    t.reward_function = lambda state, goal: goal[:, :1, 0]
+    state = tensordict_state()
+    agent = make_mock_agent()
+    agent.get_initial_state.return_value = state
+    agent.act.return_value = (torch.zeros(1, A), state, {})
+    calls = []
+    agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
+    t.train_envs.step.side_effect = _refresh_episode(ep_len)
+    t.begin(agent)
+    stored = [c.args[0] for c in t.replay_buffer.add_transition.call_args_list]
+    goals = [s["goal"][0, 0, 0].item() for s in stored]
+    rewards = [s["reward"][0, 0].item() for s in stored]
+    switches = [bool(s["goal_switch"][0, 0]) for s in stored]
+    return calls, goals, rewards, switches
+
+
+def _run_refresh_eval(ep_len, k=3):
+    t = make_trainer(refresh_config(goal_refresh_every=k))
+    t.eval_envs.env_num = 1
+    state = tensordict_state()
+    agent = make_mock_agent()
+    agent.get_initial_state.return_value = state
+    agent.act.return_value = (torch.zeros(1, A), state, {})
+    calls = []
+    agent.imagine_goal.side_effect = _counting_imagine_goal(calls)
+    t.eval_envs.step.side_effect = _refresh_episode(ep_len)
+    t.eval(agent, train_step=0)
+    return calls
+
+
+class TestImaginationRefreshLoop:
+    def test_begin_gives_every_goal_k_steps(self):
+        calls, goals, _, _ = _run_refresh_begin(ep_len=8)
+        # Imagined at episode steps 0 (is_first), 2 and 5...
+        assert calls == [True, False, False]
+        # ...each refresh taking effect on the next step, so each goal lasts K=3.
+        assert goals == [1, 1, 1, 2, 2, 2, 3, 3]
+
+    def test_refresh_step_is_scored_against_the_old_goal(self):
+        _, goals, rewards, _ = _run_refresh_begin(ep_len=8)
+        assert rewards == goals
+        assert rewards[2] == 1 and rewards[5] == 2
+
+    def test_stores_goal_switch_on_the_step_before_each_change(self):
+        # repval cuts its return there (ActorCritic.replay_value_loss).
+        _, goals, _, switches = _run_refresh_begin(ep_len=8)
+        assert switches == [False, False, True, False, False, True, False, False]
+        assert switches[:-1] == [a != b for a, b in zip(goals, goals[1:])]
+
+    def test_no_goal_switch_key_for_other_sources(self):
+        t = _make_begin_trainer({"steps": 1, "batch_length": 1000, "goal_sample": "imagination"})
+        agent = make_mock_agent()
+        agent.imagine_goal.return_value = torch.ones(1, S, K)
+        t.train_envs.step.side_effect = _refresh_episode(2)
+        t.begin(agent)
+        assert all("goal_switch" not in c.args[0] for c in t.replay_buffer.add_transition.call_args_list)
+
+    def test_begin_skips_refresh_on_the_last_step(self):
+        # Step 5 is the episode's last observation: no goal is imagined there.
+        calls, goals, _, _ = _run_refresh_begin(ep_len=6)
+        assert calls == [True, False]
+        assert goals == [1, 1, 1, 2, 2, 2]
+
+    def test_eval_refreshes_goal_every_k_steps(self):
+        # Episode steps 0 (is_first) and 2.
+        assert _run_refresh_eval(ep_len=5) == [True, False]
+
+    def test_eval_skips_refresh_on_the_last_step(self):
+        assert _run_refresh_eval(ep_len=3) == [True]

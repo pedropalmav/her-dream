@@ -50,7 +50,8 @@ def replay_batch():
     """An attached replay batch, as the replay-value branch hands it over."""
     return SimpleNamespace(
         feat=torch.randn(B, T_IMAG, F, requires_grad=True),
-        goal=torch.randn(B, T_IMAG, G),
+        # One goal per sequence, as stored for an episode.
+        goal=torch.randn(B, 1, G).expand(B, T_IMAG, G).clone(),
         last=torch.zeros(B, T_IMAG, 1),
         term=torch.zeros(B, T_IMAG, 1),
         reward=torch.full((B, T_IMAG, 1), -1.0),

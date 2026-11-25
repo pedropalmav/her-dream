@@ -405,7 +405,7 @@ class Dreamer(nn.Module):
         return torch.where(explore.reshape(-1, 1), sample(self.explorer, None), sample(self.ac, goal))
 
     @torch.no_grad()
-    def imagine_goal(self, obs):
+    def imagine_goal(self, obs, state=None):
         """Sample goals by imagining `goal_imag_horizon` random-action steps from the given observations.
 
         Used by goal_sample="imagination": at episode start, the world model is
@@ -414,10 +414,22 @@ class Dreamer(nn.Module):
         from the current episode by construction. The rollout uses uniformly
         random actions, so the goal distribution does not depend on the actor.
 
+        Also used by goal_sample="imagination_refresh", which re-imagines the goal
+        every `goal_refresh_every` agent steps mid-episode. There the rollout must
+        start from the agent's history, so the running agent `state` is passed
+        and the obs is filtered onto it as `act` does. The deterministic state
+        matches the agent's; the stoch is an independent posterior draw, so it
+        can differ from the one `act` samples for the same obs (as it already
+        does for plain "imagination" at is_first).
+
         Args:
-            obs: dict of (N, 1, *) first transitions (is_first=True) of the
-                envs that need a fresh goal. Must be a copy: preprocess
-                modifies it in place.
+            obs: dict of (N, 1, *) current transitions of the envs that need a
+                fresh goal. Must be a copy: preprocess modifies it in place.
+            state: optional agent state (stoch (N, S, K), deter (N, D),
+                prev_action (N, A)) before observing `obs`. None starts from
+                the initial state, which is only right when `obs` is the
+                first transition of the episode. Envs whose `obs` has
+                is_first=True are reset by obs_step either way.
 
         Returns:
             (N, S, K) float32 one-hot goal on self.device.
@@ -427,9 +439,12 @@ class Dreamer(nn.Module):
         # (N, E)
         embed = self._frozen_encoder(p_obs)
         N = obs["is_first"].shape[0]
-        # is_first=True makes obs_step zero out the initial state and action.
-        stoch, deter = self._frozen_rssm.initial(N)
-        prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        if state is None:
+            # is_first=True makes obs_step zero out the initial state and action.
+            stoch, deter = self._frozen_rssm.initial(N)
+            prev_action = torch.zeros(N, self.act_dim, dtype=torch.float32, device=self.device)
+        else:
+            stoch, deter, prev_action = state["stoch"], state["deter"], state["prev_action"]
         # (N, S, K), (N, D)
         stoch, deter, logit = self._frozen_rssm.obs_step(stoch, deter, prev_action, embed, obs["is_first"])
 
@@ -930,7 +945,9 @@ class Dreamer(nn.Module):
         )
         feat = self.rssm.get_feat(post_stoch, post_deter)  # (B, T, F)
         boot = ret[:, 0].reshape(B, T, 1)
-        replay_losses, replay_metrics = self.ac.replay_value_loss(feat, data["goal"], last, term, reward, boot)
+        replay_losses, replay_metrics = self.ac.replay_value_loss(
+            feat, data["goal"], last, term, reward, boot, goal_switch=data.get("goal_switch", None)
+        )
         losses.update(replay_losses)
         metrics.update(replay_metrics)
 

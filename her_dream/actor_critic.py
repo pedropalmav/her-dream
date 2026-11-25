@@ -197,7 +197,7 @@ class ActorCritic(nn.Module):
         metrics.update(tools.tensorstats(imag_action, self.key("action")))
         return losses, metrics, ret
 
-    def replay_value_loss(self, feat, goal, last, term, reward, boot):
+    def replay_value_loss(self, feat, goal, last, term, reward, boot, goal_switch=None):
         """Critic loss on real replayed transitions.
 
         `feat` is deliberately the *attached* RSSM feature: this loss is what
@@ -208,10 +208,23 @@ class ActorCritic(nn.Module):
             goal: (B, T, ...) goal per transition.
             last / term / reward: (B, T, 1) float32 episode flags and reward.
             boot: (B, T, 1) bootstrap value, from the imagined lambda return.
+            goal_switch: optional (B, T, 1) flag, 1 on the step after which the
+                goal changes mid-episode (goal_sample=imagination_refresh;
+                written by the trainer, cleared by HER on relabelled rows).
+                The return must not run into rewards and values scored
+                against the next goal, so such a step is treated like an
+                episode's last one: the step before it bootstraps from its
+                own-goal value, and the step itself, whose one-step target is
+                already scored against the new goal, gets no loss. It is an
+                explicit flag rather than a comparison of consecutive goals
+                because HER's `future`/`episode` strategies give every step its
+                own goal, which is not a switch to cut at.
 
         Returns:
             (losses, metrics).
         """
+        if goal_switch is not None:
+            last = torch.maximum(last, to_f32(goal_switch))
         value_input = self.policy_input(feat, goal)
         value = self._frozen_value(value_input).mode
         slow_value = self._frozen_slow_value(value_input).mode
@@ -231,6 +244,9 @@ class ActorCritic(nn.Module):
 
         losses = {self.key("repval"): repval_loss}
         metrics = {}
+        # Over every step, masked ones included: a masked view would need a
+        # data-dependent branch/shape here (a GPU sync and a compile graph
+        # break on every update) and would shift the metric for all runs.
         metrics.update(tools.tensorstats(ret, self.key("ret_replay")))
         metrics.update(tools.tensorstats(value, self.key("value_replay")))
         metrics.update(tools.tensorstats(slow_value, self.key("slow_value_replay")))

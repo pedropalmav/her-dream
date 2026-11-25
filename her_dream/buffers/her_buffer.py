@@ -110,6 +110,11 @@ class HERBuffer(Buffer):
             desired = new_goal.to(self.device)
             new_reward = self.reward_function(achieved, desired)
             sample_td["reward"][batch_idx] = new_reward
+            if "goal_switch" in sample_td:
+                # The relabelled row no longer carries the goals the agent
+                # switched between (imagination_refresh), so there is no
+                # switch to cut the replay return at.
+                sample_td["goal_switch"][batch_idx] = False
         return sample_td
 
     def _sample_goal(self, env_indices, step_indices):

@@ -57,3 +57,20 @@ class TestDreamerReadsConfig:
         cfg = _compose("model.goal_imag_horizon=12")
         assert "goal_imag_horizon" in cfg.model
         assert int(cfg.model.goal_imag_horizon) == 12
+
+
+class TestGoalRefreshEvery:
+    """`env.goal_refresh_every` (imagination_refresh) follows the goal horizon by default."""
+
+    def test_defaults_to_goal_imag_horizon(self):
+        cfg = _compose()
+        assert cfg.env.goal_refresh_every == cfg.model.goal_imag_horizon == 15
+        assert cfg.trainer.goal_refresh_every == 15
+
+    def test_tracks_the_horizon(self):
+        cfg = _compose("model.imag_horizon=30")
+        assert cfg.env.goal_refresh_every == cfg.trainer.goal_refresh_every == 30
+
+    def test_explicit_value_decouples_it(self):
+        cfg = _compose("model.goal_imag_horizon=30", "env.goal_refresh_every=10")
+        assert cfg.env.goal_refresh_every == cfg.trainer.goal_refresh_every == 10

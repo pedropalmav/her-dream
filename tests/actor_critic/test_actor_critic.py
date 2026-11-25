@@ -180,6 +180,78 @@ class TestReplayValueLoss:
         assert {"ret_replay_mean", "value_replay_mean", "slow_value_replay_mean"} <= set(metrics)
 
 
+def _break_symmetry(ac):
+    # The critic head starts at exactly zero output (outscale=0): a uniform
+    # distribution whose log-prob ignores the return target. Nudge it off.
+    torch.manual_seed(0)
+    with torch.no_grad():
+        for p in ac.value.parameters():
+            p.add_(0.1 * torch.randn_like(p))
+
+
+def _repval(ac, batch, **overrides):
+    args = {k: getattr(batch, k) for k in ("feat", "goal", "last", "term", "reward", "boot")}
+    args.update(overrides)
+    return ac.replay_value_loss(**args)[0]["repval"]
+
+
+def _switch_at(t, batch):
+    """goal_switch flag (B, T, 1): the goal changes after step `t`."""
+    switch = torch.zeros_like(batch.last, dtype=torch.bool)
+    switch[:, t] = True
+    return switch
+
+
+class TestGoalSwitch:
+    """goal_sample=imagination_refresh can change the goal inside a replayed sequence."""
+
+    def test_return_does_not_cross_a_goal_switch(self, ac, replay_batch):
+        # Switch between the last two steps: the final step's loss is never
+        # trained (weight[:, :-1]), so the loss may only see it through the
+        # return of the step before, which must not run into the new goal.
+        _break_symmetry(ac)
+        switch = _switch_at(-2, replay_batch)
+        reward, boot = replay_batch.reward.clone(), torch.randn_like(replay_batch.boot)
+        base = _repval(ac, replay_batch, reward=reward, boot=boot, goal_switch=switch)
+        reward[:, -1], boot[:, -1] = 5.0, 7.0
+        changed = _repval(ac, replay_batch, reward=reward, boot=boot, goal_switch=switch)
+        assert changed.item() == pytest.approx(base.item())
+
+    def test_without_a_switch_the_return_spans_the_sequence(self, ac, replay_batch):
+        _break_symmetry(ac)
+        reward = replay_batch.reward.clone()
+        base = _repval(ac, replay_batch, reward=reward)
+        reward[:, -1] = 5.0
+        assert _repval(ac, replay_batch, reward=reward).item() != pytest.approx(base.item())
+
+    def test_per_step_goals_are_not_a_switch(self, ac, replay_batch):
+        # HER's future/episode strategies give every step its own goal; with
+        # no flag the return must still span the sequence and the loss stay on.
+        _break_symmetry(ac)
+        goal = torch.randn_like(replay_batch.goal)
+        reward = replay_batch.reward.clone()
+        base = _repval(ac, replay_batch, goal=goal, reward=reward)
+        assert base.item() != 0.0
+        reward[:, -1] = 5.0
+        assert _repval(ac, replay_batch, goal=goal, reward=reward).item() != pytest.approx(base.item())
+
+    def test_matches_marking_the_step_last(self, ac, replay_batch):
+        _break_symmetry(ac)
+        last = replay_batch.last.clone()
+        last[:, 1] = 1.0
+        assert _repval(ac, replay_batch, goal_switch=_switch_at(1, replay_batch)).item() == pytest.approx(
+            _repval(ac, replay_batch, last=last).item()
+        )
+
+    def test_return_stats_cover_every_step(self, ac, replay_batch):
+        # No data-dependent masking in the metrics (a GPU sync per update).
+        reward = replay_batch.reward.clone()
+        reward[:, 2] = 100.0  # only the masked step 1's return sees it
+        args = {k: getattr(replay_batch, k) for k in ("feat", "goal", "last", "term", "boot")}
+        _, metrics = ac.replay_value_loss(**args, reward=reward, goal_switch=_switch_at(1, replay_batch))
+        assert metrics["ret_replay_max"] > 50.0
+
+
 class TestNaming:
     def test_unnamed_instance_keeps_the_bare_keys(self, ac):
         assert ac.key("policy") == "policy"

@@ -1,0 +1,12 @@
+# Keep the build context small: run outputs and local environments stay on the host.
+.git
+.venv
+logdir
+evals
+outputs
+plots
+**/__pycache__
+*.egg-info
+.pytest_cache
+.ruff_cache
+.coverage

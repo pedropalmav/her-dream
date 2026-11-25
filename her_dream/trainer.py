@@ -4,7 +4,7 @@ import torch
 import her_dream.tools as tools
 from her_dream.buffers.her_buffer import HERBuffer
 from her_dream.goals import goal_from_latent, make_goal_spec, reward_state
-from her_dream.peg import explore_every_ep, go_steps
+from her_dream.peg import SEARCHES, explore_every_ep, go_steps
 
 # Goal sources sampled by the trainer at episode start (everything except
 # "random", where the env-generated goal in the obs is used as-is).
@@ -52,6 +52,12 @@ class OnlineTrainer:
         if self._goal_sample == "peg":
             peg_cfg = config.peg
             self._peg_go_steps = go_steps(peg_cfg.go_ratio, peg_cfg.time_limit, peg_cfg.action_repeat)
+            # How the goal candidates are found. Only "buffer" is drawn here (stoch
+            # the agent actually visited); the agent handles random and MPPI/CEM.
+            self._peg_search = str(peg_cfg.search)
+            if self._peg_search not in SEARCHES:
+                raise ValueError(f"Unknown peg.search {self._peg_search!r}; expected one of {SEARCHES}.")
+            self._peg_candidates = int(peg_cfg.num_candidates)
 
         self.her = isinstance(self.replay_buffer, HERBuffer)
 
@@ -390,17 +396,15 @@ class OnlineTrainer:
             - "peg":         draw random z candidates, imagine the achiever
                              pursuing each from the episode's first observation,
                              and keep the one whose end state the explorer values
-                             most (`Dreamer.peg_goal`). Score statistics are
-                             logged under `log_prefix`.
+                             most (`Dreamer.peg_goal`). With peg.search="buffer"
+                             the candidates are visited stoch from the replay
+                             buffer (`_buffer_candidates`) instead. Score
+                             statistics are logged under `log_prefix`.
         """
         if self._goal_sample == "buffer":
             if self.replay_buffer.count() == 0:
                 return
-            data, _, _ = self.replay_buffer.sample()
-            goal_sample = goal_from_latent(self._goal_spec, stoch=data.get("stoch"), logit=data.get("logit"))
-            if self._goal_spec.scope == "first_row":
-                goal_sample = goal_sample[..., 0, :]
-            goal_sample = goal_sample.reshape(-1, *goal_sample.shape[2:])
+            goal_sample = self._buffer_goal_pool()
             for i in range(envs.env_num):
                 if mask[i]:
                     goals[i] = goal_sample[torch.randint(goal_sample.shape[0], (1,))]
@@ -421,7 +425,10 @@ class OnlineTrainer:
         elif self._goal_sample == "peg":
             indices = mask.nonzero(as_tuple=True)[0]
             # trans[indices] copies, as for "imagination".
-            new_goals, metrics = agent.peg_goal(trans[indices])
+            candidates = None
+            if self._peg_search == "buffer":
+                candidates = self._buffer_candidates(len(indices))
+            new_goals, metrics = agent.peg_goal(trans[indices], candidates=candidates)
             goals[indices] = new_goals
             for name, value in metrics.items():
                 self.logger.scalar(f"{log_prefix}/{name}", value)
@@ -430,6 +437,33 @@ class OnlineTrainer:
             new_goals = self._image_goal(agent, envs, indices)
             if new_goals is not None:
                 goals[indices] = new_goals
+
+    def _buffer_goal_pool(self):
+        """Goals from one replay batch: every (B, T) state as a (B*T, *goal_shape) goal."""
+        data, _, _ = self.replay_buffer.sample()
+        goal = goal_from_latent(self._goal_spec, stoch=data.get("stoch"), logit=data.get("logit"))
+        if self._goal_spec.scope == "first_row":
+            goal = goal[..., 0, :]
+        return goal.reshape(-1, *goal.shape[2:])
+
+    def _buffer_candidates(self, n_envs):
+        """(n_envs, peg.num_candidates, *goal_shape) PEG candidates from the replay buffer.
+
+        Replay batches are drawn until they hold enough states, then the
+        candidates are taken without replacement, so no env sees a duplicate
+        unless the buffer itself repeats a state. None while the buffer is
+        empty, which makes the agent fall back to random candidates.
+        """
+        if self.replay_buffer.count() == 0:
+            return None
+        needed = n_envs * self._peg_candidates
+        pools, total = [], 0
+        while total < needed:
+            pools.append(self._buffer_goal_pool())
+            total += pools[-1].shape[0]
+        pool = torch.cat(pools)
+        pick = torch.randperm(pool.shape[0], device=pool.device)[:needed]
+        return pool[pick].reshape(n_envs, self._peg_candidates, *pool.shape[1:])
 
     def _should_update(self, step):
         envs_num = self.train_envs.env_num

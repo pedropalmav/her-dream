@@ -79,7 +79,6 @@ Local smoke test (CPU, no CUDA needed, ~1 min):
 import argparse
 import pathlib
 import sys
-from collections import deque
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -89,92 +88,32 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-from minigrid.core.constants import DIR_TO_VEC  # noqa: E402
 
 from experiments.common import (  # noqa: E402
     actor_policy,
     add_common_args,
     agent_pose,
+    bfs_plan,
     dump_json,
     encode_goal_image,
     fixed_goal_cfg,
     groups_matched,
     load_agent,
+    oracle_z_check,
     posterior_rollout,
     random_policy,
     reward_of,
+    sample_cell,
     save_fig,
-    scripted_policy,
     unwrap_env,
 )
 from her_dream import goals  # noqa: E402
 from her_dream.envs import make_env  # noqa: E402
 
-# MiniGrid action indices (minigrid.core.actions.Actions).
-TURN_LEFT, TURN_RIGHT, FORWARD = 0, 1, 2
-
 OUT = pathlib.Path(__file__).resolve().parent / "out"
 
 
-# ---------------------------------------------------------------- BFS oracle
-
-
-def _walkable(size: int, x: int, y: int) -> bool:
-    """Can the agent stand on cell (x, y)? The goal-grid rooms are a bordered box
-    with a single overlappable goal tile and no interior walls, so every interior
-    cell is walkable — no grid read (hence no env reset) needed."""
-    return 1 <= x <= size - 2 and 1 <= y <= size - 2
-
-
-def _successors(size: int, state):
-    """(action, next_state) for the three navigation actions from `state`."""
-    x, y, d = state
-    yield TURN_LEFT, (x, y, (d - 1) % 4)
-    yield TURN_RIGHT, (x, y, (d + 1) % 4)
-    dx, dy = DIR_TO_VEC[d]
-    nx, ny = x + int(dx), y + int(dy)
-    if _walkable(size, nx, ny):
-        yield FORWARD, (nx, ny, d)
-
-
-def bfs_plan(size, start_pos, start_dir, target_pos, target_dir):
-    """Shortest action sequence from the start pose to the target pose.
-
-    BFS over `(x, y, dir)` rather than over cells: the target direction is part
-    of the goal state (the WM encoder sees `direction`, so the goal z fixes it),
-    and turning costs steps. `target_dir=None` accepts any facing. Returns the
-    list of action indices, or None if unreachable.
-    """
-    start = (int(start_pos[0]), int(start_pos[1]), int(start_dir))
-    tx, ty = int(target_pos[0]), int(target_pos[1])
-
-    def is_target(s):
-        return (s[0], s[1]) == (tx, ty) and (target_dir is None or s[2] == int(target_dir))
-
-    parent = {start: None}
-    queue = deque([start])
-    while queue:
-        state = queue.popleft()
-        if is_target(state):
-            plan = []
-            while parent[state] is not None:
-                state, action = parent[state]
-                plan.append(action)
-            return plan[::-1]
-        for action, nxt in _successors(size, state):
-            if nxt not in parent:
-                parent[nxt] = (state, action)
-                queue.append(nxt)
-    return None
-
-
 # ------------------------------------------------------------ goal machinery
-
-
-def _sample_cell(size: int, rng) -> tuple:
-    """A uniformly random interior cell `(x, y)`."""
-    interior = np.arange(1, size - 1)
-    return int(rng.choice(interior)), int(rng.choice(interior))
 
 
 def _episode_layout(mode: str, env_cfg, rng):
@@ -194,35 +133,13 @@ def _episode_layout(mode: str, env_cfg, rng):
     if mode == "square":
         target_pos = square
     elif mode == "random":
-        target_pos = _sample_cell(size, rng)
+        target_pos = sample_cell(size, rng)
     else:
         raise ValueError(f"unknown target mode: {mode}")
     return size, spawn_pos, spawn_dir, square, target_pos, int(rng.integers(4))
 
 
 # --------------------------------------------------------------- the layers
-
-
-def _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device):
-    """Layer 1: drive the BFS plan for real; measure the z at arrival vs the goal z."""
-    last = list(posterior_rollout(agent, env, scripted_policy(plan), device, max_steps=len(plan), seed=seed))[-1]
-    base = unwrap_env(env)
-    pose = agent_pose(base)
-    S = goal.shape[1]
-
-    matched = groups_matched(last.stoch, goal)
-    # Sampling floor: a second draw from the SAME posterior logits. Any exact-match
-    # rate above this is signal; at or below it, the metric is measuring Gumbel noise.
-    resample = agent.rssm.get_dist(last.logit).rsample()
-    return {
-        "plan_len": len(plan),
-        "arrived": pose == (target_pos, target_dir),
-        "groups": matched,
-        "full": matched == S,
-        "reward": reward_of(agent, spec, last.stoch, last.logit, goal),
-        "floor_groups": groups_matched(last.stoch, resample),
-        "floor_full": groups_matched(last.stoch, resample) == S,
-    }
 
 
 def _drive(agent, spec, env, seed, policy, target_pos, target_dir, goal, device, max_steps):
@@ -276,7 +193,7 @@ def run_episode(agent, spec, env, task, env_cfg, mode, seed, rng, max_steps, dev
         "spawn": [list(spawn_pos), spawn_dir],
         "target": [list(target_pos), target_dir],
         "green_square": [int(v) for v in square],
-        "oracle": _oracle(agent, spec, env, seed, goal, target_pos, target_dir, plan, device),
+        "oracle": oracle_z_check(agent, spec, env, goal, target_pos, target_dir, plan, device, seed=seed),
         "policy": _drive(
             agent, spec, env, seed, actor_policy(agent, goal), target_pos, target_dir, goal, device, max_steps
         ),
@@ -347,13 +264,11 @@ def evaluate(logdir, modes, episodes, max_steps, device, seed):
         for i in range(episodes):
             # 2.1 Sample the layout: the agent (pos, dir) always, plus the green
             #     square for random-goal runs (fixed-goal keeps its own goal_pos).
-            spawn_pos = _sample_cell(size, rng)
+            spawn_pos = sample_cell(size, rng)
             spawn_dir = int(rng.integers(4))
-            square = _sample_cell(size, rng) if random_goal else None
+            square = sample_cell(size, rng) if random_goal else None
             # 2.2 Build a fixed-goal env carrying this episode's layout.
-            episode_cfg = fixed_goal_cfg(
-                env_cfg, goal_pos=square, agent_start_pos=spawn_pos, agent_start_dir=spawn_dir
-            )
+            episode_cfg = fixed_goal_cfg(env_cfg, goal_pos=square, agent_start_pos=spawn_pos, agent_start_dir=spawn_dir)
             env = make_env(episode_cfg, 0)
             # 2.3 run_episode reads the layout back off episode_cfg.
             record = run_episode(agent, spec, env, task, episode_cfg, mode, seed + i, rng, max_steps, device)

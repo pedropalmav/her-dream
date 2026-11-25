@@ -9,14 +9,15 @@ Install dependencies. This repository is tested with Ubuntu 24.04 and Python 3.1
 If you prefer Docker, follow [`docs/docker.md`](docs/docker.md).
 
 ```bash
-# Installing via a virtual env like uv is recommended.
-pip install -r requirements.txt
+# Dependencies are managed with uv (https://docs.astral.sh/uv/) and pinned in uv.lock.
+# This creates .venv and installs the her_dream package into it in editable mode.
+uv sync
 ```
 
 Run training on default settings:
 
 ```bash
-python3 train.py logdir=./logdir/test
+uv run python3 train.py logdir=./logdir/test
 ```
 
 Monitoring results:
@@ -72,11 +73,11 @@ More details: [Working with MuJoCo-based environments](https://docs.pytorch.org/
 If you want automatic formatting/basic checks before commits, you can enable `pre-commit`:
 
 ```bash
-pip install pre-commit
+# pre-commit is part of the dev dependency group installed by `uv sync`
 # This sets up a pre-commit hook so that checks are run every time you commit
-pre-commit install
+uv run pre-commit install
 # Manual pre-commit run on all files
-pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ## Citation
